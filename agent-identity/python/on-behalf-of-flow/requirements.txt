@@ -1,0 +1,8 @@
+asgardeo==0.2.1
+asgardeo_ai==0.2.2
+
+langchain>=0.3.0
+langchain-google-genai>=4.0.0
+langchain-mcp-adapters>=0.1.14
+
+python-dotenv~=1.0.0
