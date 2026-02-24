@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Employee Assistant</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f3f4f6;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ─── Header ─────────────────────────────────────────── */
+    .header {
+      background: linear-gradient(135deg, #1e3a5f, #2d5a87);
+      color: white;
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .header-icon {
+      width: 40px; height: 40px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem;
+    }
+    .header-text h1 { font-size: 1.1rem; font-weight: 600; }
+    .header-text p { font-size: 0.75rem; opacity: 0.8; }
+
+    .auth-badge {
+      margin-left: auto;
+      padding: 0.3rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .auth-badge.basic {
+      background: rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.3);
+    }
+    .auth-badge.elevated {
+      background: rgba(52, 211, 153, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(52, 211, 153, 0.3);
+    }
+
+    /* ─── Chat Area ──────────────────────────────────────── */
+    .chat-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .message {
+      max-width: 80%;
+      padding: 0.85rem 1.1rem;
+      border-radius: 16px;
+      line-height: 1.5;
+      font-size: 0.9rem;
+      word-wrap: break-word;
+    }
+
+    /* ─── Markdown Rendered Content ─────────────────────── */
+    .message.agent p { margin: 0.4rem 0; }
+    .message.agent p:first-child { margin-top: 0; }
+    .message.agent p:last-child { margin-bottom: 0; }
+    .message.agent ul, .message.agent ol {
+      margin: 0.4rem 0;
+      padding-left: 1.4rem;
+    }
+    .message.agent li { margin: 0.2rem 0; }
+    .message.agent strong { font-weight: 600; }
+    .message.agent code {
+      background: #f3f4f6;
+      padding: 0.15rem 0.35rem;
+      border-radius: 4px;
+      font-size: 0.82rem;
+      font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    }
+    .message.agent pre {
+      background: #1f2937;
+      color: #e5e7eb;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 0.5rem 0;
+    }
+    .message.agent pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+      font-size: 0.82rem;
+    }
+    .message.agent table {
+      border-collapse: collapse;
+      margin: 0.5rem 0;
+      font-size: 0.82rem;
+      width: 100%;
+    }
+    .message.agent th, .message.agent td {
+      border: 1px solid #e5e7eb;
+      padding: 0.35rem 0.6rem;
+      text-align: left;
+    }
+    .message.agent th {
+      background: #f9fafb;
+      font-weight: 600;
+    }
+
+    .message.agent {
+      align-self: flex-start;
+      background: white;
+      color: #1f2937;
+      border-bottom-left-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .message.user {
+      align-self: flex-end;
+      background: #2d5a87;
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+
+    .message.system {
+      align-self: center;
+      background: #fef3c7;
+      color: #92400e;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      text-align: center;
+      max-width: 90%;
+      border: 1px solid #fde68a;
+    }
+
+    /* ─── Authorize Button ───────────────────────────────── */
+    .auth-action {
+      align-self: flex-start;
+      max-width: 80%;
+    }
+    .auth-action .message {
+      max-width: 100%;
+      border-bottom-left-radius: 4px;
+      margin-bottom: 0.5rem;
+    }
+    .authorize-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.7rem 1.3rem;
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
+    }
+    .authorize-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+    }
+    .authorize-btn:active { transform: translateY(0); }
+    .authorize-btn .lock-icon { font-size: 1rem; }
+
+    /* ─── Typing Indicator ───────────────────────────────── */
+    .typing {
+      align-self: flex-start;
+      background: white;
+      padding: 0.85rem 1.1rem;
+      border-radius: 16px;
+      border-bottom-left-radius: 4px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+      display: flex;
+      gap: 4px;
+    }
+    .typing span {
+      width: 8px; height: 8px;
+      background: #9ca3af;
+      border-radius: 50%;
+      animation: bounce 1.4s infinite ease-in-out;
+    }
+    .typing span:nth-child(1) { animation-delay: 0s; }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
+    /* ─── Input Area ─────────────────────────────────────── */
+    .input-area {
+      padding: 1rem 1.5rem;
+      background: white;
+      border-top: 1px solid #e5e7eb;
+      display: flex;
+      gap: 0.75rem;
+    }
+    .input-area input {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      border: 1.5px solid #d1d5db;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .input-area input:focus { border-color: #2d5a87; }
+    .input-area input:disabled { background: #f3f4f6; }
+
+    .send-btn {
+      padding: 0.75rem 1.5rem;
+      background: #2d5a87;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .send-btn:hover { background: #1e3a5f; }
+    .send-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-icon">&#x1F3E2;</div>
+    <div class="header-text">
+      <h1>Smart Employee Assistant</h1>
+      <p>HR & Leave Management</p>
+    </div>
+    <div id="authBadge" class="auth-badge basic">Agent Access</div>
+  </div>
+
+  <!-- Chat Area -->
+  <div id="chatArea" class="chat-area">
+    <div class="message agent">
+      Hello! I'm your Smart Employee Assistant. I can help you with company holidays,
+      check employee status, view leave requests, and manage approvals. How can I help you today?
+    </div>
+  </div>
+
+  <!-- Input Area -->
+  <div class="input-area">
+    <input
+      type="text"
+      id="messageInput"
+      placeholder="Type your message..."
+      autocomplete="off"
+    />
+    <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+  </div>
+
+  <script>
+    const chatArea = document.getElementById('chatArea');
+    const messageInput = document.getElementById('messageInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const authBadge = document.getElementById('authBadge');
+
+    let isProcessing = false;
+    let pendingMessage = null;
+
+    // ─── Send message on Enter key ──────────────────────
+    messageInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !isProcessing) sendMessage();
+    });
+
+    // ─── Listen for auth callback from popup ────────────
+    window.addEventListener('message', async (event) => {
+      if (event.data?.type === 'auth_success') {
+        addSystemMessage('Manager authorization granted. Processing your request...');
+        updateAuthBadge(true);
+
+        // Retry the pending message
+        if (pendingMessage) {
+          const msg = pendingMessage;
+          pendingMessage = null;
+          await sendToAgent(msg);
+        }
+      } else if (event.data?.type === 'auth_failed') {
+        addSystemMessage('Authorization failed: ' + (event.data.error || 'Unknown error'));
+      }
+    });
+
+    // ─── Core Functions ─────────────────────────────────
+
+    async function sendMessage() {
+      const text = messageInput.value.trim();
+      if (!text || isProcessing) return;
+
+      messageInput.value = '';
+      addUserMessage(text);
+      await sendToAgent(text);
+    }
+
+    async function sendToAgent(text) {
+      setProcessing(true);
+      showTyping();
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+
+        const data = await res.json();
+        hideTyping();
+
+        if (data.type === 'auth_required') {
+          pendingMessage = text;
+          addAgentMessage(data.message);
+          showAuthorizeButton();
+        } else if (data.type === 'error') {
+          addAgentMessage('Sorry, an error occurred: ' + data.message);
+        } else {
+          addAgentMessage(data.message);
+        }
+      } catch (err) {
+        hideTyping();
+        addAgentMessage('Sorry, I could not connect to the server. Please try again.');
+      }
+
+      setProcessing(false);
+    }
+
+    async function startAuthorization() {
+      addSystemMessage('Opening Asgardeo login for manager authorization...');
+
+      try {
+        const res = await fetch('/api/auth/url');
+        const data = await res.json();
+
+        // Open login in a popup
+        const popup = window.open(
+          data.auth_url,
+          'asgardeo_auth',
+          'width=500,height=700,left=200,top=100'
+        );
+
+        if (!popup) {
+          addSystemMessage('Popup blocked. Please allow popups and try again.');
+        }
+      } catch (err) {
+        addSystemMessage('Failed to start authorization: ' + err.message);
+      }
+    }
+
+    // ─── UI Helpers ─────────────────────────────────────
+
+    function addUserMessage(text) {
+      const div = document.createElement('div');
+      div.className = 'message user';
+      div.textContent = text;
+      chatArea.appendChild(div);
+      scrollToBottom();
+    }
+
+    function addAgentMessage(text) {
+      const div = document.createElement('div');
+      div.className = 'message agent';
+      div.innerHTML = marked.parse(text);
+      chatArea.appendChild(div);
+      scrollToBottom();
+    }
+
+    function addSystemMessage(text) {
+      const div = document.createElement('div');
+      div.className = 'message system';
+      div.textContent = text;
+      chatArea.appendChild(div);
+      scrollToBottom();
+    }
+
+    function showAuthorizeButton() {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'auth-action';
+
+      const btn = document.createElement('button');
+      btn.className = 'authorize-btn';
+      btn.innerHTML = '<span class="lock-icon">&#x1F512;</span> Authorize (Login to approve)';
+      btn.onclick = () => {
+        btn.disabled = true;
+        btn.style.opacity = '0.6';
+        startAuthorization();
+      };
+
+      wrapper.appendChild(btn);
+      chatArea.appendChild(wrapper);
+      scrollToBottom();
+    }
+
+    function showTyping() {
+      const div = document.createElement('div');
+      div.className = 'typing';
+      div.id = 'typingIndicator';
+      div.innerHTML = '<span></span><span></span><span></span>';
+      chatArea.appendChild(div);
+      scrollToBottom();
+    }
+
+    function hideTyping() {
+      const el = document.getElementById('typingIndicator');
+      if (el) el.remove();
+    }
+
+    function setProcessing(val) {
+      isProcessing = val;
+      messageInput.disabled = val;
+      sendBtn.disabled = val;
+      if (!val) messageInput.focus();
+    }
+
+    function updateAuthBadge(elevated) {
+      if (elevated) {
+        authBadge.className = 'auth-badge elevated';
+        authBadge.textContent = 'Manager Access';
+      } else {
+        authBadge.className = 'auth-badge basic';
+        authBadge.textContent = 'Agent Access';
+      }
+    }
+
+    function scrollToBottom() {
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+  </script>
+</body>
+</html>
