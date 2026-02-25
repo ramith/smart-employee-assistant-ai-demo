@@ -188,6 +188,23 @@ def approve_request(request_id: str, approved_by: str) -> dict | None:
     }
 
 
+def get_all_leave_requests() -> list[dict]:
+    """Return all leave requests for the dashboard (all statuses)."""
+    results = []
+    for lr in leave_requests.values():
+        emp = employees.get(lr["employee_id"], {})
+        results.append({
+            "request_id": lr["request_id"],
+            "employee": emp.get("name", "Unknown"),
+            "type": lr["type"],
+            "start_date": lr["start_date"],
+            "end_date": lr["end_date"],
+            "days_requested": lr["days_requested"],
+            "status": lr["status"],
+        })
+    return results
+
+
 def reject_request(request_id: str, reason: str, rejected_by: str) -> dict | None:
     lr = leave_requests.get(request_id)
     if not lr:

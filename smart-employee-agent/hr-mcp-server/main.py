@@ -268,7 +268,77 @@ async def reject_leave_request(request_id: str, reason: str) -> dict:
     return result
 
 
+# ─── REST API for Dashboard (ASGI middleware) ────────────────────────────────
+
+from starlette.responses import JSONResponse as StarletteJSONResponse
+import uvicorn
+
+
+class DashboardMiddleware:
+    """ASGI middleware that intercepts /api/leaves before reaching the MCP app.
+
+    Validates JWT and checks hr_read scope for dashboard access.
+    This avoids wrapping the MCP Starlette app in a parent Starlette app,
+    which would break its lifespan (session manager task group init).
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.jwt_validator = JWTValidator(
+            jwks_url=JWKS_URL,
+            issuer=AUTH_ISSUER,
+            audience=CLIENT_ID,
+            ssl_verify=True,
+        )
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == "/api/leaves":
+            # Extract Authorization header from ASGI scope
+            auth_header = ""
+            for header_name, header_value in scope.get("headers", []):
+                if header_name == b"authorization":
+                    auth_header = header_value.decode("utf-8")
+                    break
+
+            if not auth_header.startswith("Bearer "):
+                response = StarletteJSONResponse(
+                    {"error": "unauthorized", "message": "Missing or invalid Authorization header"},
+                    status_code=401,
+                )
+                await response(scope, receive, send)
+                return
+
+            token = auth_header[7:]
+            try:
+                payload = await self.jwt_validator.validate_token(token)
+            except ValueError as e:
+                response = StarletteJSONResponse(
+                    {"error": "unauthorized", "message": str(e)},
+                    status_code=401,
+                )
+                await response(scope, receive, send)
+                return
+
+            scopes = payload.get("scope", "").split() if payload.get("scope") else []
+            if "hr_read" not in scopes:
+                response = StarletteJSONResponse(
+                    {"error": "forbidden", "message": "Missing required scope: hr_read"},
+                    status_code=403,
+                )
+                await response(scope, receive, send)
+                return
+
+            response = StarletteJSONResponse(
+                {"leaves": hr_data.get_all_leave_requests()}
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
 # ─── Run ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp_starlette = mcp.streamable_http_app()
+    app = DashboardMiddleware(mcp_starlette)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

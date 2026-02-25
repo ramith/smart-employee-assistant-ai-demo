@@ -91,6 +91,15 @@ class JWTTokenVerifier(TokenVerifier):
             aut = payload.get("aut")
             act = payload.get("act")
 
+            # Extract identity claims for tool-level user identification
+            display_name = (
+                payload.get("name")
+                or payload.get("preferred_username")
+                or payload.get("given_name")
+                or payload.get("email")
+                or subject
+            )
+
             # Set context variables for tool-level scope checking
             current_scopes.set(scopes)
             current_token_info.set({
@@ -98,6 +107,7 @@ class JWTTokenVerifier(TokenVerifier):
                 "aut": aut,
                 "act": act,
                 "scopes": scopes,
+                "display_name": display_name,
             })
 
             # Log all token claims for debugging
@@ -203,15 +213,26 @@ async def get_technicians(category_name: str = "") -> dict:
 # ─── Tools: it_read scope ───────────────────────────────────────────────────
 
 @mcp.tool()
-async def get_my_appointments(employee_name: str) -> dict:
+async def get_my_appointments(employee_name: str = "") -> dict:
     """Get all IT support appointments for an employee.
+    If employee_name is not provided, the identity is automatically
+    resolved from the authenticated user's token.
 
     Args:
-        employee_name: The name (or partial name) of the employee.
+        employee_name: Optional name (or partial name) of the employee.
+                       If omitted, uses the authenticated user's identity.
     """
     scope_error = require_scope("it_read")
     if scope_error:
         return scope_error
+
+    # If no employee name provided, resolve from the token
+    if not employee_name:
+        token_info = current_token_info.get()
+        employee_name = token_info.get("display_name", "")
+        if not employee_name:
+            return {"error": "identity_unknown", "message": "Could not determine your identity from the token. Please provide your name."}
+        logger.info(f"Resolved employee identity from token: {employee_name}")
 
     appts = it_support_data.get_appointments_for_employee(employee_name)
     if not appts:
@@ -323,7 +344,77 @@ async def reschedule_appointment(appointment_id: str, new_slot_id: str) -> dict:
     return result
 
 
+# ─── REST API for Dashboard (ASGI middleware) ────────────────────────────────
+
+from starlette.responses import JSONResponse as StarletteJSONResponse
+import uvicorn
+
+
+class DashboardMiddleware:
+    """ASGI middleware that intercepts /api/bookings before reaching the MCP app.
+
+    Validates JWT and checks it_read scope for dashboard access.
+    This avoids wrapping the MCP Starlette app in a parent Starlette app,
+    which would break its lifespan (session manager task group init).
+    """
+
+    def __init__(self, app):
+        self.app = app
+        self.jwt_validator = JWTValidator(
+            jwks_url=JWKS_URL,
+            issuer=AUTH_ISSUER,
+            audience=CLIENT_ID,
+            ssl_verify=True,
+        )
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == "/api/bookings":
+            # Extract Authorization header from ASGI scope
+            auth_header = ""
+            for header_name, header_value in scope.get("headers", []):
+                if header_name == b"authorization":
+                    auth_header = header_value.decode("utf-8")
+                    break
+
+            if not auth_header.startswith("Bearer "):
+                response = StarletteJSONResponse(
+                    {"error": "unauthorized", "message": "Missing or invalid Authorization header"},
+                    status_code=401,
+                )
+                await response(scope, receive, send)
+                return
+
+            token = auth_header[7:]
+            try:
+                payload = await self.jwt_validator.validate_token(token)
+            except ValueError as e:
+                response = StarletteJSONResponse(
+                    {"error": "unauthorized", "message": str(e)},
+                    status_code=401,
+                )
+                await response(scope, receive, send)
+                return
+
+            scopes = payload.get("scope", "").split() if payload.get("scope") else []
+            if "it_read" not in scopes:
+                response = StarletteJSONResponse(
+                    {"error": "forbidden", "message": "Missing required scope: it_read"},
+                    status_code=403,
+                )
+                await response(scope, receive, send)
+                return
+
+            response = StarletteJSONResponse(
+                {"bookings": it_support_data.get_all_appointments()}
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
 # ─── Run ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http")
+    mcp_starlette = mcp.streamable_http_app()
+    app = DashboardMiddleware(mcp_starlette)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

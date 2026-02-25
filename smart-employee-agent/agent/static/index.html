@@ -3,197 +3,207 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Employee Assistant</title>
+  <title>Corporate Concierge</title>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #f3f4f6;
+      background: #f5f6fa;
       height: 100vh;
       display: flex;
-      flex-direction: column;
+      overflow: hidden;
     }
 
-    /* ─── Header ─────────────────────────────────────────── */
-    .header {
-      background: linear-gradient(135deg, #1e3a5f, #2d5a87);
-      color: white;
-      padding: 1rem 1.5rem;
+    /* ─── Layout ──────────────────────────────────────── */
+
+    .chat-panel {
+      width: 40%;
+      min-width: 360px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #e5e7eb;
+      background: #fff;
+    }
+
+    .dashboard-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #f5f6fa;
+      overflow-y: auto;
+    }
+
+    /* ─── Chat Header ─────────────────────────────────── */
+
+    .chat-header {
+      padding: 1rem 1.25rem;
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      gap: 0.6rem;
+      border-bottom: 1px solid #e5e7eb;
+      background: #fff;
     }
-    .header-icon {
-      width: 40px; height: 40px;
-      background: rgba(255,255,255,0.15);
-      border-radius: 10px;
+
+    .chat-header-icon {
+      width: 34px; height: 34px;
+      background: #eff1ff;
+      border-radius: 8px;
       display: flex; align-items: center; justify-content: center;
-      font-size: 1.3rem;
+      color: #5b5fc7;
+      font-size: 1.1rem;
     }
-    .header-text h1 { font-size: 1.1rem; font-weight: 600; }
-    .header-text p { font-size: 0.75rem; opacity: 0.8; }
+
+    .chat-header h1 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
 
     .auth-badge {
       margin-left: auto;
-      padding: 0.3rem 0.75rem;
+      padding: 0.2rem 0.6rem;
       border-radius: 999px;
-      font-size: 0.7rem;
+      font-size: 0.65rem;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0.4px;
     }
     .auth-badge.basic {
-      background: rgba(251, 191, 36, 0.2);
-      color: #fbbf24;
-      border: 1px solid rgba(251, 191, 36, 0.3);
+      background: #fef3c7;
+      color: #b45309;
     }
     .auth-badge.elevated {
-      background: rgba(52, 211, 153, 0.2);
-      color: #34d399;
-      border: 1px solid rgba(52, 211, 153, 0.3);
+      background: #d1fae5;
+      color: #047857;
     }
 
-    /* ─── Chat Area ──────────────────────────────────────── */
+    /* ─── Chat Messages ───────────────────────────────── */
+
     .chat-area {
       flex: 1;
       overflow-y: auto;
-      padding: 1.5rem;
+      padding: 1.25rem;
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      gap: 0.85rem;
     }
 
-    .message {
-      max-width: 80%;
-      padding: 0.85rem 1.1rem;
-      border-radius: 16px;
-      line-height: 1.5;
-      font-size: 0.9rem;
+    .msg {
+      max-width: 88%;
+      padding: 0.75rem 1rem;
+      border-radius: 14px;
+      line-height: 1.55;
+      font-size: 0.875rem;
       word-wrap: break-word;
     }
 
-    /* ─── Markdown Rendered Content ─────────────────────── */
-    .message.agent p { margin: 0.4rem 0; }
-    .message.agent p:first-child { margin-top: 0; }
-    .message.agent p:last-child { margin-bottom: 0; }
-    .message.agent ul, .message.agent ol {
-      margin: 0.4rem 0;
-      padding-left: 1.4rem;
-    }
-    .message.agent li { margin: 0.2rem 0; }
-    .message.agent strong { font-weight: 600; }
-    .message.agent code {
-      background: #f3f4f6;
-      padding: 0.15rem 0.35rem;
-      border-radius: 4px;
-      font-size: 0.82rem;
-      font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    }
-    .message.agent pre {
-      background: #1f2937;
-      color: #e5e7eb;
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      overflow-x: auto;
-      margin: 0.5rem 0;
-    }
-    .message.agent pre code {
-      background: none;
-      padding: 0;
-      color: inherit;
-      font-size: 0.82rem;
-    }
-    .message.agent table {
-      border-collapse: collapse;
-      margin: 0.5rem 0;
-      font-size: 0.82rem;
-      width: 100%;
-    }
-    .message.agent th, .message.agent td {
-      border: 1px solid #e5e7eb;
-      padding: 0.35rem 0.6rem;
-      text-align: left;
-    }
-    .message.agent th {
-      background: #f9fafb;
-      font-weight: 600;
-    }
-
-    .message.agent {
+    .msg.agent {
       align-self: flex-start;
-      background: white;
+      background: #f3f4f6;
       color: #1f2937;
       border-bottom-left-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
-    .message.user {
+
+    .msg-agent-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      align-self: flex-start;
+      max-width: 88%;
+    }
+
+    .msg-agent-avatar {
+      width: 28px; height: 28px;
+      background: #eff1ff;
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      color: #5b5fc7;
+      font-size: 0.8rem;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .msg-agent-row .msg.agent {
+      max-width: 100%;
+    }
+
+    .msg.user {
       align-self: flex-end;
-      background: #2d5a87;
+      background: #5b5fc7;
       color: white;
       border-bottom-right-radius: 4px;
     }
 
-    .message.system {
+    .msg.system {
       align-self: center;
       background: #fef3c7;
       color: #92400e;
-      border-radius: 12px;
-      font-size: 0.8rem;
+      border-radius: 10px;
+      font-size: 0.78rem;
       text-align: center;
       max-width: 90%;
-      border: 1px solid #fde68a;
+      padding: 0.5rem 0.85rem;
     }
 
-    /* ─── Authorize Button ───────────────────────────────── */
-    .auth-action {
-      align-self: flex-start;
-      max-width: 80%;
+    /* Markdown in agent messages */
+    .msg.agent p { margin: 0.35rem 0; }
+    .msg.agent p:first-child { margin-top: 0; }
+    .msg.agent p:last-child { margin-bottom: 0; }
+    .msg.agent ul, .msg.agent ol { margin: 0.35rem 0; padding-left: 1.3rem; }
+    .msg.agent li { margin: 0.15rem 0; }
+    .msg.agent strong { font-weight: 600; }
+    .msg.agent code {
+      background: #e5e7eb; padding: 0.1rem 0.3rem;
+      border-radius: 3px; font-size: 0.8rem;
+      font-family: 'SF Mono', Consolas, monospace;
     }
-    .auth-action .message {
-      max-width: 100%;
-      border-bottom-left-radius: 4px;
-      margin-bottom: 0.5rem;
+    .msg.agent pre {
+      background: #1f2937; color: #e5e7eb;
+      padding: 0.6rem 0.85rem; border-radius: 6px;
+      overflow-x: auto; margin: 0.4rem 0;
     }
+    .msg.agent pre code { background: none; padding: 0; color: inherit; }
+    .msg.agent table {
+      border-collapse: collapse; margin: 0.4rem 0;
+      font-size: 0.8rem; width: 100%;
+    }
+    .msg.agent th, .msg.agent td {
+      border: 1px solid #e5e7eb; padding: 0.3rem 0.5rem; text-align: left;
+    }
+    .msg.agent th { background: #f9fafb; font-weight: 600; }
+
+    /* ─── Authorize Button ────────────────────────────── */
+
+    .auth-action { align-self: flex-start; max-width: 88%; }
     .authorize-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 0.7rem 1.3rem;
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      padding: 0.6rem 1.1rem;
       background: linear-gradient(135deg, #f59e0b, #d97706);
-      color: white;
-      border: none;
-      border-radius: 12px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
+      color: white; border: none; border-radius: 10px;
+      font-size: 0.82rem; font-weight: 600;
+      cursor: pointer; transition: all 0.2s;
+      box-shadow: 0 2px 6px rgba(245, 158, 11, 0.25);
     }
     .authorize-btn:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(245, 158, 11, 0.4);
+      box-shadow: 0 4px 10px rgba(245, 158, 11, 0.35);
     }
-    .authorize-btn:active { transform: translateY(0); }
-    .authorize-btn .lock-icon { font-size: 1rem; }
 
-    /* ─── Typing Indicator ───────────────────────────────── */
+    /* ─── Typing Indicator ────────────────────────────── */
+
     .typing {
       align-self: flex-start;
-      background: white;
-      padding: 0.85rem 1.1rem;
-      border-radius: 16px;
+      background: #f3f4f6;
+      padding: 0.75rem 1rem;
+      border-radius: 14px;
       border-bottom-left-radius: 4px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-      display: flex;
-      gap: 4px;
+      display: flex; gap: 4px;
     }
     .typing span {
-      width: 8px; height: 8px;
-      background: #9ca3af;
-      border-radius: 50%;
+      width: 7px; height: 7px;
+      background: #9ca3af; border-radius: 50%;
       animation: bounce 1.4s infinite ease-in-out;
     }
     .typing span:nth-child(1) { animation-delay: 0s; }
@@ -204,70 +214,389 @@
       40% { transform: scale(1); opacity: 1; }
     }
 
-    /* ─── Input Area ─────────────────────────────────────── */
-    .input-area {
-      padding: 1rem 1.5rem;
-      background: white;
+    /* ─── Chat Input ──────────────────────────────────── */
+
+    .chat-input {
+      padding: 0.85rem 1.25rem;
+      background: #fff;
       border-top: 1px solid #e5e7eb;
       display: flex;
-      gap: 0.75rem;
+      gap: 0.6rem;
     }
-    .input-area input {
+    .chat-input input {
       flex: 1;
-      padding: 0.75rem 1rem;
-      border: 1.5px solid #d1d5db;
-      border-radius: 12px;
-      font-size: 0.9rem;
+      padding: 0.65rem 0.9rem;
+      border: 1.5px solid #e5e7eb;
+      border-radius: 10px;
+      font-size: 0.875rem;
       outline: none;
       transition: border-color 0.2s;
+      color: #374151;
     }
-    .input-area input:focus { border-color: #2d5a87; }
-    .input-area input:disabled { background: #f3f4f6; }
+    .chat-input input::placeholder { color: #9ca3af; }
+    .chat-input input:focus { border-color: #5b5fc7; }
+    .chat-input input:disabled { background: #f9fafb; }
 
     .send-btn {
+      width: 38px; height: 38px;
+      background: none; border: none;
+      color: #5b5fc7; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 8px;
+      transition: background 0.2s;
+    }
+    .send-btn:hover { background: #eff1ff; }
+    .send-btn:disabled { color: #d1d5db; cursor: not-allowed; }
+    .send-btn:disabled:hover { background: none; }
+    .send-btn svg { width: 20px; height: 20px; }
+
+    /* ─── Dashboard Header ────────────────────────────── */
+
+    .dashboard-header {
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      background: #fff;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .dashboard-header h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    .dashboard-header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      font-size: 0.85rem;
+      color: #6b7280;
+    }
+
+    .sign-out-btn {
+      display: flex; align-items: center; gap: 0.3rem;
+      background: none; border: none;
+      color: #6b7280; cursor: pointer;
+      font-size: 0.85rem;
+      transition: color 0.2s;
+    }
+    .sign-out-btn:hover { color: #ef4444; }
+
+    /* ─── Dashboard Content ───────────────────────────── */
+
+    .dashboard-content {
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .dashboard-section {
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      overflow: hidden;
+    }
+
+    .section-header {
+      padding: 0.85rem 1.1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    .section-icon {
+      font-size: 1.1rem;
+      color: #5b5fc7;
+    }
+
+    /* ─── Data Table ──────────────────────────────────── */
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    .data-table thead th {
+      background: #f9fafb;
+      padding: 0.6rem 1.1rem;
+      text-align: left;
+      font-weight: 600;
+      color: #6b7280;
+      border-top: 1px solid #e5e7eb;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .data-table tbody td {
+      padding: 0.65rem 1.1rem;
+      border-bottom: 1px solid #f3f4f6;
+      color: #374151;
+    }
+
+    .data-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .data-table tbody tr:hover {
+      background: #fafbff;
+    }
+
+    /* ─── Status Badge ────────────────────────────────── */
+
+    .status-badge {
+      display: inline-block;
+      padding: 0.15rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+    }
+    .status-badge.pending {
+      background: #fef3c7;
+      color: #b45309;
+    }
+    .status-badge.approved {
+      background: #d1fae5;
+      color: #047857;
+    }
+    .status-badge.rejected {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+    .status-badge.confirmed {
+      background: #dbeafe;
+      color: #2563eb;
+    }
+    .status-badge.cancelled {
+      background: #f3f4f6;
+      color: #6b7280;
+    }
+
+    /* ─── Empty State ─────────────────────────────────── */
+
+    .empty-state {
+      padding: 2rem 1.1rem;
+      text-align: center;
+      color: #9ca3af;
+      font-size: 0.88rem;
+    }
+
+    /* ─── Loading Shimmer ─────────────────────────────── */
+
+    .shimmer {
+      height: 14px;
+      background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 4px;
+      margin: 0.3rem 0;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ─── Login Overlay ──────────────────────────────── */
+
+    .login-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .login-card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 2.5rem 2rem;
+      text-align: center;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+    }
+
+    .login-card h2 {
+      font-size: 1.3rem;
+      color: #1a1a2e;
+      margin-bottom: 0.5rem;
+    }
+
+    .login-card p {
+      color: #6b7280;
+      font-size: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .login-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
       padding: 0.75rem 1.5rem;
-      background: #2d5a87;
+      background: linear-gradient(135deg, #5b5fc7, #4a4eb8);
       color: white;
       border: none;
-      border-radius: 12px;
+      border-radius: 10px;
       font-size: 0.9rem;
       font-weight: 600;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(91, 95, 199, 0.3);
     }
-    .send-btn:hover { background: #1e3a5f; }
-    .send-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+
+    .login-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(91, 95, 199, 0.4);
+    }
+
+    .login-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* ─── Dashboard Section Visibility ───────────────── */
+
+    .dashboard-section.hidden-section {
+      display: none;
+    }
+
+    .no-access-message {
+      padding: 2rem 1.1rem;
+      text-align: center;
+      color: #9ca3af;
+      font-size: 0.88rem;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Header -->
-  <div class="header">
-    <div class="header-icon">&#x1F3E2;</div>
-    <div class="header-text">
-      <h1>Smart Employee Assistant</h1>
-      <p>HR & Leave Management</p>
-    </div>
-    <div id="authBadge" class="auth-badge basic">Agent Access</div>
-  </div>
-
-  <!-- Chat Area -->
-  <div id="chatArea" class="chat-area">
-    <div class="message agent">
-      Hello! I'm your Smart Employee Assistant. I can help you with company holidays,
-      check employee status, view leave requests, and manage approvals. How can I help you today?
+  <!-- ─── Login Overlay ────────────────────────────── -->
+  <div id="loginOverlay" class="login-overlay">
+    <div class="login-card">
+      <h2>Employee Dashboard</h2>
+      <p>Sign in with your corporate account to view your dashboard.</p>
+      <button class="login-btn" id="loginBtn" onclick="startUserLogin()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+          <polyline points="10 17 15 12 10 7"></polyline>
+          <line x1="15" y1="12" x2="3" y2="12"></line>
+        </svg>
+        Sign in with Asgardeo
+      </button>
     </div>
   </div>
 
-  <!-- Input Area -->
-  <div class="input-area">
-    <input
-      type="text"
-      id="messageInput"
-      placeholder="Type your message..."
-      autocomplete="off"
-    />
-    <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+  <!-- ─── Chat Panel ────────────────────────────────── -->
+  <div class="chat-panel">
+    <div class="chat-header">
+      <div class="chat-header-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+          <path d="M16 7V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v3"></path>
+        </svg>
+      </div>
+      <h1>Concierge AI</h1>
+      <div id="authBadge" class="auth-badge basic">Agent Access</div>
+    </div>
+
+    <div id="chatArea" class="chat-area">
+      <div class="msg-agent-row">
+        <div class="msg-agent-avatar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 7V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v3"></path>
+          </svg>
+        </div>
+        <div class="msg agent">
+          Hello! I'm your corporate concierge. I can help you with leave requests and
+          IT support scheduling. How can I assist you today?
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-input">
+      <input
+        type="text"
+        id="messageInput"
+        placeholder="Ask about leave or IT support..."
+        autocomplete="off"
+      />
+      <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── Dashboard Panel ───────────────────────────── -->
+  <div class="dashboard-panel">
+    <div class="dashboard-header">
+      <h2>Employee Dashboard</h2>
+      <div class="dashboard-header-right">
+        <span id="welcomeText">Not signed in</span>
+        <button class="sign-out-btn" id="signOutBtn" onclick="signOut()" style="display: none;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" y1="12" x2="9" y2="12"></line>
+          </svg>
+          Sign Out
+        </button>
+      </div>
+    </div>
+
+    <div class="dashboard-content">
+      <!-- Leave Requests Section -->
+      <div id="leaveSection" class="dashboard-section hidden-section">
+        <div class="section-header">
+          <span class="section-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+            </svg>
+          </span>
+          My Leave Requests
+        </div>
+        <div id="leaveTableContainer">
+          <div class="empty-state">Loading...</div>
+        </div>
+      </div>
+
+      <!-- IT Support Bookings Section -->
+      <div id="bookingSection" class="dashboard-section hidden-section">
+        <div class="section-header">
+          <span class="section-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </span>
+          My IT Support Bookings
+        </div>
+        <div id="bookingTableContainer">
+          <div class="empty-state">Loading...</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -278,19 +607,19 @@
 
     let isProcessing = false;
     let pendingMessage = null;
+    let userLoggedIn = false;
 
-    // ─── Send message on Enter key ──────────────────────
+    // ─── Keyboard shortcut ──────────────────────────
     messageInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !isProcessing) sendMessage();
     });
 
-    // ─── Listen for auth callback from popup ────────────
+    // ─── Auth callback from popup ───────────────────
     window.addEventListener('message', async (event) => {
       if (event.data?.type === 'auth_success') {
+        // OBO flow callback (agent privilege escalation)
         addSystemMessage('Manager authorization granted. Processing your request...');
         updateAuthBadge(true);
-
-        // Retry the pending message
         if (pendingMessage) {
           const msg = pendingMessage;
           pendingMessage = null;
@@ -298,15 +627,57 @@
         }
       } else if (event.data?.type === 'auth_failed') {
         addSystemMessage('Authorization failed: ' + (event.data.error || 'Unknown error'));
+      } else if (event.data?.type === 'user_login_success') {
+        // User dashboard login callback
+        onUserLoginSuccess();
+      } else if (event.data?.type === 'user_login_failed') {
+        onUserLoginFailed(event.data.error);
       }
     });
 
-    // ─── Core Functions ─────────────────────────────────
+    // ─── User Login for Dashboard ──────────────────
+
+    async function startUserLogin() {
+      const loginBtn = document.getElementById('loginBtn');
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Opening login...';
+
+      try {
+        const res = await fetch('/api/user/login');
+        const data = await res.json();
+        const popup = window.open(data.auth_url, 'user_login', 'width=500,height=700,left=200,top=100');
+        if (!popup) {
+          loginBtn.disabled = false;
+          loginBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg> Sign in with Asgardeo';
+          alert('Popup blocked. Please allow popups and try again.');
+        }
+      } catch (err) {
+        loginBtn.disabled = false;
+        loginBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg> Sign in with Asgardeo';
+        alert('Failed to start login: ' + err.message);
+      }
+    }
+
+    function onUserLoginSuccess() {
+      userLoggedIn = true;
+      document.getElementById('loginOverlay').style.display = 'none';
+      document.getElementById('signOutBtn').style.display = 'flex';
+      document.getElementById('welcomeText').textContent = 'Welcome';
+      refreshDashboard();
+    }
+
+    function onUserLoginFailed(error) {
+      const loginBtn = document.getElementById('loginBtn');
+      loginBtn.disabled = false;
+      loginBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg> Sign in with Asgardeo';
+      alert('Login failed: ' + (error || 'Unknown error'));
+    }
+
+    // ─── Core Chat Functions ────────────────────────
 
     async function sendMessage() {
       const text = messageInput.value.trim();
       if (!text || isProcessing) return;
-
       messageInput.value = '';
       addUserMessage(text);
       await sendToAgent(text);
@@ -322,7 +693,6 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text }),
         });
-
         const data = await res.json();
         hideTyping();
 
@@ -334,6 +704,9 @@
           addAgentMessage('Sorry, an error occurred: ' + data.message);
         } else {
           addAgentMessage(data.message);
+          if (data.refresh_dashboard) {
+            refreshDashboard();
+          }
         }
       } catch (err) {
         hideTyping();
@@ -345,18 +718,10 @@
 
     async function startAuthorization() {
       addSystemMessage('Opening Asgardeo login for manager authorization...');
-
       try {
         const res = await fetch('/api/auth/url');
         const data = await res.json();
-
-        // Open login in a popup
-        const popup = window.open(
-          data.auth_url,
-          'asgardeo_auth',
-          'width=500,height=700,left=200,top=100'
-        );
-
+        const popup = window.open(data.auth_url, 'asgardeo_auth', 'width=500,height=700,left=200,top=100');
         if (!popup) {
           addSystemMessage('Popup blocked. Please allow popups and try again.');
         }
@@ -365,27 +730,148 @@
       }
     }
 
-    // ─── UI Helpers ─────────────────────────────────────
+    // ─── Dashboard ──────────────────────────────────
+
+    async function refreshDashboard() {
+      if (!userLoggedIn) return;
+
+      try {
+        const res = await fetch('/api/dashboard');
+
+        if (res.status === 401) {
+          // User not logged in or token expired
+          userLoggedIn = false;
+          document.getElementById('loginOverlay').style.display = 'flex';
+          document.getElementById('signOutBtn').style.display = 'none';
+          document.getElementById('welcomeText').textContent = 'Not signed in';
+          return;
+        }
+
+        const data = await res.json();
+
+        // Conditionally show/hide Leave Requests section
+        const leaveSection = document.getElementById('leaveSection');
+        if (data.hr_accessible) {
+          leaveSection.classList.remove('hidden-section');
+          renderLeaveTable(data.leaves || []);
+        } else {
+          leaveSection.classList.add('hidden-section');
+        }
+
+        // Conditionally show/hide IT Bookings section
+        const bookingSection = document.getElementById('bookingSection');
+        if (data.it_accessible) {
+          bookingSection.classList.remove('hidden-section');
+          renderBookingTable(data.bookings || []);
+        } else {
+          bookingSection.classList.add('hidden-section');
+        }
+
+        // Show message if user has no access to either section
+        if (!data.hr_accessible && !data.it_accessible) {
+          if (!document.getElementById('noAccessMsg')) {
+            const content = document.querySelector('.dashboard-content');
+            const msg = document.createElement('div');
+            msg.id = 'noAccessMsg';
+            msg.className = 'no-access-message';
+            msg.textContent = 'Your account does not have access to any dashboard sections. Contact your administrator for access.';
+            content.appendChild(msg);
+          }
+        } else {
+          const existing = document.getElementById('noAccessMsg');
+          if (existing) existing.remove();
+        }
+
+      } catch (err) {
+        console.error('Dashboard refresh failed:', err);
+      }
+    }
+
+    function renderLeaveTable(leaves) {
+      const container = document.getElementById('leaveTableContainer');
+      if (!leaves.length) {
+        container.innerHTML = '<div class="empty-state">No leave requests found.</div>';
+        return;
+      }
+      let html = `<table class="data-table">
+        <thead><tr>
+          <th>ID</th><th>Employee</th><th>Type</th><th>Date</th><th>Status</th>
+        </tr></thead><tbody>`;
+      for (const lr of leaves) {
+        const badge = statusBadge(lr.status);
+        html += `<tr>
+          <td>${lr.request_id}</td>
+          <td>${lr.employee}</td>
+          <td>${lr.type}</td>
+          <td>${lr.start_date}</td>
+          <td>${badge}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+
+    function renderBookingTable(bookings) {
+      const container = document.getElementById('bookingTableContainer');
+      if (!bookings.length) {
+        container.innerHTML = '<div class="empty-state">No IT slots booked. Ask the concierge to see available slots!</div>';
+        return;
+      }
+      let html = `<table class="data-table">
+        <thead><tr>
+          <th>ID</th><th>Category</th><th>Date</th><th>Time</th><th>Technician</th><th>Status</th>
+        </tr></thead><tbody>`;
+      for (const b of bookings) {
+        const badge = statusBadge(b.status);
+        html += `<tr>
+          <td>${b.appointment_id}</td>
+          <td>${b.category}</td>
+          <td>${b.date}</td>
+          <td>${b.time}</td>
+          <td>${b.technician}</td>
+          <td>${badge}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+
+    function statusBadge(status) {
+      const cls = status.toLowerCase();
+      return `<span class="status-badge ${cls}">${status}</span>`;
+    }
+
+    // ─── Chat UI Helpers ────────────────────────────
 
     function addUserMessage(text) {
       const div = document.createElement('div');
-      div.className = 'message user';
+      div.className = 'msg user';
       div.textContent = text;
       chatArea.appendChild(div);
       scrollToBottom();
     }
 
     function addAgentMessage(text) {
-      const div = document.createElement('div');
-      div.className = 'message agent';
-      div.innerHTML = marked.parse(text);
-      chatArea.appendChild(div);
+      const row = document.createElement('div');
+      row.className = 'msg-agent-row';
+
+      const avatar = document.createElement('div');
+      avatar.className = 'msg-agent-avatar';
+      avatar.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 7V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v3"></path></svg>';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'msg agent';
+      bubble.innerHTML = marked.parse(text);
+
+      row.appendChild(avatar);
+      row.appendChild(bubble);
+      chatArea.appendChild(row);
       scrollToBottom();
     }
 
     function addSystemMessage(text) {
       const div = document.createElement('div');
-      div.className = 'message system';
+      div.className = 'msg system';
       div.textContent = text;
       chatArea.appendChild(div);
       scrollToBottom();
@@ -394,16 +880,14 @@
     function showAuthorizeButton() {
       const wrapper = document.createElement('div');
       wrapper.className = 'auth-action';
-
       const btn = document.createElement('button');
       btn.className = 'authorize-btn';
-      btn.innerHTML = '<span class="lock-icon">&#x1F512;</span> Authorize (Login to approve)';
+      btn.innerHTML = '&#x1F512; Authorize (Login to approve)';
       btn.onclick = () => {
         btn.disabled = true;
         btn.style.opacity = '0.6';
         startAuthorization();
       };
-
       wrapper.appendChild(btn);
       chatArea.appendChild(wrapper);
       scrollToBottom();
@@ -443,6 +927,40 @@
     function scrollToBottom() {
       chatArea.scrollTop = chatArea.scrollHeight;
     }
+
+    async function signOut() {
+      try {
+        await fetch('/api/user/logout', { method: 'POST' });
+      } catch (err) {
+        console.error('Logout failed:', err);
+      }
+      userLoggedIn = false;
+      document.getElementById('loginOverlay').style.display = 'flex';
+      document.getElementById('signOutBtn').style.display = 'none';
+      document.getElementById('welcomeText').textContent = 'Not signed in';
+      document.getElementById('leaveSection').classList.add('hidden-section');
+      document.getElementById('bookingSection').classList.add('hidden-section');
+      const noAccess = document.getElementById('noAccessMsg');
+      if (noAccess) noAccess.remove();
+    }
+
+    // ─── Init ───────────────────────────────────────
+    (async function init() {
+      // Check if user is already logged in (e.g., page refresh)
+      try {
+        const res = await fetch('/api/user/status');
+        const data = await res.json();
+        if (data.logged_in) {
+          userLoggedIn = true;
+          document.getElementById('loginOverlay').style.display = 'none';
+          document.getElementById('signOutBtn').style.display = 'flex';
+          document.getElementById('welcomeText').textContent = 'Welcome';
+          refreshDashboard();
+        }
+      } catch (err) {
+        console.error('Failed to check user status:', err);
+      }
+    })();
   </script>
 </body>
 </html>

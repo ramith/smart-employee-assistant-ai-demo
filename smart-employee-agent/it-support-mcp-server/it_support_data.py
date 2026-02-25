@@ -285,6 +285,26 @@ def cancel_appointment(appointment_id: str, cancelled_by: str) -> dict | None:
     }
 
 
+def get_all_appointments() -> list[dict]:
+    """Return all appointments for the dashboard."""
+    results = []
+    for apt in appointments.values():
+        tech = technicians.get(apt["technician_id"], {})
+        slot = next((s for s in available_slots if s["slot_id"] == apt["slot_id"]), {})
+        cat = next((c for c in support_categories if c["id"] == apt["category_id"]), {})
+        results.append({
+            "appointment_id": apt["appointment_id"],
+            "employee_name": apt["employee_name"],
+            "category": cat.get("name", "Unknown"),
+            "description": apt["description"],
+            "date": slot.get("date", "N/A"),
+            "time": slot.get("time", "N/A"),
+            "technician": tech.get("name", "Unknown"),
+            "status": apt["status"],
+        })
+    return results
+
+
 def reschedule_appointment(
     appointment_id: str,
     new_slot_id: str,

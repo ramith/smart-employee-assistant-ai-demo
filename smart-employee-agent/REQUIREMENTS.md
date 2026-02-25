@@ -2,23 +2,23 @@
 
 ## Overview
 
-A sample application demonstrating **dynamic privilege escalation** for AI agents using Asgardeo/Identity Server. The AI agent starts with low-privilege access (its own identity) and dynamically escalates to act on behalf of a manager when an elevated action (e.g., leave approval) is required.
+A sample application demonstrating **dynamic privilege escalation** for AI agents using Asgardeo/Identity Server. The AI agent starts with low-privilege access (its own identity) and dynamically escalates to act on behalf of a user when elevated actions (e.g., leave approval, IT appointment booking) are required.
 
-This combines both the **Agent-Auth-Flow** and **On-Behalf-Of Flow** in a single, realistic HR scenario.
+This combines both the **Agent-Auth-Flow** and **On-Behalf-Of Flow** in a realistic corporate scenario with two backend services: HR leave management and IT support scheduling.
 
 ---
 
 ## Scenario
 
-**The Smart Employee Assistant** helps a Department Manager interact with the company's HR & Leave Management system.
+**The Corporate Concierge** helps employees interact with the company's HR and IT support systems through a split-panel web interface with a conversational AI chat and a live employee dashboard.
 
-- **User**: Department Manager (high privileges - can view team data, approve/reject leave)
-- **AI Agent**: Smart Employee Assistant (low baseline privileges - can only read public data)
-- **Shared Backend**: HR & Leave Management MCP Server
+- **User**: Employee / Department Manager
+- **AI Agent**: Corporate Concierge (low baseline privileges — can only read public data)
+- **Backend Services**: HR MCP Server + IT Support MCP Server
 
 ### User Story
 
-> As a Department Manager, I want to ask my AI assistant to approve a team member's leave request, and have the assistant securely escalate its privileges by requesting my authorization before performing the action.
+> As an employee, I want to ask the AI assistant to approve a leave request or book an IT support appointment, and have the assistant securely escalate its privileges by requesting my authorization before performing the action. I want to see the results live on my dashboard.
 
 ---
 
@@ -37,54 +37,97 @@ A secured MCP server that acts as the HR backend, exposing the following tools:
 | `approve_leave_request` | Approve a pending leave request | `hr_approve` |
 | `reject_leave_request` | Reject a pending leave request with a reason | `hr_approve` |
 
+**Dashboard REST endpoint:**
+- `GET /api/leaves` — Returns all leave requests (all statuses) for the dashboard. No authentication required.
+
 **Access control rules:**
 - Agent token (agent-auth-flow) is granted: `hr_basic` scope only
-- OBO token (on-behalf-of-flow with manager) is granted: `hr_basic`, `hr_read`, `hr_approve` scopes
+- OBO token (on-behalf-of-flow with user) is granted: `hr_basic`, `hr_read`, `hr_approve` scopes
 
 **Data:**
-- The MCP server uses in-memory mock data (no database required)
+- In-memory mock data (no database required)
 - Pre-populated with sample employees, leave balances, and pending leave requests
 
 **Token validation:**
-- JWT validation using Asgardeo JWKS endpoint (follows existing `mcp-auth` pattern)
-- Scope-based access control on each tool
-- Returns `403 Forbidden` (or error response) when token lacks required scope
+- JWT validation using Asgardeo JWKS endpoint
+- Scope-based access control on each MCP tool
+- Returns structured error dict when token lacks required scope
 
-### FR-2: AI Agent (Smart Employee Assistant)
+### FR-2: IT Support Appointment MCP Server
+
+A secured MCP server that acts as the IT support backend, exposing the following tools:
+
+| Tool | Description | Required Scope |
+|------|-------------|----------------|
+| `get_support_categories` | List available IT support categories | *(none)* |
+| `get_available_slots` | View available appointment time slots | *(none)* |
+| `get_technicians` | List IT technicians (optionally by category) | *(none)* |
+| `get_my_appointments` | View an employee's appointments | `it_read` |
+| `get_appointment_details` | Get detailed info about a specific appointment | `it_read` |
+| `book_appointment` | Book a new IT support appointment | `it_manage` |
+| `cancel_appointment` | Cancel an existing appointment | `it_manage` |
+| `reschedule_appointment` | Reschedule an appointment to a new time slot | `it_manage` |
+
+**Dashboard REST endpoint:**
+- `GET /api/bookings` — Returns all IT appointments for the dashboard. No authentication required.
+
+**Access control rules:**
+- Agent token: basic read tools (categories, slots, technicians) require no scope
+- OBO token: `it_read` for viewing appointments, `it_manage` for booking/cancelling
+
+**Data:**
+- In-memory mock data (no database required)
+- Pre-populated with support categories, technicians, time slots, and sample appointments
+
+### FR-3: AI Agent (Corporate Concierge)
 
 A LangChain-based agent powered by Gemini LLM that:
 
 1. **Starts with agent-level authentication**
    - On startup, authenticates using Agent ID + Agent Secret (agent-auth-flow)
-   - Connects to the HR MCP server with its low-privilege agent token
-   - Can answer basic questions (holiday calendar, employee status)
+   - Connects to both MCP servers with its low-privilege agent token
+   - Can answer basic questions (holiday calendar, employee status, IT categories, available slots)
 
 2. **Detects when elevated privileges are needed**
-   - When the user requests an action that requires higher privileges (e.g., "approve Sarah's leave"), the agent recognizes it needs manager-level authorization
-   - The agent informs the user that authorization is required
+   - When the user requests an action requiring higher privileges, the agent recognizes it via `insufficient_scope` error from the MCP server
+   - Informs the user that authorization is required
 
 3. **Triggers On-Behalf-Of flow for privilege escalation**
    - Initiates the PKCE authorization flow
-   - Opens the browser for the manager to authenticate via Asgardeo
-   - Captures the authorization code via a local callback server
-   - Exchanges for an OBO token carrying the manager's privileges
+   - Opens the browser for the user to authenticate via Asgardeo
+   - Exchanges for an OBO token carrying both HR and IT elevated scopes
 
 4. **Executes the elevated action**
-   - Creates a new MCP connection using the OBO token
-   - Calls the elevated tool (e.g., `approve_leave_request`)
-   - Reports the result back to the user
+   - Reconnects to both MCP servers using the OBO token
+   - Calls the elevated tool and reports the result
 
 5. **Maintains audit context**
-   - The OBO token carries both the agent's identity and the manager's identity
-   - The MCP server logs which agent acted on behalf of which user
+   - The OBO token carries both the agent's identity and the user's identity
+   - Both MCP servers log which agent acted on behalf of which user
 
-### FR-3: Interactive Chat Loop
+### FR-4: Split-Panel Web UI with Live Dashboard
 
-- The agent runs in an interactive CLI chat loop
+- **Left panel**: Conversational AI chat ("Concierge AI")
+  - Message input and chat bubbles
+  - Shows "Authorize" button when escalation is needed
+  - Typing indicator while agent processes
+  - Auth badge showing current privilege level
+
+- **Right panel**: Employee Dashboard
+  - **My Leave Requests** table (ID, Employee, Type, Date, Status)
+  - **My IT Support Bookings** table (ID, Category, Date, Time, Technician, Status)
+  - Auto-refreshes after each chat interaction
+  - Status badges with color coding (Pending, Approved, Rejected, Confirmed, Cancelled)
+
+- **Live updates**: When the agent performs a state-changing action (approve leave, book appointment), the dashboard reflects the change immediately.
+
+### FR-5: Interactive Chat
+
+- The agent runs in a web-based chat interface
 - The user can ask multiple questions in a session
 - Low-privilege queries are answered immediately (using agent token)
 - High-privilege actions trigger the OBO flow only when needed
-- After the OBO token is obtained, it is reused for subsequent elevated actions within the session (until it expires)
+- After the OBO token is obtained, it is reused for subsequent elevated actions within the session
 
 ---
 
@@ -92,23 +135,29 @@ A LangChain-based agent powered by Gemini LLM that:
 
 ### NFR-1: Technology Stack
 - **Language**: Python 3.10+
-- **Agent Framework**: LangChain with `langchain-mcp-adapters`
+- **Agent Framework**: LangChain with `langchain-mcp-adapters` (`MultiServerMCPClient`)
 - **LLM**: Google Gemini (via `langchain-google-genai`)
 - **MCP Server**: FastMCP (from `mcp` package)
 - **Auth SDK**: `asgardeo` and `asgardeo_ai` packages
 - **Token Validation**: PyJWT with JWKS
+- **Web Framework**: FastAPI (agent server)
+- **HTTP Client**: httpx (dashboard proxy)
+- **Frontend**: Vanilla HTML/CSS/JS (single file, no build tools)
 
-### NFR-2: Consistency with Existing Samples
-- Follow the same project structure, naming conventions, and patterns as `agent-identity/python/`
-- Use `.env` for configuration (with `.env.example` template)
-- Reuse `OAuthCallbackServer` pattern from existing OBO samples
-
-### NFR-3: Security
+### NFR-2: Security
 - Agent token has minimal scopes (principle of least privilege)
 - OBO token is time-limited
 - All tokens validated via JWKS (asymmetric signatures)
-- Scope-based access control enforced at the MCP server level
+- Scope-based access control enforced at each MCP server
+- Dashboard REST endpoints are read-only and unauthenticated (acceptable for a sample)
 - Audit trail for all elevated actions
+
+### NFR-3: Architecture
+- Each MCP server runs in a Starlette wrapper that provides:
+  - REST endpoints at the parent level (unauthenticated, for dashboard)
+  - MCP protocol endpoints in a mounted sub-app (with JWT auth middleware)
+- The agent server proxies dashboard data from both MCP servers via httpx
+- Single authorization flow grants access to all elevated scopes across both systems
 
 ---
 
@@ -125,18 +174,45 @@ A LangChain-based agent powered by Gemini LLM that:
 ### Pending Leave Requests
 | Request ID | Employee | Type | Start Date | End Date | Status | Reason |
 |------------|----------|------|------------|----------|--------|--------|
-| LR001 | Sarah Johnson (EMP001) | Annual Leave | 2025-03-10 | 2025-03-14 | Pending | Family vacation |
-| LR002 | Ahmed Khan (EMP002) | Sick Leave | 2025-03-05 | 2025-03-06 | Pending | Medical appointment |
-| LR003 | Maria Garcia (EMP003) | Annual Leave | 2025-03-17 | 2025-03-21 | Pending | Personal travel |
+| LR001 | Sarah Johnson | Annual Leave | 2026-03-10 | 2026-03-14 | Pending | Family vacation |
+| LR002 | Ahmed Khan | Sick Leave | 2026-03-05 | 2026-03-06 | Pending | Medical appointment |
+| LR003 | Maria Garcia | Annual Leave | 2026-03-17 | 2026-03-21 | Pending | Personal travel |
 
-### Company Holidays (2025)
+### Company Holidays (2026)
 | Date | Holiday |
 |------|---------|
-| 2025-01-01 | New Year's Day |
-| 2025-04-18 | Good Friday |
-| 2025-12-25 | Christmas Day |
-| 2025-12-02 | UAE National Day |
-| 2025-03-31 | Eid Al Fitr (expected) |
+| 2026-01-01 | New Year's Day |
+| 2026-03-20 | Eid Al Fitr (expected) |
+| 2026-05-27 | Arafat Day (expected) |
+| 2026-05-28 | Eid Al Adha (expected) |
+| 2026-07-18 | Islamic New Year (expected) |
+| 2026-12-01 | Commemoration Day |
+| 2026-12-02 | UAE National Day |
+
+### IT Support Categories
+| ID | Name |
+|----|------|
+| CAT001 | Hardware Issue |
+| CAT002 | Software Installation |
+| CAT003 | Network & Connectivity |
+| CAT004 | Account & Access |
+| CAT005 | Email & Communication |
+| CAT006 | Security Incident |
+| CAT007 | New Equipment Request |
+| CAT008 | General IT Consultation |
+
+### IT Technicians
+| ID | Name | Specializations |
+|----|------|----------------|
+| TECH001 | Alex Rivera | Hardware Issue, New Equipment Request |
+| TECH002 | Priya Patel | Software Installation, Network & Connectivity |
+| TECH003 | Omar Hassan | Account & Access, Email & Communication, Security Incident |
+| TECH004 | Lisa Chen | Network & Connectivity, Security Incident, General IT Consultation |
+
+### IT Appointments
+| ID | Employee | Category | Description | Status |
+|----|----------|----------|-------------|--------|
+| APT001 | Sarah Johnson | Hardware Issue | Laptop screen flickering intermittently | Confirmed |
 
 ---
 
@@ -148,56 +224,12 @@ A LangChain-based agent powered by Gemini LLM that:
 
 2. **Create an MCP Client Application**
    - Application type: MCP Client Application
-   - Redirect URI: `http://localhost:6274/oauth/callback`
-   - Configure API scopes: `hr_basic`, `hr_read`, `hr_approve`
+   - Redirect URI: `http://localhost:5001/oauth/callback`
+   - Configure API scopes: `hr_basic`, `hr_read`, `hr_approve`, `it_basic`, `it_read`, `it_manage`
 
 3. **Configure Scope Permissions**
    - Agent's default scopes: `openid`, `hr_basic`
-   - User-authorized scopes (via OBO): `openid`, `hr_basic`, `hr_read`, `hr_approve`
-
----
-
-## Expected User Interaction Flow
-
-```
-$ python main.py
-🟢 Smart Employee Assistant started (Agent authenticated)
-Available commands: Type your question or 'quit' to exit.
-
-You: What are the company holidays this year?
-Agent: Here are the company holidays for 2025:
-  - Jan 1: New Year's Day
-  - Mar 31: Eid Al Fitr (expected)
-  - Apr 18: Good Friday
-  - Dec 2: UAE National Day
-  - Dec 25: Christmas Day
-
-You: Is Sarah Johnson in the office today?
-Agent: Sarah Johnson is currently in-office.
-
-You: Approve Sarah's annual leave request for next week.
-Agent: I need elevated privileges to approve leave requests.
-       I'll need your authorization as a manager.
-
-       Please authenticate in your browser:
-       → Opening: https://api.asgardeo.io/t/<tenant>/oauth2/authorize?...
-
-       Waiting for authorization...
-
-[Manager authenticates in browser via Asgardeo]
-
-Agent: Authorization received. Processing your request...
-       ✅ Sarah Johnson's annual leave request (Mar 10-14) has been approved.
-
-       Audit: Approved by Smart Employee Agent on behalf of Manager at 10:00 AM.
-
-You: What are the other pending leave requests?
-Agent: Here are the pending leave requests for your team:
-  1. Ahmed Khan - Sick Leave (Mar 5-6) - Medical appointment
-  2. Maria Garcia - Annual Leave (Mar 17-21) - Personal travel
-
-You: quit
-```
+   - User-authorized scopes (via OBO): `openid`, `hr_basic`, `hr_read`, `hr_approve`, `it_basic`, `it_read`, `it_manage`
 
 ---
 
@@ -206,15 +238,23 @@ You: quit
 ```
 smart-employee-agent/
 ├── README.md
+├── REQUIREMENTS.md
+├── DESIGN.md
 ├── hr-mcp-server/                    # HR & Leave Management MCP Server
-│   ├── main.py                       # MCP server with HR tools
+│   ├── main.py                       # MCP server + REST dashboard endpoint
 │   ├── hr_data.py                    # Mock HR data
-│   ├── jwt_validator.py              # JWT validation (from mcp-auth pattern)
+│   ├── jwt_validator.py              # JWT validation via JWKS
 │   ├── requirements.txt
 │   └── .env.example
-└── agent/                            # Smart Employee AI Agent
-    ├── main.py                       # Agent entry point with chat loop
-    ├── oauth_callback.py             # OAuth callback server (from OBO pattern)
+├── it-support-mcp-server/            # IT Support Appointment MCP Server
+│   ├── main.py                       # MCP server + REST dashboard endpoint
+│   ├── it_support_data.py            # Mock IT support data
+│   ├── jwt_validator.py              # JWT validation via JWKS
+│   ├── requirements.txt
+│   └── .env.example
+└── agent/                            # Smart Employee AI Agent (Web App)
+    ├── main.py                       # FastAPI + LangChain agent + dashboard proxy
+    ├── static/index.html             # Split-panel UI (Chat + Dashboard)
     ├── requirements.txt
     └── .env.example
 ```
