@@ -54,6 +54,7 @@ AGENT_CONFIG = AgentConfig(
 )
 
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
+IT_SUPPORT_SERVER_URL = os.getenv("IT_SUPPORT_SERVER_URL", "http://127.0.0.1:8001/mcp")
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
 
 SYSTEM_PROMPT = """You are the Smart Employee Assistant, an AI agent for the HR & Leave Management system.
@@ -112,6 +113,11 @@ async def _connect_mcp(access_token: str):
             "hr_server": {
                 "transport": "streamable_http",
                 "url": MCP_SERVER_URL,
+                "headers": {"Authorization": f"Bearer {access_token}"},
+            },
+            "it_server": {
+                "transport": "streamable_http",
+                "url": IT_SUPPORT_SERVER_URL,
                 "headers": {"Authorization": f"Bearer {access_token}"},
             }
         }
