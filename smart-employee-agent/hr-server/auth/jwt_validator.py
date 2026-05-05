@@ -115,9 +115,27 @@ class JWTValidator:
         except jwt.ExpiredSignatureError:
             raise TokenError("token_expired", "Token has expired")
         except jwt.InvalidAudienceError:
-            raise TokenError("invalid_token", "Invalid audience")
+            try:
+                unverified = jwt.decode(token, options={"verify_signature": False})
+                actual_aud = unverified.get("aud")
+            except Exception:
+                actual_aud = "(undecodable)"
+            logger.warning(
+                "JWT audience mismatch: token_aud=%s expected_aud=%s",
+                actual_aud, self.audience,
+            )
+            raise TokenError("invalid_token", f"Invalid audience (token had {actual_aud}, expected {self.audience})")
         except jwt.InvalidIssuerError:
-            raise TokenError("invalid_token", "Invalid issuer")
+            try:
+                unverified = jwt.decode(token, options={"verify_signature": False})
+                actual_iss = unverified.get("iss")
+            except Exception:
+                actual_iss = "(undecodable)"
+            logger.warning(
+                "JWT issuer mismatch: token_iss=%s expected_iss=%s",
+                actual_iss, self.issuer,
+            )
+            raise TokenError("invalid_token", f"Invalid issuer (token had {actual_iss}, expected {self.issuer})")
         except jwt.InvalidSignatureError:
             raise TokenError("invalid_token", "Invalid token signature")
         except jwt.DecodeError:

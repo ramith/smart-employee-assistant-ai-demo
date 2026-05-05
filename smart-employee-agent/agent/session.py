@@ -7,9 +7,12 @@
   Each session tracks OBO tokens, chat history, and in-progress OBO flows.
 """
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Any
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 8  # 8 hours of inactivity
@@ -73,6 +76,7 @@ class SessionStore:
         """Get existing session or create a new one. Opportunistically prunes expired entries."""
         self.prune_expired()
         if sub not in self._sessions:
+            logger.info("[SESSION] New session created for sub=%s (total=%d)", sub, len(self._sessions) + 1)
             self._sessions[sub] = UserSession(user_sub=sub)
         else:
             self._sessions[sub].touch()
@@ -99,6 +103,8 @@ class SessionStore:
         stale = [sub for sub, s in self._sessions.items() if s.last_accessed < cutoff]
         for sub in stale:
             del self._sessions[sub]
+        if stale:
+            logger.info("[SESSION] Pruned %d expired session(s) (TTL=%ds)", len(stale), self._ttl_seconds)
         return len(stale)
 
     def clear_all(self):

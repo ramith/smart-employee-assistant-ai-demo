@@ -58,16 +58,36 @@ class AgentAuth:
     async def ensure_valid_token(self):
         """Return a valid agent token, refreshing if needed."""
         if self._token and time.time() < (self._expires_at - REFRESH_BUFFER_SECONDS):
+            remaining = int(self._expires_at - time.time())
+            logger.debug("Reusing cached agent token (%ds remaining)", remaining)
             return self._token
 
-        logger.info("Obtaining agent token via App Native Auth...")
+        is_refresh = self._token is not None
+        if is_refresh:
+            logger.info("Agent token expired/expiring — refreshing via App Native Auth...")
+        requested_scopes = ["openid", "hr_basic_mcp"]
+        logger.info("Obtaining agent token via App Native Auth (requested scopes: %s)",
+                    ", ".join(requested_scopes))
         async with AgentAuthManager(self._asgardeo_config, self._agent_config) as auth_manager:
-            self._token = await auth_manager.get_agent_token(["openid", "hr_basic_mcp"])
+            self._token = await auth_manager.get_agent_token(requested_scopes)
 
         if hasattr(self._token, "expires_in") and self._token.expires_in:
             self._expires_at = time.time() + self._token.expires_in
         else:
             self._expires_at = time.time() + 3600
 
-        logger.info("Agent token obtained (scopes: hr_basic_mcp)")
+        granted_scope = getattr(self._token, "scope", "") or ""
+        granted_scopes = granted_scope.split() if granted_scope else []
+        missing = [s for s in requested_scopes if s not in granted_scopes]
+        logger.info(
+            "Agent token obtained (granted scopes: %s | expires_in: %ss)",
+            ", ".join(granted_scopes) if granted_scopes else "(none)",
+            getattr(self._token, "expires_in", "?"),
+        )
+        if missing:
+            logger.warning(
+                "Agent token is missing requested scope(s): %s — "
+                "verify the agent is assigned to a role granting these permissions in Asgardeo Console > Roles > Agents tab.",
+                ", ".join(missing),
+            )
         return self._token

@@ -63,7 +63,20 @@ async def exchange_code(agent_auth: AgentAuth, code: str, code_verifier: str):
     if hasattr(obo_token, "expires_in") and obo_token.expires_in:
         expires_at = time.time() + obo_token.expires_in
 
-    logger.info(f"OBO token obtained (scopes: {scopes})")
+    missing = [s for s in OBO_SCOPES if s not in scopes]
+    logger.info(
+        "OBO token obtained (requested: %s | granted: %s | expires_in: %ss)",
+        ", ".join(OBO_SCOPES),
+        ", ".join(scopes) if scopes else "(none)",
+        getattr(obo_token, "expires_in", "?"),
+    )
+    if missing:
+        logger.info(
+            "OBO token did not include requested scope(s): %s — "
+            "Asgardeo only grants scopes the user's role permits, so this is expected for "
+            "scopes the role does not have (e.g., an Employee will not receive hr_approve_mcp).",
+            ", ".join(missing),
+        )
     return obo_token, scopes, expires_at
 
 

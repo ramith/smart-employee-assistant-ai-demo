@@ -59,9 +59,11 @@ class ClientHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def log_message(self, format, *args):
-        # Quieter logging
-        if args and "404" not in str(args[1] if len(args) > 1 else ""):
-            pass  # suppress normal request logs
+        # Quieter logging — suppress 200/304 noise but always show 4xx/5xx errors
+        # so failed asset fetches and config 500s are visible.
+        status = str(args[1]) if len(args) > 1 else ""
+        if status.startswith(("4", "5")):
+            super().log_message(format, *args)
 
 
 if __name__ == "__main__":

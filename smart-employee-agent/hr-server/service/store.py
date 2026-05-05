@@ -10,8 +10,11 @@
 """
 
 import copy
+import logging
 from datetime import date as dt_date
 from typing import Dict, List
+
+logger = logging.getLogger(__name__)
 
 # ─── Global Seed Data (static, same for all users) ──────────────────────────
 
@@ -68,12 +71,19 @@ def reset_data() -> None:
     """Reset all stores. Global data re-seeded, user data cleared."""
     global leave_policy, holidays, users, leave_balances, leave_requests
     global leave_request_counter
+    prior_users = len(users) if users else 0
+    prior_requests = len(leave_requests) if leave_requests else 0
     leave_policy = copy.deepcopy(_SEED_LEAVE_POLICY)
     holidays = copy.deepcopy(_SEED_HOLIDAYS)
     users = {}
     leave_balances = {}
     leave_requests = {}
     leave_request_counter = 0
+    if prior_users or prior_requests:
+        logger.warning(
+            "[STORE RESET] HR data reset — cleared %d user(s) and %d leave request(s); seed data re-applied",
+            prior_users, prior_requests,
+        )
 
 
 def next_request_id() -> str:
@@ -103,11 +113,17 @@ def ensure_user(sub: str, first_name: str, last_name: str = "") -> Dict:
             "first_seen": str(dt_date.today()),
         }
         leave_balances[sub] = default_balance()
+        logger.info(
+            "[USER AUTO-REGISTERED] sub=%s name=%s default_balance=%s",
+            sub, full_name or "(no name)", _DEFAULT_LEAVE_BALANCE,
+        )
     elif full_name and full_name != users[sub]["name"]:
         # Update name if it changed in the IdP
+        old_name = users[sub]["name"]
         users[sub]["first_name"] = first_name
         users[sub]["last_name"] = last_name
         users[sub]["name"] = full_name
+        logger.info("[USER NAME UPDATED] sub=%s old=%s new=%s", sub, old_name, full_name)
     return users[sub]
 
 

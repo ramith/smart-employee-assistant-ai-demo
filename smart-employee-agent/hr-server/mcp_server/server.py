@@ -16,6 +16,7 @@
 """
 
 import logging
+import os
 
 from pydantic import AnyHttpUrl
 
@@ -43,6 +44,10 @@ from auth.scopes import (
 from service import hr_service, store
 
 logger = logging.getLogger(__name__)
+
+# Demo opt-in: include the user-supplied rejection reason in audit logs.
+# Off by default to avoid logging free-form user text.
+LOG_REJECT_REASONS = os.getenv("LOG_REJECT_REASONS", "").lower() == "true"
 
 
 # ─── JWT Token Verifier ─────────────────────────────────────────────────────
@@ -127,7 +132,17 @@ class JWTTokenVerifier(TokenVerifier):
                 expires_at=str(expires_at) if expires_at else None,
             )
         except TokenError as e:
-            logger.warning(f"Token validation failed ({e.error_type}): {e.message}")
+            # On audience mismatch, peek at the unverified token to show what aud it carried —
+            # the #1 misconfig (SPA token sent to MCP, or vice versa).
+            extra = ""
+            if "audience" in e.message.lower():
+                try:
+                    import jwt as _pyjwt
+                    unverified = _pyjwt.decode(token, options={"verify_signature": False})
+                    extra = f" | token_aud={unverified.get('aud')} expected_aud={self.jwt_validator.audience}"
+                except Exception:
+                    pass
+            logger.warning("[MCP AUTH FAIL] reason=%s message=%s%s", e.error_type, e.message, extra)
             return None
         except Exception as e:
             logger.error(f"Unexpected error during token validation: {e}")
@@ -341,12 +356,13 @@ async def reject_leave_request(request_id: str, reason: str) -> dict:
     result = await hr_service.reject_leave_request(request_id, reason, reviewer_sub, reviewer_name)
 
     if result.get("success"):
-        # Audit log: identify the action and request, but do not echo free-form reason text.
-        logger.info("[AUDIT] Leave %s rejected (reviewer_sub=%s)", request_id, reviewer_sub)
-        if logger.isEnabledFor(logging.DEBUG):
-            actor = get_actor_description()
-            logger.debug("[AUDIT-DETAIL] Leave %s rejected by %s — reason: %s",
-                         request_id, actor, reason)
+        # Audit log: identify the action and request. Reason text is opt-in via env
+        # (LOG_REJECT_REASONS=true) since it's free-form user input.
+        actor = get_actor_description()
+        if LOG_REJECT_REASONS:
+            logger.info("[AUDIT] Leave %s rejected by %s — reason: %s", request_id, actor, reason)
+        else:
+            logger.info("[AUDIT] Leave %s rejected by %s", request_id, actor)
     return result
 
 

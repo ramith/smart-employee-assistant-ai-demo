@@ -78,6 +78,7 @@ async def _authenticate(request: Request) -> _AuthContext | JSONResponse:
     """Validate the Authorization header. Returns _AuthContext or an error JSONResponse."""
     auth_header = request.headers.get("authorization", "")
     if not auth_header.startswith("Bearer "):
+        logger.warning("[REST AUTH FAIL] path=%s reason=missing_token", request.url.path)
         return JSONResponse(
             {"error": "missing_token", "message": "Missing or invalid Authorization header"},
             status_code=401,
@@ -86,6 +87,10 @@ async def _authenticate(request: Request) -> _AuthContext | JSONResponse:
     try:
         payload = await _jwt_validator.validate_token(token)
     except TokenError as e:
+        logger.warning(
+            "[REST AUTH FAIL] path=%s reason=%s message=%s",
+            request.url.path, e.error_type, e.message,
+        )
         return JSONResponse({"error": e.error_type, "message": e.message}, status_code=401)
 
     ctx = _AuthContext(payload)
@@ -113,6 +118,10 @@ async def _authenticate(request: Request) -> _AuthContext | JSONResponse:
 def _require_scope(ctx: _AuthContext, *any_of: str) -> JSONResponse | None:
     """Return a 403 response if the caller has none of the listed scopes."""
     if not any(s in ctx.scopes for s in any_of):
+        logger.warning(
+            "[REST SCOPE DENIED] sub=%s name=%s required=%s present=%s",
+            ctx.sub, ctx.full_name, list(any_of), ctx.scopes,
+        )
         return JSONResponse(
             {
                 "error": "insufficient_scope",
@@ -173,6 +182,10 @@ async def get_leaves(request: Request):
         leaves = await hr_service.get_leaves_for_dashboard(user_sub=ctx.sub)
         return JSONResponse({"leaves": leaves})
 
+    logger.warning(
+        "[REST SCOPE DENIED] sub=%s name=%s required=hr_self_rest|hr_read_rest present=%s",
+        ctx.sub, ctx.full_name, ctx.scopes,
+    )
     return JSONResponse(
         {"error": "insufficient_scope", "message": "Requires hr_self_rest or hr_read_rest scope."},
         status_code=403,
@@ -199,10 +212,18 @@ async def get_leave_details(request: Request):
         owner_sub = store.leave_requests.get(request_id, {}).get("user_sub")
         if owner_sub == ctx.sub:
             return JSONResponse(details)
+        logger.warning(
+            "[REST FORBIDDEN] sub=%s tried to access leave %s owned by %s",
+            ctx.sub, request_id, owner_sub,
+        )
         return JSONResponse(
             {"error": "forbidden", "message": "You can only view your own leave requests."},
             status_code=403,
         )
+    logger.warning(
+        "[REST SCOPE DENIED] sub=%s name=%s required=hr_self_rest|hr_read_rest present=%s",
+        ctx.sub, ctx.full_name, ctx.scopes,
+    )
     return JSONResponse(
         {"error": "insufficient_scope", "message": "Requires hr_self_rest or hr_read_rest scope."},
         status_code=403,

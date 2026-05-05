@@ -75,7 +75,6 @@ def _resolve_hr_mcp_url() -> str:
 
 HR_MCP_SERVER_URL = _resolve_hr_mcp_url()
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
-logger.info("HR MCP server URL: %s", HR_MCP_SERVER_URL)
 
 # Base URL for HR MCP server reset endpoint
 HR_MCP_BASE_URL = HR_MCP_SERVER_URL.replace("/mcp", "")
@@ -146,13 +145,33 @@ async def validate_user_token(token: str) -> dict:
 
         scopes = payload.get("scope", "").split()
         if "agent_access" not in scopes:
+            logger.warning(
+                "[USER SCOPE DENIED] sub=%s required=agent_access present=%s",
+                payload.get("sub"), scopes,
+            )
             raise HTTPException(status_code=403, detail="Token missing required scope: agent_access")
 
         return payload
 
     except pyjwt.ExpiredSignatureError:
+        logger.warning("[USER AUTH FAIL] reason=token_expired")
         raise HTTPException(status_code=401, detail="Token expired")
+    except pyjwt.InvalidAudienceError:
+        try:
+            unverified = pyjwt.decode(token, options={"verify_signature": False})
+            actual_aud = unverified.get("aud")
+        except Exception:
+            actual_aud = "(undecodable)"
+        logger.warning(
+            "[USER AUTH FAIL] reason=invalid_audience expected=%s got=%s",
+            TOKEN_AUDIENCE, actual_aud,
+        )
+        raise HTTPException(status_code=401, detail="Invalid token: audience mismatch")
+    except pyjwt.InvalidIssuerError:
+        logger.warning("[USER AUTH FAIL] reason=invalid_issuer expected=%s", AUTH_ISSUER)
+        raise HTTPException(status_code=401, detail="Invalid token: issuer mismatch")
     except pyjwt.InvalidTokenError as e:
+        logger.warning("[USER AUTH FAIL] reason=invalid_token detail=%s", e)
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
     except HTTPException:
         raise
@@ -289,9 +308,15 @@ def _check_tool_errors(response) -> tuple:
     for message in response.get("messages", []):
         if hasattr(message, "type") and message.type == "tool":
             content = str(message.content)
+            tool_name = getattr(message, "name", "?")
             if "token_expired" in content:
+                logger.info("[TOOL AUTH ERROR] tool=%s error=token_expired", tool_name)
                 return "token_expired", content
             if "insufficient_scope" in content:
+                logger.info(
+                    "[TOOL AUTH ERROR] tool=%s error=insufficient_scope content=%s",
+                    tool_name, content[:200],
+                )
                 return "insufficient_scope", content
     return None, None
 
@@ -355,6 +380,21 @@ async def get_session(request: Request) -> UserSession:
 @app.on_event("startup")
 async def startup():
     """Authenticate the agent on startup."""
+    def _short(v: str | None, n: int = 12) -> str:
+        if not v:
+            return "(unset)"
+        return v if len(v) <= n else v[:n] + "..."
+
+    logger.info("=" * 60)
+    logger.info("Smart Employee Agent — startup configuration")
+    logger.info("  Model:               %s", MODEL_NAME)
+    logger.info("  HR MCP server URL:   %s", HR_MCP_SERVER_URL)
+    logger.info("  Auth issuer:         %s", AUTH_ISSUER)
+    logger.info("  JWKS URL:            %s", JWKS_URL)
+    logger.info("  Token audience:      %s (SPA app client_id)", _short(TOKEN_AUDIENCE))
+    logger.info("  Allowed origins:     %s", ALLOWED_ORIGINS)
+    logger.info("  Max chat history:    %d turns", MAX_CHAT_HISTORY_TURNS)
+    logger.info("=" * 60)
     logger.info("Authenticating agent with Asgardeo...")
     await agent_auth.ensure_valid_token()
     logger.info("Agent server ready on :5001")
@@ -381,9 +421,17 @@ async def chat(request: Request, session: UserSession = Depends(get_session)):
     # Determine which token to use for MCP calls
     if session.has_valid_obo:
         access_token = session.obo_token.access_token
+        token_path = "OBO"
     else:
         agent_token = await agent_auth.ensure_valid_token()
         access_token = agent_token.access_token
+        token_path = "agent_token"
+
+    logger.info(
+        "[CHAT] sub=%s name=%s role=%s using=%s history=%d msg_len=%d",
+        session.user_sub, session.user_name, session.user_role,
+        token_path, len(session.chat_history), len(user_message),
+    )
 
     mcp_client = _create_mcp_client(access_token)
 
@@ -404,7 +452,7 @@ async def chat(request: Request, session: UserSession = Depends(get_session)):
         response = await agent.ainvoke({"messages": messages})
 
     except Exception as e:
-        logger.exception("Agent invocation failed")
+        logger.exception("Agent invocation failed (sub=%s using=%s)", session.user_sub, token_path)
         # ExceptionGroup (TaskGroup) hides the real cause — surface the inner exceptions too.
         detail = str(e)
         sub_excs = getattr(e, "exceptions", None)
@@ -494,6 +542,7 @@ async def obo_callback(code: str = None, state: str = None, error: str = None):
 
     session = sessions.find_by_obo_state(state)
     if not session:
+        logger.warning("[OBO] No session found for state=%s... — possible expired/replayed callback", state[:8])
         return HTMLResponse(
             content=obo_flow.callback_html(success=False, error="Invalid state parameter")
         )
@@ -509,11 +558,14 @@ async def obo_callback(code: str = None, state: str = None, error: str = None):
         session.obo_code_verifier = None
         session.obo_pkce_state = None
 
-        logger.info(f"OBO token stored for user {session.user_sub} (scopes: {scopes})")
+        logger.info(
+            "[OBO] Token stored for user sub=%s name=%s role=%s (granted scopes: %s)",
+            session.user_sub, session.user_name, session.user_role, scopes,
+        )
         return HTMLResponse(content=obo_flow.callback_html(success=True))
 
     except Exception as e:
-        logger.error(f"OBO token exchange failed: {e}")
+        logger.error("[OBO] Token exchange failed for sub=%s: %s", session.user_sub, e)
         return HTMLResponse(content=obo_flow.callback_html(success=False, error=str(e)))
 
 
