@@ -7,7 +7,7 @@ services:
     env_file:
       - ./hr-server/.env
     environment:
-      - ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
       - HR_SERVER_HOST=0.0.0.0
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,hr-server"
 
@@ -22,6 +22,7 @@ services:
       # Override localhost URL to use Docker service name
       - HR_MCP_SERVER_URL=http://hr-server:8000/mcp
       - AGENT_SERVER_HOST=0.0.0.0
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
     depends_on:
       - hr-server
 
@@ -29,13 +30,17 @@ services:
     build:
       context: ./client
     ports:
-      - "3000:3000"
+      # Container always listens on 3000 internally; host port follows CLIENT_PORT.
+      - "${CLIENT_PORT:-3001}:3000"
     env_file:
       - ./client/.env
     environment:
       # These are served to the browser via /config, so they must be
-      # localhost URLs (the browser runs on the host, not inside Docker)
+      # localhost URLs (the browser runs on the host, not inside Docker).
+      # AGENT_SERVER_URL / HR_SERVER_URL stay on their fixed host ports.
       - AGENT_SERVER_URL=http://localhost:5001
       - HR_SERVER_URL=http://localhost:8000
+      # The browser-visible redirect URI must match what's registered in Asgardeo.
+      - REDIRECT_URI=${REDIRECT_URI:-http://localhost:3001/callback}
     depends_on:
       - agent

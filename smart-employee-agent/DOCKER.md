@@ -19,15 +19,15 @@ docker compose up --build
 
 This starts:
 
-| Service     | Container Port | Host Port | Description                     |
-|-------------|----------------|-----------|---------------------------------|
-| `hr-server` | 8000           | 8000      | HR MCP + REST API server        |
-| `agent`     | 5001           | 5001      | AI Agent server (LangChain)     |
-| `client`    | 3000           | 3000      | Browser SPA (dev server)        |
+| Service     | Container Port | Host Port             | Description                                                                  |
+|-------------|----------------|-----------------------|------------------------------------------------------------------------------|
+| `hr-server` | 8000           | 8000                  | HR MCP + REST API server                                                     |
+| `agent`     | 5001           | 5001                  | AI Agent server (LangChain)                                                  |
+| `client`    | 3000           | `${CLIENT_PORT:-3001}` | Browser SPA (dev server). Host port follows `CLIENT_PORT`; default is 3001. |
 
 Startup order: **hr-server** → **agent** → **client**
 
-Open the app at **http://localhost:3000**.
+Open the app at **http://localhost:3001** (or the `CLIENT_PORT` you set).
 
 ## Viewing Logs
 
@@ -109,6 +109,6 @@ These overrides are set in `docker-compose.yml` — your `.env` files don't need
 | Problem | Solution |
 |---------|----------|
 | Agent can't reach HR server | Check `docker compose logs hr-server` — it must be healthy before the agent starts |
-| Browser gets CORS errors | Ensure `ALLOWED_ORIGINS` in `hr-server/.env` includes `http://localhost:3000` |
+| Browser gets CORS errors | Ensure `ALLOWED_ORIGINS` includes `http://localhost:3001` (or whatever `CLIENT_PORT` you set) on both `hr-server/.env` and `agent/.env`, or pass `ALLOWED_ORIGINS=...` to `docker compose up` |
 | Token validation fails | Verify `JWKS_URL` and `AUTH_ISSUER` are reachable from inside the container |
 | OBO callback fails | Ensure `OBO_REDIRECT_URI` in `agent/.env` is `http://localhost:5001/api/obo/callback` |

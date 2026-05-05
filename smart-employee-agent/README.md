@@ -21,7 +21,7 @@ graph TB
         MCP_APP["MCP Client Application<br/><i>Agent Auth, OBO, MCP scopes</i>"]
     end
 
-    subgraph "Browser (localhost:3000)"
+    subgraph "Browser (localhost:3001)"
         CLIENT["Client SPA"]
     end
 
@@ -73,7 +73,7 @@ Both paths execute the same `service/hr_service.py` functions, so behavior is id
 
 ```
 smart-employee-agent/
-├── client/                     # Browser SPA (port 3000)
+├── client/                     # Browser SPA (port 3001 by default, configurable via CLIENT_PORT)
 │   ├── index.html              # Tabbed UI: Dashboard, Apply, Manage, Chat
 │   ├── app.js                  # PKCE login, REST API client, chat, OBO popup
 │   ├── styles.css              # Layout and styling
@@ -167,7 +167,7 @@ The SPA handles browser PKCE login and dashboard REST access.
 
 1. Go to **Applications > New Application > Single-Page Application**
 2. Provide a name (e.g., "Smart Employee Client")
-3. Authorized redirect URL: `http://localhost:3000/callback`
+3. Authorized redirect URL: `http://localhost:3001/callback` (default; if you change `CLIENT_PORT` later, register the matching URL here too)
 4. Finish the wizard
 5. Under **API Authorization**, subscribe to the REST API Resources:
    - `agent-api` (grant `agent_access`)
@@ -307,13 +307,17 @@ cp .env.example .env
 # Edit .env:
 #   ASGARDEO_BASE_URL=https://api.asgardeo.io/t/<tenant>
 #   CLIENT_ID=<spa-app-client-id>
+#   CLIENT_PORT=3001                                  # default; change to free up 3001
+#   REDIRECT_URI=http://localhost:3001/callback       # must match the Asgardeo SPA app
 
-python serve.py   # Runs on port 3000
+python serve.py   # Runs on port 3001 by default
 ```
+
+> **Changing the UI port?** Set `CLIENT_PORT` in `client/.env`, update `REDIRECT_URI` in the same file, set `ALLOWED_ORIGINS=http://localhost:<port>,http://127.0.0.1:<port>` in **both** `agent/.env` and `hr-server/.env`, and register `http://localhost:<port>/callback` in the Asgardeo SPA application's Authorized redirect URLs.
 
 ### 4. Open the App
 
-Go to **http://localhost:3000**. Click "Sign In" and log in with any Asgardeo user that has the `employee` or `hr_admin` role.
+Go to **http://localhost:3001** (or the `CLIENT_PORT` you configured). Click "Sign In" and log in with any Asgardeo user that has the `employee` or `hr_admin` role.
 
 ---
 
@@ -513,7 +517,7 @@ Check the agent log:
 If the granted scopes are missing what you expect, the issue is on the user's role, not the OBO flow itself.
 
 ### OBO popup fails to open
-- Allow popups for `localhost:3000` in your browser
+- Allow popups for `localhost:3001` (or whatever `CLIENT_PORT` you configured) in your browser
 - Verify `OBO_REDIRECT_URI=http://localhost:5001/api/obo/callback` matches the MCP Client Application's redirect URI in Asgardeo
 - Ensure the agent has been registered and has valid credentials
 

@@ -25,7 +25,7 @@ if not all([AUTH_ISSUER, CLIENT_ID, JWKS_URL]):
 
 ALLOWED_ORIGINS = [
     o.strip()
-    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3001,http://127.0.0.1:3001").split(",")
     if o.strip()
 ]
 

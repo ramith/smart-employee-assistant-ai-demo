@@ -3,8 +3,8 @@
 
   Smart Employee Agent v2 — Client Dev Server
 
-  Serves the client SPA on port 3000 with a /config endpoint
-  that exposes non-secret environment variables to the browser.
+  Serves the client SPA (default port 3001, override with CLIENT_PORT) with
+  a /config endpoint that exposes non-secret environment variables to the browser.
 """
 
 import json
@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PORT = 3000
+PORT = int(os.getenv("CLIENT_PORT", "3001"))
 DIRECTORY = Path(__file__).parent
 
 # Public config exposed to the browser (no secrets)
