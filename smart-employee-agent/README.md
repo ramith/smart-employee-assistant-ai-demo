@@ -114,6 +114,8 @@ smart-employee-agent/
 
 ## Asgardeo Configuration
 
+> **Heads up — organization-audience roles.** This sample is built around Asgardeo's **organization** role audience model. The roles you create in Step 5 are organization-scoped, and **both applications must be configured to honor organization-audience roles** (Steps 3 and 4 below). Newly-created Asgardeo applications default to **Application** audience — leave that default in place and the role-to-scope mapping will silently fail (tokens will only carry `openid profile`). The audience-flip step is called out explicitly in each application's setup section.
+
 ### Step 1: Create API Resources
 
 #### REST API Resources (for SPA)
@@ -170,14 +172,19 @@ The SPA handles browser PKCE login and dashboard REST access.
 5. Under **API Authorization**, subscribe to the REST API Resources:
    - `agent-api` (grant `agent_access`)
    - `hr-rest-api` (grant all: `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`)
-6. **Configure User Attributes:**
+6. **Set Role Audience to Organization:**
+   - Navigate to the **Roles** tab of the application
+   - Switch **Role Audience** from **Application** (default) → **Organization**
+   - Click **Update**
+   - Required because the `employee` / `hr_admin` roles created in Step 5 are organization-audience. Without this change, login succeeds but the access token comes back with only `openid profile` — the dashboard will load but show no data, and REST calls will return `403 insufficient_scope`.
+7. **Configure User Attributes:**
    - Navigate to the **User Attributes** section of the application
    - Under the **profile** section, ensure `given_name` and `family_name` are selected as **Requested** and **Mandatory**
-7. **Configure Access Token:**
+8. **Configure Access Token:**
    - Navigate to the **Protocol** tab → **Access Token** section
    - Set **Token Type** to **JWT**
    - Under the **Access Token Attributes** dropdown, select `given_name` and `family_name`
-8. Note the **SPA Client ID** → used in:
+9. Note the **SPA Client ID** → used in:
    - `client/.env` as `CLIENT_ID`
    - `agent/.env` as `TOKEN_AUDIENCE` (for validating user JWTs)
    - `hr-server/.env` as `SPA_CLIENT_ID`
@@ -190,25 +197,51 @@ The MCP Client handles agent authentication (App Native Auth) and OBO flow.
 2. Provide a name (e.g., "Smart Employee Agent")
 3. Authorized redirect URL: `http://localhost:5001/api/obo/callback`
 4. Finish the wizard
-5. Under **API Authorization**, subscribe to the MCP Resources:
+5. **Enable App-Native Authentication:**
+   - Navigate to the **Advanced** tab of the application
+   - Toggle **App-Native Authentication** on
+   - This is required so the agent can obtain its own token via Asgardeo's App Native Auth flow. Without it, the agent fails on startup with `ABA-60007: App native authentication is not enabled for the application`.
+6. Under **API Authorization**, subscribe to the MCP Resources:
    - `hr-mcp` (grant all: `hr_basic_mcp`, `hr_self_mcp`, `hr_read_mcp`, `hr_approve_mcp`)
-6. **Configure User Attributes:**
+7. **Set Role Audience to Organization:**
+   - Navigate to the **Roles** tab of the application
+   - Switch **Role Audience** from **Application** (default) → **Organization**
+   - Click **Update**
+   - Required for the same reason as the SPA app. Without this, the agent's App Native Auth tokens and OBO tokens both come back with only `openid` (no MCP scopes), and every chat tool call fails with `insufficient_scope`.
+8. **Configure User Attributes:**
    - Navigate to the **User Attributes** section of the application
    - Under the **profile** section, ensure `given_name` and `family_name` are selected as **Requested** and **Mandatory**
-7. **Configure Access Token:**
+9. **Configure Access Token:**
    - Navigate to the **Protocol** tab → **Access Token** section
    - Set **Token Type** to **JWT**
    - Under the **Access Token Attributes** dropdown, select `given_name` and `family_name`
-8. Note the **MCP Client ID** → used in:
-   - `agent/.env` as `ASGARDEO_CLIENT_ID`
-   - `hr-server/.env` as `CLIENT_ID`
+10. Note the **MCP Client ID** → used in:
+    - `agent/.env` as `ASGARDEO_CLIENT_ID`
+    - `hr-server/.env` as `CLIENT_ID`
 
 ### Step 5: Create Roles
+
+Create two roles in **Console > Roles > + New Role**. Both must have **Audience: Organization** to match the application configuration in Steps 3 and 4.
 
 | Role | REST Scopes (SPA) | MCP Scopes (Agent/OBO) |
 |------|-------------------|----------------------|
 | `employee` | `agent_access`, `hr_basic_rest`, `hr_self_rest` | `hr_basic_mcp`, `hr_self_mcp` |
 | `hr_admin` | All employee scopes + `hr_read_rest`, `hr_approve_rest` | All employee + `hr_read_mcp`, `hr_approve_mcp` |
+
+For each role, the scopes listed above are added under the role's **Permissions** tab by selecting the relevant API Resources (`agent-api`, `hr-rest-api`, `hr-mcp`) and ticking the listed scopes.
+
+### Step 5b: Assign the Agent to the Roles
+
+The agent identity registered in Step 2 needs to be bound to a role so that its App Native Auth token carries the `hr_*_mcp` scopes. Without this, the agent starts up successfully but every MCP tool call fails with `insufficient_scope`.
+
+For each role you created in Step 5:
+
+1. Console → **Roles** → click the role (e.g. `employee`)
+2. Open the **Agents** tab
+3. Click **Assign Agent** → pick the agent registered in Step 2 (e.g. "Corporate Concierge")
+4. Save
+
+> **Why both roles?** Strictly, OBO tokens carry the *user's* permissions, so the agent doesn't need `hr_read_mcp`/`hr_approve_mcp` itself for HR-Admin chat. Assigning the agent to both roles keeps the configuration uniform and avoids edge cases. For production, consider a dedicated agent role granting all four `hr_*_mcp` scopes.
 
 ### Step 6: Create Demo Users
 
@@ -439,11 +472,47 @@ The `hr_approve_rest` scope is granted to the `hr_admin` role per the Asgardeo c
 - Verify `AGENT_ID` and `AGENT_SECRET` in `agent/.env` match the values from Console > Agents
 - Verify `ASGARDEO_CLIENT_ID` in `agent/.env` matches the MCP Client Application's Client ID
 
-### Dashboard shows no data / 403
-- Confirm the user's role grants the required REST scopes (`hr_self_rest` for employees, `hr_read_rest` for HR Admins)
-- Check that `SPA_CLIENT_ID` in the MCP server `.env` matches the SPA application
+### `ABA-60007: App native authentication is not enabled for the application`
+- Open the MCP Client Application in Asgardeo Console → **Advanced** tab → enable **App-Native Authentication**
+- This toggle is required for the agent to obtain its own token via App Native Auth on startup
 
-### OBO popup fails
+### Dashboard shows no data / 403 / token only has `openid profile`
+This is the most common symptom of a misconfigured **Role Audience** on the SPA application.
+
+- Open the SPA application in Asgardeo Console → **Roles** tab → confirm **Role Audience = Organization** (not Application)
+- Sign out and sign back in (existing tokens are cached)
+- DevTools → Network → click the `token` request → Response → the `scope` field should now include `agent_access hr_basic_rest hr_self_rest` (and `hr_read_rest hr_approve_rest` for HR Admin)
+- Also confirm: API Resources are subscribed on the SPA app, the user is assigned to a role (directly or via group), and the role has the relevant `*_rest` scopes under its **Permissions** tab
+
+### Chat asks for authorization for every question (even "What are the company holidays?")
+The agent's own token isn't getting the `hr_basic_mcp` scope. This usually means **either** the MCP Client app's Role Audience is wrong **or** the agent identity isn't bound to a role — both produce the same symptom.
+
+Check the HR server log for:
+```
+[MCP >> Agent Token] sub=<agent-uuid> | scopes=openid
+[SCOPE DENIED] Required: 'hr_basic_mcp' | Present: ['openid']
+```
+
+Fix:
+1. **MCP Client app** → **Roles** tab → confirm **Role Audience = Organization**
+2. **Roles** → `employee` (and `hr_admin`) → **Agents** tab → confirm the agent registered in Step 2 is assigned. If empty, click **Assign Agent**
+3. Restart the agent server (`Ctrl+C`, `python main.py`) so it requests a fresh token
+
+After the fix, the HR log should show: `[MCP >> Agent Token] ... scopes=hr_basic_mcp, hr_self_mcp, openid`.
+
+### OBO popup completes but agent still says "I need authorization"
+After OBO consent, if the next chat call still fails, the OBO token didn't get the user's elevated MCP scopes. Two causes:
+
+- **MCP Client app Role Audience = Application** — same fix as the previous entry. OBO tokens are issued by the MCP Client app, so its role audience controls what flows into them.
+- **The user's role doesn't include the needed `*_mcp` scope** — confirm `hr_self_mcp` (employee) or `hr_read_mcp` / `hr_approve_mcp` (admin) is on the role's Permissions tab.
+
+Check the agent log:
+```
+[OBO] Token stored for user sub=... (granted scopes: ['openid', 'profile', 'hr_basic_mcp', 'hr_self_mcp'])
+```
+If the granted scopes are missing what you expect, the issue is on the user's role, not the OBO flow itself.
+
+### OBO popup fails to open
 - Allow popups for `localhost:3000` in your browser
 - Verify `OBO_REDIRECT_URI=http://localhost:5001/api/obo/callback` matches the MCP Client Application's redirect URI in Asgardeo
 - Ensure the agent has been registered and has valid credentials
@@ -454,8 +523,11 @@ The `hr_approve_rest` scope is granted to the `hr_admin` role per the Asgardeo c
 - `ASGARDEO_CLIENT_ID` in `agent/.env` must be the **MCP Client** app's Client ID
 - `CLIENT_ID` in `hr-server/.env` must be the **MCP Client** app's Client ID
 - `SPA_CLIENT_ID` in `hr-server/.env` must be the **SPA** app's Client ID
+- The HR server log will print the actual vs expected audience on mismatch (e.g. `[MCP AUTH FAIL] reason=invalid_token ... | token_aud=<X> expected_aud=<Y>`)
 
 ### Token missing scopes
 - Check that API Resources are authorized for the application in Asgardeo
+- Confirm the application's **Role Audience** matches the role's audience (both should be **Organization** for this sample)
 - Verify role-to-scope assignments include the needed scopes
-- Ensure the user is assigned to the correct role
+- Ensure the user is assigned to the correct role (directly or via group)
+- For agent tokens: ensure the agent is assigned to a role under **Roles → role → Agents** tab
