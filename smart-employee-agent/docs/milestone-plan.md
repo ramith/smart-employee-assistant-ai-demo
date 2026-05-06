@@ -19,6 +19,18 @@
 - **§5.2 threat model**: added `auth.issuer` JWKS-redirection row (mitigated by hardcoded issuer + advisory-only treatment).
 - **§5.3 single-replica**: `docker-compose.yml` declares `deploy.replicas: 1` for orchestrator; tested.
 - Misc: stream cancellation propagates to `httpx` via cancel-aware client; agent-card 4xx re-fetch cooldown ≥30 s + jitter; surgical redactor strips `url`/`auth` from any agent-card-shaped object before LLM trace; STS negative cache keyed per-user for exchange calls (global only for actor-token mint).
+- **§ Architecture symmetry fix:** added `it-server/` as a sibling to `hr-server/` so IT Asset Agent wraps a real backend (parallel to HR Agent → hr-server) instead of holding asset data in-memory. **Implementation must mirror `hr-server/` exactly** — same in-memory store pattern, same FastAPI+FastMCP wiring, no incidental complexity. Adds **Hop 5** (IT Agent → it-server re-mint, parallel to Hop 4), new spike probe **P14**, new API resource `it-server-api`, tests **N16/N17**. Symmetry tests Hop-4-style re-mint on two independent paths — proves the pattern composes.
+
+## v3 POC review (2026-05-06) — applied trims
+After v3 was reviewed by architect-reviewer + security-engineer with explicit POC framing, the following were trimmed (full production behavior captured in `docs/production-hardening.md`):
+- **Cache-bust HMAC simplified:** dropped `key_id` overlap rotation + nonce cache. Kept HMAC + ±5 min timestamp window. Internal compose-network call; threat is "not anonymous," not "replay-from-network-capture."
+- **STS negative cache simplified:** single global cache, no jitter. Per-user keying + jittered refresh deferred.
+- **OIDC BCL §2.6 strict checklist trimmed:** dropped `iat` skew, `typ: logout+jwt` strict, alg pinning. Kept iss/aud/exp/sig/events/sid/jti single-use.
+- **Spike probes trimmed:** P6 (BCL retry policy) and P9 (jti stability) deferred. 12 probes ship.
+- **Fallback table reframed:** "fix tenant first" is the preferred response to probe failures; fallbacks are last-resort.
+- Architectural decisions held against architect's "production-shaped" critique: kept `it-server/` + Hop 5 (security-engineer marked LOAD-BEARING; user-confirmed), kept two-layer revocation, kept agent-card non-trust-anchor proofs (N8/N8b), kept full N1/N7/N3 audience+chain test set.
+- Added **R12** (joint-failure: introspect-down + cache-bust-failed → fail-closed 503) and **R13** (post-BCL chat session invalidation) per security-engineer's MISSING findings.
+- Internal consistency fixes: §2.8 P1–P14, §3.5 "five hops," §3.3 Hop 2 `aud` hedged, Hop 3a chain-depth hedged pending P12, N6 rewritten to test missing-`act` rule (not signature failure), §1.3 review history updated, "v3 improvement" → "future" in §5.4, P95 → "max observed" in §4.5.
 **Scope:** Sprint 0 (capability spike + shared refactor + service split), Sprint 1 (Orchestrator + A2A + agent cards), Sprint 2 (Secure Session Termination).
 **Out of scope (confirmed):** UAE Pass federation, WSO2 API Manager, PII / prompt-injection guardrails, multi-replica deployment hardening, cross-domain orchestration.
 
@@ -58,34 +70,37 @@
             │ ┌──────────────────┐       ┌──────────────────┐
             │ │  HR Agent        │       │  IT Asset Agent  │
             │ │  (specialist,    │       │  (specialist,    │
-            │ │   wraps hr-svr)  │       │   own data)      │
+            │ │   wraps hr-svr)  │       │   wraps it-svr)  │
             │ │  agent_card.json │       │  agent_card.json │
-            │ └─────────┬────────┘       └──────────────────┘
-            │           │ MCP (tool dispatch)
-            │           ▼
-            │   ┌──────────────┐
-            │   │  hr-server   │ (existing — unchanged)
-            │   │  MCP + REST  │
-            │   └──────────────┘
+            │ └─────────┬────────┘       └─────────┬────────┘
+            │           │ MCP (tool dispatch)      │ MCP (tool dispatch)
+            │           ▼                          ▼
+            │   ┌──────────────┐            ┌──────────────┐
+            │   │  hr-server   │            │  it-server   │
+            │   │  MCP + REST  │            │  MCP         │
+            │   │  (existing)  │            │  (new, mirrors hr-server shape)
+            │   └──────────────┘            └──────────────┘
             │
         SPA (client/) ──────► Orchestrator (HTTP/streaming chat)
 ```
 
-**Services after Sprint 1:** `client/` (existing), `orchestrator/` (extracted from `agent/`), `hr-agent/` (extracted identity layer + new A2A surface; calls `hr-server`), `it-agent/` (new), `hr-server/` (existing).
+**Services after Sprint 1:** `client/` (existing), `orchestrator/` (extracted from `agent/`), `hr-agent/` (extracted identity layer + new A2A surface; calls `hr-server` via MCP), `it-agent/` (new specialist; calls `it-server` via MCP), `hr-server/` (existing — unchanged), `it-server/` (new — mirrors hr-server shape with in-memory asset store).
 
 ### 1.2 Decided design parameters (confirmed)
 
 - **Path B (hybrid):** A2A JSON-RPC for orchestrator ↔ specialists, MCP retained inside specialists for tool dispatch.
 - **User → Orchestrator token:** OAuth 2.1 authorization-code + PKCE, with **Asgardeo `requested_actor=<orchestrator_client_id>` parameter** on the authorize endpoint (per the article's pattern; Asgardeo's "OBO for AI Agents" draft implementation). Resulting access token: `sub=user`, `act.sub=orchestrator-id`, `aud=orchestrator-resource`, `scope=<requested>`.
-- **Orchestrator → Specialist token:** **RFC 8693 token-exchange** per target specialist. `subject_token`=user delegated token, `actor_token`=orchestrator's pre-minted client_credentials access token, `resource`=<specialist URI> (RFC 8707), `scope`=narrowed. Resulting token: `sub=user`, **`act.act.sub=orchestrator-id, act.sub=orchestrator-id`** (chain depth 1 via re-mint; see §3.7 for chain semantics).
+- **Orchestrator → Specialist token:** **RFC 8693 token-exchange** per target specialist. `subject_token`=user delegated token, `actor_token`=orchestrator's pre-minted client_credentials access token, `resource`=<specialist URI> (RFC 8707), `scope`=narrowed. Resulting token: `sub=user`, **`act.sub=orchestrator-id`**, with deeper nesting `act.act.sub` populated only if Asgardeo preserves the existing `act` from the user delegated token (see §3.7) — **shape verified by P12; Hop 3a flow diagram is illustrative pending that result**.
 - **Specialist → Specialist token (HR→IT, *stretch goal*):** RFC 8693 chained re-mint with `subject_token`=incoming HR token, `actor_token`=HR-Agent client cred. Chain depth 2.
 - **Discovery:** agent cards at `/.well-known/agent-card.json` on each specialist. Orchestrator fetches at startup, exposes `discover_agents` tool to LLM.
 - **Revocation latency:** ≤ 5 s, via introspection on every A2A call (≤2-s positive cache, BCL-driven cache-bust) + Asgardeo back-channel logout to orchestrator.
 - **Demo story:** orchestrator-coordinated. Orchestrator's LLM decides which specialists to query and composes the answer. Specialist-to-specialist (HR→IT) is a stretch demo, not a Sprint 1 DoD requirement.
 - **Sprint cadence:** DoD-driven, no time-box.
 
-### 1.3 Independent verification
-v1 was reviewed by `architect-reviewer`, `security-engineer`, `ai-engineer`, `api-designer`. v2 must be re-reviewed by the same four because the structure changes (transport, service boundaries, token-flow shape).
+### 1.3 Independent verification history
+- v1 (direct HR↔IT MCP): reviewed by `architect-reviewer`, `security-engineer`, `ai-engineer`, `api-designer`. Resulted in v2.
+- v2 (orchestrator + agent-card pivot): re-reviewed by all four. Resulted in v3.
+- v3 (this version, with `it-server/` symmetry): reviewed by architect-reviewer + security-engineer with explicit POC framing. Their findings are integrated below.
 
 ---
 
@@ -102,14 +117,15 @@ Sprint 0 is **complete and signed off** before any Sprint 1 code lands. It now c
 | P3 | Does revoking the user's refresh token cascade-invalidate access tokens minted via token-exchange from it? | Exchanged token returns `active: false` from `/oauth2/introspect`. |
 | P4 | Does Asgardeo deliver an OIDC back-channel logout token to a registered RP `backchannel_logout_uri` on user logout (user-initiated AND admin-terminated)? | Signed JWT with `events` and `sid` arrives within 30 s. |
 | P5 | Does `/oauth2/introspect` reflect a manually-revoked token within 5 s (P95)? | `active: false` within budget. |
-| P6 | What is Asgardeo's BCL retry policy / delivery semantics? | Document retry count, gap, and ceiling. |
+| ~~P6~~ | ~~What is Asgardeo's BCL retry policy / delivery semantics?~~ | **DEFERRED** (POC). Layer A (introspection cache) is the safety net; BCL retry behavior doesn't change the demo's "≤ 5 s revocation" claim. Re-add in production hardening. |
 | P7 | Is `sid` present in **access tokens** and **exchanged access tokens**, or only ID tokens? | If access tokens lack `sid`, Layer-B termination correlates by stored `sid` from ID token at login. |
-| P8 | Does Asgardeo preserve nested `act` chains when `subject_token` is itself an exchanged token? | `act.act.sub` populated correctly across two exchanges. |
-| P9 | Does `/oauth2/introspect` always return a stable `jti`? | Yes (preferred) or document fallback to hash-of-token. |
+| P8 | Does Asgardeo preserve nested `act` chains when `subject_token` is itself an exchanged token? | `act.act.sub` populated correctly across two exchanges — only required if the stretch HR→IT specialist-to-specialist demo is in scope; otherwise can be deferred. |
+| ~~P9~~ | ~~Does `/oauth2/introspect` always return a stable `jti`?~~ | **DEFERRED** (POC). Implementation falls back to `hash(token)` as cache key unconditionally; jti stability is a production performance optimization, not a correctness gate. |
 | **P10** | Does Asgardeo's authorize endpoint accept `requested_actor=<client_id>` and produce a delegated token with `act.sub` populated? Is it ID token, access token, or both? | `act.sub == orchestrator client_id` in the access token returned to the orchestrator after code exchange. |
 | **P11** | Does Asgardeo render a user-consent screen for `requested_actor` ("delegate to <agent name>?")? | Consent prompt shown; user can deny. Required for the governance story. |
 | **P12** | Does `requested_actor`-derived token compose with subsequent RFC 8693 token-exchange (the orchestrator re-minting per specialist)? Does the resulting token preserve the actor chain? | Re-minted token has chain `act.act.sub=orchestrator, act.sub=orchestrator` OR documented Asgardeo flattening behavior. **Validator must require `act` non-empty regardless** — if Asgardeo flattens, lock validator to flattened shape and drop the stretch HR→IT chained-delegation demo. |
 | **P13** | Does `hr-server` accept tokens whose `aud` is the canonical hr-agent A2A URI? Or does hr-server's existing JWT validation reject them? | If reject (expected), hr-agent must re-mint via RFC 8693 for `hr-server`'s configured audience (Hop 4 in §3.3). Document hr-server's actual `EXPECTED_AUD`. |
+| **P14** | What is `it-server`'s expected `aud` (defined at registration; e.g., `https://it-server.local/mcp`)? Does the chosen Asgardeo API resource for it-server reflect `aud` exactly? | Document `EXPECTED_AUD` for it-server; confirm RFC 8693 token-exchange targeting that resource yields the right `aud`. Mirrors P13 for the IT path. |
 
 **Spike memo template** (`docs/spikes/asgardeo-capability-memo.md`):
 - Tenant name and date.
@@ -188,13 +204,14 @@ Saved as `docs/agent-card-schema.md` and codified in `common/a2a/agent_card.py`:
 
 **Before Sprint 1 starts**, create the directory layout (empty stubs are fine):
 - `orchestrator/` — to receive code from `agent/` (chat endpoint, LLM, session, BCL).
-- `hr-agent/` — new specialist that wraps `hr-server`. Owns A2A endpoint + agent card.
-- `it-agent/` — new specialist with own data + A2A endpoint + agent card.
-- `agent/` — **kept as a deprecated alias only if rollback is needed**; see §2.7.
+- `hr-agent/` — new specialist that wraps `hr-server` via MCP. Owns A2A endpoint + agent card.
+- `it-agent/` — new specialist that wraps `it-server` via MCP. Owns A2A endpoint + agent card.
+- `it-server/` — **new backend** mirroring `hr-server/` shape (FastAPI + FastMCP). In-memory asset fixture (5–10 sample rows). Validates `aud=<it-server canonical URI>`, scope `it_assets_read_mcp`, nested `act` allowlist (Sprint 1 allowlists `it-agent` AND `orchestrator-agent` so the chain user→orchestrator→it-agent→it-server validates).
+- `agent/` — copied to `_archive/agent.before-v3/` and tagged; deleted on M1 sign-off.
 - `hr-server/` — unchanged.
 - `client/` — minor changes for the new login URL parameters (Sprint 1 task).
 
-`docker-compose.yml` updated with the four new services. Ports: orchestrator 8080, hr-agent 8001, it-agent 8002, hr-server 8003.
+`docker-compose.yml` updated with the new services. Ports: orchestrator 8080, hr-agent 8001, it-agent 8002, hr-server 8003, **it-server 8004**.
 
 ### 2.7 Migration / rollback
 
@@ -203,13 +220,49 @@ Sprint 0 **copies** `agent/` to `_archive/agent.before-v3/` and tags the last-go
 ### 2.8 Sprint 0 sign-off contract
 
 Sprint 0 is complete when:
-1. `docs/spikes/asgardeo-capability-memo.md` is committed with all 12 probes recorded (signed off by lead + security-engineer).
-2. `common/auth/` and `common/a2a/` packages are committed and consumed by `hr-server/` (introspection feature-flagged, default OFF; agent-card unused yet but importable).
-3. `docs/scope-policy.md` and `docs/agent-card-schema.md` are committed.
-4. `requirements.txt` files are updated; per-request MCP header injection smoke test passes.
-5. Empty service stubs (`orchestrator/`, `hr-agent/`, `it-agent/`) exist and `docker compose up` builds (won't yet do anything useful).
+1. **`docs/asgardeo-setup.md` is committed** — see §2.9 for required content. This is the prerequisite for the spike (you cannot probe a tenant that hasn't been configured).
+2. `docs/spikes/asgardeo-capability-memo.md` is committed with all 14 probes (P1–P14) recorded — signed off by lead + security-engineer.
+3. `common/auth/` and `common/a2a/` packages are committed and consumed by `hr-server/` (introspection feature-flagged, default OFF; agent-card unused yet but importable).
+4. `docs/scope-policy.md`, `docs/agent-card-schema.md`, and `docs/user-experience.md` are committed.
+5. `requirements.txt` files are updated; per-request MCP header injection smoke test passes.
+6. Empty service stubs (`orchestrator/`, `hr-agent/`, `it-agent/`) exist and `docker compose up` builds (won't yet do anything useful).
+7. `agent/` is copied to `_archive/agent.before-v3/` and tagged `pre-v3-orchestrator`.
 
 If P1+P2+P10 fail, Sprint 1 enters fallback mode (§3.6) before Sprint 0 closes.
+
+### 2.9 Asgardeo configuration guide (`docs/asgardeo-setup.md`)
+
+A step-by-step instruction file the lead engineer follows to bring an Asgardeo tenant from "freshly created" to "ready for the POC spike and Sprints 1–2." Owner: lead engineer. Reviewer: security-engineer.
+
+**Why this is its own task:** the four Asgardeo gotchas (App-Native Auth disabled by default, Role Audience set to Application instead of Organization, agent not assigned to roles, Token Exchange grant not enabled) bite every new user, and the v3 architecture adds new configuration that the existing README doesn't cover (`requested_actor` policy, back-channel logout URL, three new agent identities, two new API resources). Without a single canonical setup doc, every team member rediscovers the same gotchas.
+
+**Required content for the Sprint 0 baseline:**
+1. **Prerequisites** — which Asgardeo tenant to use; admin credentials needed; any required Asgardeo plan/feature flags.
+2. **Application registration**
+    - `orchestrator-app` — Single-page application (PKCE), redirect URI `http://localhost:5001/callback`, configured to permit `requested_actor=orchestrator-agent`.
+    - **Enable RFC 8693 token-exchange grant** on `orchestrator-app` with permitted resources `hr-agent-api`, `it-agent-api`, `hr-server-api` (the canonical resource URIs are listed in §3.3 of the milestone plan).
+    - Document the **App-Native Authentication** toggle (existing gotcha #A from `project_readme_pending_improvements.md`).
+3. **Agent identity registration**
+    - `orchestrator-agent`, `hr-agent`, `it-agent` — three Agent identities. Capture client_id / client_secret for each.
+    - Each agent must be **assigned to roles** (gotcha #D) so it can mint tokens with appropriate scopes.
+4. **API resource registration**
+    - `hr-agent-api` (audience = `https://hr.smart-employee.local/a2a`), scopes `hr_basic_mcp`, `hr_self_mcp`, `hr_read_mcp`, `hr_approve_mcp`.
+    - `it-agent-api` (audience = `https://it.smart-employee.local/a2a`), scope `it_assets_read_mcp` (and reserved `it_assets_write_mcp`).
+    - `hr-server-api` (existing — audience = MCP Client app ID; verify exact value in P13).
+    - `it-server-api` (new — audience = `https://it-server.local/mcp`), scope `it_assets_read_mcp` (Hop 5 target; verify exact value in P14).
+    - **Set Role Audience to Organization** on every app (gotcha #B and #C).
+5. **Role configuration**
+    - `employee` and `hr_admin` roles, with the scope assignments per `docs/scope-policy.md`.
+    - Assign the appropriate agent identities to each role (gotcha #D).
+6. **Back-channel logout configuration** (Sprint 2 prep — can be staged)
+    - Set `backchannel_logout_uri = http://localhost:5001/auth/backchannel-logout` on `orchestrator-app`.
+    - Confirm the application's `id_token_signed_response_alg`.
+7. **Verification curl scripts** — one curl per probe (P1–P13) the lead engineer runs to confirm each capability before declaring spike-ready. These reduce the spike (§2.1) to "run scripts, paste output, sign off."
+8. **Troubleshooting** — copy the four gotcha symptoms from `project_readme_pending_improvements.md` and add new ones for v3 (e.g., "consent screen not shown" → check `requested_actor` policy; "token-exchange returns no `act` claim" → P1 fail, see plan §3.6 fallback).
+
+**Living document:** Sprint 1 adds tasks 1–5 of §3.4-B as updates to this doc (in addition to performing them). Sprint 2 adds task 1 of §4.4-A (back-channel logout activation). The doc is the single source of truth for "how do I set up Asgardeo for this POC."
+
+**Acceptance:** a teammate who has not been involved in the architecture work can clone the repo, follow `docs/asgardeo-setup.md` end to end, and run the spike successfully without asking questions.
 
 ---
 
@@ -227,7 +280,8 @@ Negative tests prove (a) the agent cards are not the trust anchor — tokens are
 |---|---|---|
 | `orchestrator/` (extracted from `agent/`) | User-facing chat. LLM-driven (Gemini). Discovers agents, routes via A2A, performs token-exchange. Handles BCL (Sprint 2). | New **Application** registration: `orchestrator-app` (PKCE public/confidential client) + new **Agent identity**: `orchestrator-agent` (for `requested_actor` and as actor in token-exchange). |
 | `hr-agent/` | Specialist. Owns `/a2a/message:send`, `/.well-known/agent-card.json`. Wraps `hr-server` MCP for tool dispatch. | New **Agent identity**: `hr-agent` + API resource `hr-agent-api` with existing `hr_*_mcp` scopes. |
-| `it-agent/` | Specialist. Same pattern. In-memory asset fixture (5–10 sample rows). | New **Agent identity**: `it-agent` + API resource `it-agent-api` with `it_assets_read_mcp` scope. |
+| `it-agent/` | Specialist. Same pattern. Wraps `it-server/` via MCP for tool dispatch (parallel to HR Agent → hr-server). | New **Agent identity**: `it-agent` + API resource `it-agent-api` with `it_assets_read_mcp` scope. |
+| `it-server/` | New backend. FastAPI + FastMCP, in-memory asset store (5–10 sample rows). Mirrors `hr-server/` shape. | New API resource `it-server-api` with `it_assets_read_mcp` scope. |
 
 ### 3.3 Token flow
 
@@ -246,7 +300,9 @@ Negative tests prove (a) the agent cards are not the trust anchor — tokens are
 
 ─── Hop 2: Orchestrator → Asgardeo (mint actor token; cached) ───────────
   Orchestrator → Asgardeo /token  (client_credentials, scope=internal)
-            ⇒ orchestrator_actor_token: {sub: orchestrator-agent, aud: <self>}
+            ⇒ orchestrator_actor_token: {sub: orchestrator-agent, aud: <as configured>}
+                                          (Asgardeo's actual aud may not be "self";
+                                           verify in spike — used only as actor_token in Hop 3)
 
 ─── Hop 3a: Orchestrator → HR Agent (per-call exchange) ─────────────────
   Orchestrator → Asgardeo /token  (RFC 8693 token-exchange,
@@ -269,17 +325,30 @@ Negative tests prove (a) the agent cards are not the trust anchor — tokens are
   HR Agent → Asgardeo /token  (RFC 8693 token-exchange,
               subject_token=hr_call_token (the one HR Agent received),
               actor_token=hr-agent client_credentials access token,
-              resource=https://hr-server.local/mcp,
+              resource=<hr-server EXPECTED_AUD verified by P13>,
               scope=hr_read_mcp+hr_approve_mcp)
             ⇒ hr_server_token: {sub: user, act.sub: hr-agent,
                                   act.act.sub: orchestrator-agent,
-                                  aud: https://hr-server.local/mcp}
+                                  aud: <hr-server canonical URI>}
   HR Agent → hr-server MCP  Authorization: Bearer <hr_server_token>
   hr-server: validate sig+iss+aud(exact, =EXPECTED_AUD)+exp+scope+nested act
             → existing tool dispatch
+
+─── Hop 5: IT Agent → it-server (parallel to Hop 4) ─────────────────────
+  IT Agent → Asgardeo /token  (RFC 8693 token-exchange,
+              subject_token=it_call_token (the one IT Agent received),
+              actor_token=it-agent client_credentials access token,
+              resource=https://it-server.local/mcp  (verified by P14),
+              scope=it_assets_read_mcp)
+            ⇒ it_server_token: {sub: user, act.sub: it-agent,
+                                  act.act.sub: orchestrator-agent,
+                                  aud: https://it-server.local/mcp}
+  IT Agent → it-server MCP  Authorization: Bearer <it_server_token>
+  it-server: validate sig+iss+aud(exact)+exp+scope+nested act
+            → in-memory asset store dispatch
 ```
 
-**Hop 4 fixes the v2 BLOCK:** v2 said hr-agent forwards the incoming `hr_call_token` (whose `aud=hr.smart-employee.local/a2a`) to hr-server. But hr-server's existing JWT validator expects a different `aud`. Forwarding either fails (correctly) or works permissively (worse — accepts any token). v3 has hr-agent re-mint per RFC 8693 for hr-server's exact resource URI, growing the act chain (`act.sub=hr-agent, act.act.sub=orchestrator-agent`). Spike P13 verifies hr-server's actual `EXPECTED_AUD` so the resource URI in the exchange call is correct.
+**Hop 4 and Hop 5 demonstrate the same security property on two paths:** the agent → backend re-mint pattern with full 3-name `act` chain (`user`/`orchestrator`/`specialist-agent`). v2 had hr-agent forwarding the incoming token to hr-server, which would either fail (token's `aud` doesn't match hr-server's `EXPECTED_AUD`) or pass permissively (worse). v3 has each specialist re-mint per RFC 8693 for its backend's exact resource URI. Spikes P13 (hr-server) and P14 (it-server) verify each backend's `EXPECTED_AUD` so the resource URI in the exchange call is correct.
 
 ### 3.4 Task list (sequenced)
 
@@ -296,7 +365,7 @@ Negative tests prove (a) the agent cards are not the trust anchor — tokens are
 6. Move chat endpoint, session store, LangChain integration, Gemini wiring from `agent/` to `orchestrator/`. **Drop direct `hr-server` MCP wiring** — orchestrator no longer talks to `hr-server`; it talks to `hr-agent` via A2A.
 7. Update `client/app.js`: login URL builder appends `requested_actor=<orchestrator_agent_id>`. Add a small UI hint on the login button: "(delegating chat to Orchestrator Agent)".
 8. Implement actor-token cache (`orchestrator/actor_token.py`): client_credentials → access token. Refresh at 80% of TTL with jitter. Negative cache 30 s on STS errors.
-9. Implement RFC 8693 client (`orchestrator/token_exchange.py`). Cache key = `(verified_user_sub, target_resource, frozenset(requested_scopes))` — scope MUST be in the key to prevent silent over-grant when concurrent calls request different scopes. `verified_user_sub` is taken from the **signature-validated** incoming user token, never from request headers. TTL = `min(token_exp, 5 min)`. **Singleflight via per-key `asyncio.Lock`**: first caller mints, subsequent callers await the in-flight mint (handles Gemini parallel tool calls cleanly). Counter `token_exchange_singleflight_waits_total`. **STS negative cache** keyed per-user (30 s) for exchange calls; only the actor-token-mint negative cache is global.
+9. Implement RFC 8693 client (`orchestrator/token_exchange.py`). Cache key = `(verified_user_sub, target_resource, frozenset(requested_scopes))` — scope MUST be in the key to prevent silent over-grant when concurrent calls request different scopes. `verified_user_sub` is taken from the **signature-validated** incoming user token, never from request headers. TTL = `min(token_exp, 5 min)`. **Singleflight via per-key `asyncio.Lock`**: first caller mints, subsequent callers await the in-flight mint (handles Gemini parallel tool calls cleanly). Counter `token_exchange_singleflight_waits_total`. **STS negative cache: single global cache, 30 s, no jitter** (POC simplification; per-user keying + jittered refresh deferred to `production-hardening.md`).
 10. Implement A2A client (`common/a2a/a2a_client.py`):
     - GET agent card from an URL in `ORCHESTRATOR_AGENT_CARD_URLS` allowlist (BEFORE the body is parsed). Schema-version check; reject unknown.
     - Cache cards 5 min (jittered). Re-fetch cooldown ≥30 s between forced refetches (prevents misbehaving specialist DoSing the discovery cache).
@@ -333,10 +402,22 @@ Negative tests prove (a) the agent cards are not the trust anchor — tokens are
 19a. Inbound requests carry an `X-Correlation-Id` header (UUIDv4). hr-agent forwards it into the downstream MCP call as metadata; logs it; echoes it back in JSON-RPC `data.correlation_id`. New histogram `a2a_to_mcp_dispatch_latency_seconds`.
 
 **E — IT Asset Agent specialist (`it-agent/`)**
-20. Same scaffold as HR Agent. In-memory asset fixture.
-21. Skills: `get_employee_assets`, `get_asset_by_id`. Pagination envelope: `{"assets": [...], "total": int, "next_cursor": str|null}` (limit default 50, max 200). `cursor` is opaque base64.
-22. Agent card published. JWT validation requires exact `aud=https://it.smart-employee.local/a2a`, scope `it_assets_read_mcp`, nested `act` allowlists `orchestrator-agent`.
-23. Introspection feature flag `IT_INTROSPECT_ENABLED` (default `true` from day 1 — IT is greenfield so we adopt the Sprint 2 shape immediately, avoiding a refactor later. Architect-reviewer feedback in v1).
+20. Scaffold mirroring `hr-agent/`. **Wraps `it-server/` via MCP (`langchain-mcp-adapters`)** for tool dispatch — does NOT hold asset data itself. Architecture is symmetric with HR Agent → hr-server.
+21. Agent card published. Skills: `it.get_employee_assets`, `it.get_asset_by_id`. JWT validation requires exact `aud=https://it.smart-employee.local/a2a`, scope `it_assets_read_mcp`, nested `act` allowlist (`IT_TRUSTED_PEER_AGENTS=orchestrator-agent`).
+22. **Hop 5 re-mint** before calling it-server: RFC 8693 token-exchange with `subject_token`=incoming `it_call_token`, `actor_token`=it-agent client_credentials access token, `resource`=it-server `EXPECTED_AUD` (verified by P14), `scope=it_assets_read_mcp`. Same caching + singleflight semantics as Hop 4.
+23. Introspection feature flag `IT_INTROSPECT_ENABLED` (default `true` from day 1 — IT is greenfield so we adopt the Sprint 2 shape immediately).
+
+**E2 — IT backend (`it-server/`)** — new in v3
+23a. **Scaffold IDENTICAL to `hr-server/`** in shape and conventions — directory layout, FastAPI + FastMCP wiring, in-memory store pattern (mirror `hr-server/service/store.py`), config loading, error envelopes. The point of `it-server/` is symmetry with `hr-server/`; deviations would muddle the demo. In-memory data: 5–10 sample rows `{asset_id, employee_id, type, model, status}`. MCP tools: `get_employee_assets(employee_id, asset_category=None, limit=50, cursor=None)` returning `{"assets": [...], "total": int, "next_cursor": str|null}`; `get_asset_by_id(asset_id)`.
+23b. JWT validation per `common/auth.jwt_validator`:
+    - Required `aud`: exact `https://it-server.local/mcp` (or whatever the configured `EXPECTED_AUD` resolves to from P14).
+    - Required scope: `it_assets_read_mcp`.
+    - **Nested `act` chain check**: walk every level; allowlist for it-server is `IT_SERVER_TRUSTED_PEER_AGENTS=it-agent,orchestrator-agent` (chain depth 2: it-agent on top, orchestrator below).
+    - Reject if `act` absent.
+23c. `employee_id` is **server-derived** from the verified `sub` claim (or session-store mapping), not LLM-controlled. Pydantic validators reject mismatch.
+23d. Introspection enabled from day 1 (Sprint 2 shape) behind flag `IT_SERVER_INTROSPECT_ENABLED=true`.
+23e. Add to `docker-compose.yml` on port 8004; `/health` endpoint without auth (no version/build leak per security NIT).
+23f. Cache-bust receiver `POST /internal/auth/cache-bust` per the §4.4 task 7 contract (HMAC + key_id + ±30s window).
 
 **F — Trace / leak hygiene**
 24. **Surgical** LangSmith redaction (not the nuclear `LANGSMITH_HIDE_INPUTS=true` switch): a `hide_inputs`/`hide_outputs` callable masks `Authorization`, `actor_token`, `subject_token`, `client_assertion`, anything matching `eyJ[A-Za-z0-9_-]{10,}\.`, any field whose key contains `token`. Tool args, messages, and outputs remain visible.
@@ -356,7 +437,7 @@ Token-level (carry-over from v1, adapted to orchestrator → specialist hop):
 31. **N3 — Unknown actor.** Tamper exchanged token's `act.sub` to a non-allowlisted client_id. Expected: 403, `error: peer_not_trusted`.
 32. **N4 — Expired exchanged token.** Mint with very short TTL, sleep past `exp`, replay. Expected: 401, `error: token_expired`.
 33. **N5 — User scope absent.** User lacks `agent_access` (or specific specialist scope). Orchestrator must refuse without making any token-exchange call. Verified by Asgardeo log absence + intercept counter.
-34. **N6 — Act-removal attack.** Re-encode an exchanged token's payload with `act` stripped (will fail signature). Expected: 401 — signature invalid (and as a defense-in-depth, validator rejects on missing `act`).
+34. **N6 — Act-removal / chain-loss enforcement.** Test that the validator's primary defense is the **missing-`act` rule**, not signature failure. Mint a signature-valid token (e.g., via a misconfigured fallback path or a probe-test client_credentials grant) whose `act` claim is absent. Expected: 401, validator rejects with `error: invalid_token` citing missing actor chain — proving the validator enforces the chain even when the signature passes.
 35. **N7 — Cross-aud replay.** HR-audience exchanged token replayed against IT specialist. Expected: 401, `error: invalid_audience`.
 
 A2A-level (new in v2/v3):
@@ -372,20 +453,27 @@ A2A-level (new in v2/v3):
 44. **N14 — `requested_actor` policy denial.** Orchestrator login URL with `requested_actor=<actor not permitted by Asgardeo's application policy>`. Expected: Asgardeo's `/authorize` returns `invalid_request` (or similar); orchestrator surfaces clean error. Distinct from N12 (user denial).
 45. **N15 — Hallucinated skill from LLM.** LLM emits a tool call for `skill_id="bogus.fly_to_moon"`. Expected: orchestrator's dispatcher returns `{"error": "unknown_skill", "available": [...]}`; LLM recovers; no specialist contacted.
 
+Hop-4 / Hop-5 specialist-to-backend tests (new in v3 for symmetry):
+
+45a. **N16 — Specialist forwards instead of re-mints.** HR Agent forwards the incoming `hr_call_token` (aud=hr-agent-api) directly to hr-server's MCP without re-minting. Expected: hr-server rejects with `invalid_audience` (-32001). Repeat the test for IT Agent → it-server path: same rejection at it-server. Both paths must fail; this is what proves the agent→backend re-mint is enforced, not optional.
+45b. **N17 — Wrong backend audience.** Take a token correctly minted for hr-server (aud=`https://hr-server.local/mcp`) and replay it against it-server. Expected: it-server rejects with `invalid_audience`. Cross-backend replay must fail just as cross-specialist replay does (N7).
+
 Identity-propagation:
 
 46. **N13 — Token leakage check.** Inspect the full LangSmith run tree (root + all child runs, all messages, all error fields, agent-card content) for any string matching `Bearer\s` or `eyJ[A-Za-z0-9_-]{10,}\.`. **Also assert agent-card `url` and `auth` blocks are absent from trace** (surgical redactor strips them). Expected: zero matches.
 
 ### 3.5 Sprint 1 Definition of Done
 
-- N1–N15 all pass (renumbering is intentional — v3 added N8b, N9b, N11b, N14, N15).
+- N1–N17 all pass (renumbering is intentional — v3 added N8b, N9b, N11b, N14, N15, N16, N17).
 - Happy-path demo (§3.4-G) runs on `docker compose up`; consent screen shown at login.
-- Sequence diagram checked in to `docs/diagrams/orchestrator-a2a-flow.md` (mermaid) — must show all four hops including hr-agent → hr-server re-mint.
+- Sequence diagram checked in to `docs/diagrams/orchestrator-a2a-flow.md` (mermaid) — must show **all five hops** including hr-agent → hr-server (Hop 4) and it-agent → it-server (Hop 5) re-mints.
 - LangSmith trace clean (N13).
 - Asgardeo capability memo (Sprint 0, P1–P13) referenced by every task that depends on a verified probe.
 - `docker-compose.yml` declares `deploy.replicas: 1` for orchestrator; assertion test in CI.
 
 ### 3.6 Sprint 1 fallbacks (only if Sprint 0 spike fails the relevant probe)
+
+**Preferred POC posture:** if a probe fails, the first response is **fix the Asgardeo tenant configuration**, not implement a fallback. Fallbacks below exist for cases where the tenant *cannot* be reconfigured (Asgardeo limitation, not user error).
 
 | Failure | Fallback |
 |---|---|
@@ -445,17 +533,19 @@ When a user logs out (or their Asgardeo session is admin-terminated), every down
 1. Configure orchestrator's `backchannel_logout_uri`. Confirm BCL fires on user-initiated AND admin-terminated session.
 
 **B — Logout-token validator**
-2. Implement `orchestrator/asgardeo_logout_token.py`. Validate per OIDC BCL 1.0 §2.6:
+2. Implement `orchestrator/asgardeo_logout_token.py`. **POC-trimmed OIDC BCL 1.0 §2.6 checklist** (full strict checklist deferred to production-hardening):
    - `iss` = expected Asgardeo issuer.
    - `aud` = orchestrator's `client_id`.
-   - `iat` present, within ±60 s skew.
    - `exp` not yet passed.
-   - **`sub` OR `sid` present** (at least one).
+   - **`sub` OR `sid` present** (at least one — required by spec).
    - `events` claim contains the exact key `http://schemas.openid.net/event/backchannel-logout` with empty object value.
    - `nonce` MUST NOT be present.
-   - `typ: logout+jwt` header recommended (warn if missing, accept).
-   - Signature verified against Asgardeo JWKS, algorithm matches application's registered `id_token_signed_response_alg`.
+   - Signature verified against Asgardeo JWKS.
    - Single-use: `jti` cache; reject if seen; cache for `exp`.
+   - **POC tolerances** (warn-not-reject; tighten in production):
+     - `iat` skew check (redundant with `exp` for POC).
+     - `typ: logout+jwt` header (SHOULD per spec; Asgardeo may emit without it).
+     - Algorithm pinning to registered `id_token_signed_response_alg` (Asgardeo signs with one alg per app; mismatch is unlikely outside attack scenarios).
 
 **C — Orchestrator endpoints**
 3. `POST /auth/backchannel-logout`:
@@ -465,13 +555,14 @@ When a user logs out (or their Asgardeo session is admin-terminated), every down
 4. Modify `POST /api/logout` to also call `/oauth2/revoke`. Response contract preserved (`{"success": true, "message": "Session cleared."}`) regardless of revoke outcome. 1-s timeout.
 5. Modify chat endpoint to short-circuit if session's `sid` ∈ `terminated_sids` (return 401, `error: session_terminated`).
 6. **Streaming + BCL race handling:** for each active streaming chat, register an `asyncio.Event` keyed on `sid`. `terminate_by_sid()` calls `event.set()`. The streaming handler races `astream_events` against `event.wait()` via `asyncio.wait(..., return_when=FIRST_COMPLETED)`. On event-set, the generation task is cancelled before any further A2A dispatch.
-7. **Cache-bust dispatcher** (`orchestrator/cache_bust.py`):
+7. **Cache-bust dispatcher** (`orchestrator/cache_bust.py`) — **simplified for POC** (per v3 review):
     - **Targets:** derived from loaded agent-card URLs (`<a2a_origin>/internal/auth/cache-bust` by convention). NOT hardcoded.
-    - **Request:** `POST /internal/auth/cache-bust`, `Content-Type: application/json`, body `{"sid": str, "sub": str, "ts": int (Unix epoch), "nonce": str (UUIDv4)}`. Headers: `X-Cache-Bust-Sig: <HMAC-SHA256-hex>` (over canonicalized body), `X-Cache-Bust-Key-Id: <key_id>` (enables zero-downtime key rotation via two-key overlap).
-    - **Timestamp window:** `±30 s`. Replay protection via in-memory nonce cache, TTL = 2× window = 60 s.
+    - **Request:** `POST /internal/auth/cache-bust`, `Content-Type: application/json`, body `{"sid": str, "sub": str, "ts": int (Unix epoch)}`. Header: `X-Cache-Bust-Sig: <HMAC-SHA256-hex>` (over canonicalized body).
+    - **Auth:** shared HMAC secret in env var; `±5 min` timestamp window. Internal call between containers on the compose network — POC threat model is "don't accept anonymous POSTs," not "resist replay-from-network-capture."
     - **Response:** `204 No Content` on eviction; `400` on expired timestamp; `401` on bad/missing HMAC; `404` if no matching cached entries (treated by dispatcher as success — idempotent).
     - **Best-effort** with 1-s timeout from dispatcher; specialists' 2-s introspection cache TTL is the safety net.
     - Counter `cache_bust_dispatched_total{target=<agent_id>, outcome=...}`; failure mode never blocks BCL response.
+    - **Production hardening (deferred to `docs/production-hardening.md`):** HMAC key-id with two-key overlap rotation; nonce cache with smaller window for replay protection; mTLS as a stronger alternative.
 
 **D — Specialist introspection**
 8. Implement `common/auth/introspector.py` maturity: 2-s positive cache, BCL cache-bust hook (`/internal/auth/cache-bust`).
@@ -496,14 +587,16 @@ When a user logs out (or their Asgardeo session is admin-terminated), every down
 20. **R7 — DoS / hijack via BCL endpoint.** While authenticated as User-B, POST a valid logout token for User-A's `sid`. Expected: User-A's `sid` is terminated (legitimate per spec); User-B's session unaffected (caller's network/cookie identity must NOT influence which sid gets terminated).
 21. **R8 — Wrong-aud logout token.** Asgardeo-signed logout token whose `aud` is a different application. Expected: 400 `invalid_logout_token`.
 22. **R9 — Concurrent logout + non-streaming chat.** User submits chat, simultaneously logs out. Expected: chat completes before terminate, OR returns 401 mid-flight. Never partial tool execution after revoke.
-23. **R10 — Cache-bust replay.** Attacker replays a captured cache-bust message (valid HMAC + valid nonce on first attempt, but ≥31 s old timestamp on second attempt). Expected: 400 on the replay (timestamp outside ±30 s window). Same nonce within window also rejected (nonce cache hit).
-24. **R11 — Cache-bust forgery.** Attacker without HMAC key sends cache-bust. Expected: 401, missing/invalid `X-Cache-Bust-Sig`.
+23. **R10 — Cache-bust replay (timestamp-window).** Replay a valid cache-bust message after the ±5 min window. Expected: 400, timestamp outside window.
+24. **R11 — Cache-bust forgery.** Attacker without the HMAC secret sends cache-bust. Expected: 401, missing/invalid `X-Cache-Bust-Sig`.
 25. **R6 enhancement — stream cancellation propagates to HTTP.** Verify in R6 that no `POST /a2a` HTTP request reaches the specialist after `event.set()` fires. Use a specialist-side request log to assert zero post-cancellation calls (not just zero `ToolMessage` results). Requires the orchestrator's A2A client to be cancel-aware (httpx `AsyncClient` with explicit `task.cancel()`).
+26. **R12 — Joint failure: introspect down + cache-bust failed.** Kill introspect endpoint. Send a BCL token (cache-bust dispatch fails because target unreachable). Replay a token within the 2-s pre-eviction window. Expected: 503 `introspection_unavailable` (fail-closed per §4.4 task 10) — NOT 200 with stale token. Proves the fail-closed policy holds when both Layer A's external dependency and Layer B's push channel both degrade.
+27. **R13 — Post-BCL chat session invalidation.** After BCL fires for User-A, send a new `/api/chat` request from User-A's still-valid orchestrator cookie. Expected: 401 `session_terminated` — proves the orchestrator-side session is invalidated by BCL, not just downstream tokens (otherwise the chat UI looks alive while specialists fail).
 
 ### 4.5 Sprint 2 Definition of Done
 
-- R1–R11 all pass.
-- 95th-percentile end-to-end revocation latency (BCL receipt → specialist cache eviction → next request rejected) < 5 s under no load. Recorded in test output via `bcl_to_eviction_latency_seconds`.
+- R1–R13 all pass (incl. R12 joint-failure and R13 orchestrator-session invalidation).
+- Maximum observed end-to-end revocation latency (BCL receipt → specialist cache eviction → next request rejected) < 5 s. Recorded in test output via `bcl_to_eviction_latency_seconds`. (Single-user POC; "P95" would be meaningless without load.)
 - Both Layer A and Layer B demonstrably trigger.
 - HR introspection feature flag flipped to `true`; existing scenarios still pass with introspect endpoint reachable AND a regression test with introspect endpoint unreachable (fail-closed verified).
 - Logout flow updated in `docs/diagrams/logout-flow.md`.
@@ -572,7 +665,7 @@ With agent cards in v2, adding a third specialist becomes:
 - Add the specialist's URL to orchestrator's `ORCHESTRATOR_AGENT_CARD_URLS` env var.
 - *No code change in orchestrator.*
 
-System-prompt assembly remains hardcoded for Sprint 1; making it card-derived (e.g., LLM is told skill descriptions from cards) is a v3 improvement.
+System-prompt assembly remains hardcoded for Sprint 1; making it card-derived (e.g., LLM is told skill descriptions from cards) is deferred to a future iteration.
 
 ---
 
@@ -596,9 +689,9 @@ System-prompt assembly remains hardcoded for Sprint 1; making it card-derived (e
 
 | Milestone | Gate | Owner |
 |---|---|---|
-| **M0 — Sprint 0 done** | Spike memo (**P1–P13**) committed; `common/auth/` + `common/a2a/` lands; scope policy + agent-card schema committed; library pins verified; service stubs build; `agent/` archived to `_archive/agent.before-v3/` and tagged `pre-v3-orchestrator`. | Lead engineer + security-engineer sign-off. |
-| **M1 — Sprint 1 done** | **N1–N15** pass (incl. N8b, N9b, N11b, N14, N15); orchestrator-coordinated demo runs; consent screen visible at login; sequence diagram (4 hops, including hr-agent→hr-server re-mint) committed; LangSmith trace clean (incl. agent-card `url`/`auth` stripped); `replicas: 1` constraint asserted in CI. | Lead engineer + architect-reviewer + api-designer sign-off. |
-| **M2 — Sprint 2 done** | **R1–R11 (incl. R6 enhancement)** pass; latency budget recorded; both layers proven; HR introspection flag ON; production-hardening checklist drafted; cache-bust contract documented in `docs/jsonrpc-contract.md`. | Lead engineer + security-engineer sign-off. |
+| **M0 — Sprint 0 done** | Spike memo (**P1, P2, P3, P4, P5, P7, P8, P10, P11, P12, P13, P14** — 12 probes; P6 and P9 deferred per v3 POC review) committed; `common/auth/` + `common/a2a/` lands; scope policy + agent-card schema + UX validation spec + Asgardeo setup guide committed; library pins verified; service stubs build (incl. it-server); `agent/` archived to `_archive/agent.before-v3/` and tagged `pre-v3-orchestrator`. | Lead engineer + security-engineer sign-off. |
+| **M1 — Sprint 1 done** | **N1–N17** pass (incl. N8b, N9b, N11b, N14, N15, N16, N17); orchestrator-coordinated demo runs; consent screen visible at login; sequence diagram (5 hops, both specialist→backend re-mints) committed; LangSmith trace clean (incl. agent-card `url`/`auth` stripped); `replicas: 1` constraint asserted in CI. | Lead engineer + architect-reviewer + api-designer sign-off. |
+| **M2 — Sprint 2 done** | **R1–R13 (incl. R6 enhancement, R12 joint-failure, R13 session invalidation)** pass; max observed revocation latency recorded; both layers proven; HR introspection flag ON; production-hardening checklist drafted; cache-bust contract documented in `docs/jsonrpc-contract.md`. | Lead engineer + security-engineer sign-off. |
 | **M3 — POC doc rewrite** | Original POC doc updated to match implementation. Architecture diagram updated to show orchestrator + specialists. | Technical writer + product manager. |
 
 ---
@@ -651,6 +744,8 @@ System-prompt assembly remains hardcoded for Sprint 1; making it card-derived (e
 
 ### POC artefacts
 - POC document: [Proof of Concept (POC)_ Identity-First AI Agent Governance.md](Proof%20of%20Concept%20(POC)_%20Identity-First%20AI%20Agent%20Governance.md)
+- **User-experience validation spec:** [user-experience.md](user-experience.md) — what the user sees + acceptance criteria, mapped to N/R-tests. Source of truth for "the UX works."
+- **Asgardeo configuration guide** (Sprint 0 deliverable, §2.9): `docs/asgardeo-setup.md`
 - Scope policy (Sprint 0 output): `docs/scope-policy.md`
 - Agent-card schema (Sprint 0 output): `docs/agent-card-schema.md`
 - Spike memo (Sprint 0 output): `docs/spikes/asgardeo-capability-memo.md`
