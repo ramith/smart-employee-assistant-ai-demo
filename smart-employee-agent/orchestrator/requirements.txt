@@ -1,0 +1,12 @@
+fastapi~=0.115.0
+uvicorn[standard]~=0.32.0
+httpx~=0.27.0
+pydantic~=2.11.7
+python-dotenv~=1.0.0
+PyJWT[crypto]>=2.12.0
+# LangChain stack — pinned per milestone-plan §2.4
+langchain>=1.2.11
+langchain-google-genai>=3.2.0
+# CRITICAL: 0.1.18+ required for per-request header injection (PR #313)
+# See milestone-plan §2.4 + smoke test in tests/test_mcp_header_injection.py
+langchain-mcp-adapters>=0.1.18

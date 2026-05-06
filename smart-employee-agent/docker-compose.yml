@@ -1,7 +1,23 @@
+# Compose topology for the Identity-First AI Agent Governance POC.
+#
+# Sprint 0 state (this file):
+#   - hr-server, agent, client     ← existing services; still functional
+#   - orchestrator, hr-agent,
+#     it-agent, it-server          ← v3 scaffolds; /health-only until Sprint 1
+#
+# Sprint 1 will:
+#   - Wire orchestrator/hr-agent/it-agent/it-server with real logic
+#   - Reroute the SPA from `agent` to `orchestrator` (port 8080)
+#
+# Sprint 1 DoD: delete `agent/` service from this file; agent/ stays archived
+# in _archive/agent.before-v3/ + git tag pre-v3-orchestrator.
+
 services:
+  # ─── Existing services (unchanged) ─────────────────────────────────────────
   hr-server:
     build:
-      context: ./hr-server
+      context: .
+      dockerfile: hr-server/Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -10,6 +26,8 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
       - HR_SERVER_HOST=0.0.0.0
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,hr-server"
+      # Sprint 0: introspection feature-flagged OFF (Sprint 2 turns ON)
+      - HR_INTROSPECT_ENABLED=${HR_INTROSPECT_ENABLED:-false}
 
   agent:
     build:
@@ -19,7 +37,6 @@ services:
     env_file:
       - ./agent/.env
     environment:
-      # Override localhost URL to use Docker service name
       - HR_MCP_SERVER_URL=http://hr-server:8000/mcp
       - AGENT_SERVER_HOST=0.0.0.0
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
@@ -30,17 +47,76 @@ services:
     build:
       context: ./client
     ports:
-      # Container always listens on 3000 internally; host port follows CLIENT_PORT.
       - "${CLIENT_PORT:-3001}:3000"
     env_file:
       - ./client/.env
     environment:
-      # These are served to the browser via /config, so they must be
-      # localhost URLs (the browser runs on the host, not inside Docker).
-      # AGENT_SERVER_URL / HR_SERVER_URL stay on their fixed host ports.
       - AGENT_SERVER_URL=http://localhost:5001
       - HR_SERVER_URL=http://localhost:8000
-      # The browser-visible redirect URI must match what's registered in Asgardeo.
       - REDIRECT_URI=${REDIRECT_URI:-http://localhost:3001/callback}
     depends_on:
       - agent
+
+  # ─── v3 scaffolds (Sprint 0 — /health-only) ────────────────────────────────
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    ports:
+      # Container always listens on 8080 internally; host port 8090
+      # avoids a conflict with a common SSH-tunnel default. Sprint 1
+      # may switch this to 5001 once `agent` service is removed.
+      - "8090:8080"
+    env_file:
+      - ./orchestrator/.env
+    environment:
+      - ORCHESTRATOR_HOST=0.0.0.0
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+    # POC constraint: single replica only (per milestone-plan §5.3 + R7 determinism).
+    # CI asserts this; multi-replica needs sticky sessions + Redis-backed state.
+    deploy:
+      replicas: 1
+    depends_on:
+      - hr-agent
+      - it-agent
+
+  hr-agent:
+    build:
+      context: .
+      dockerfile: hr-agent/Dockerfile
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./hr-agent/.env
+    environment:
+      - HR_AGENT_HOST=0.0.0.0
+      - HR_MCP_SERVER_URL=http://hr-server:8000/mcp
+    depends_on:
+      - hr-server
+
+  it-agent:
+    build:
+      context: .
+      dockerfile: it-agent/Dockerfile
+    ports:
+      - "8002:8002"
+    env_file:
+      - ./it-agent/.env
+    environment:
+      - IT_AGENT_HOST=0.0.0.0
+      - IT_MCP_SERVER_URL=http://it-server:8004/mcp
+    depends_on:
+      - it-server
+
+  it-server:
+    build:
+      context: .
+      dockerfile: it-server/Dockerfile
+    ports:
+      - "8004:8004"
+    env_file:
+      - ./it-server/.env
+    environment:
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+      - IT_SERVER_HOST=0.0.0.0
+      - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,it-server"
