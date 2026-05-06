@@ -17,6 +17,37 @@ This is a **living document** — Sprint 0 establishes the baseline; Sprint 1 an
 
 ---
 
+## 0.5 Architecture orientation — who plays which OAuth role
+
+Before clicking through the Console, internalize this. Confusing the SPA app with the agent identity is the #1 source of "why doesn't this work" in this setup.
+
+| Asgardeo entity | What it is | Who uses it | Has client_secret? | Token Exchange grant? |
+|---|---|---|---|---|
+| **`orchestrator-app`** | SPA application (public PKCE client) | The browser SPA at `client/` (port 3001). Handles user login. | No (PKCE) | **No** — SPA template doesn't expose it. |
+| **`orchestrator-agent`** | Agent identity | The orchestrator backend (port 8090). Used as `actor` in token-exchange and as caller in client_credentials. | **Yes** | **Yes** — enabled here. |
+| **`hr-agent`** | Agent identity | hr-agent backend (port 8001). Used as actor in Hop 4 re-mint. | Yes | Yes |
+| **`it-agent`** | Agent identity | it-agent backend (port 8002). Used as actor in Hop 5 re-mint. | Yes | Yes |
+| **`hr-agent-api`** | API resource | Audience advertised by hr-agent. JWTs minted to call hr-agent have this `aud`. | n/a | n/a |
+| **`it-agent-api`** | API resource | Audience for it-agent. | n/a | n/a |
+| **`hr-server-api`** | API resource (existing) | Audience for hr-server (verify exact value via probe P13). | n/a | n/a |
+| **`it-server-api`** | API resource | Audience for it-server (`https://it-server.local/mcp`). | n/a | n/a |
+
+**One-line summary:** the SPA app is the user-login front door (PKCE only). The four agent identities (`orchestrator-agent`, `hr-agent`, `it-agent`, plus the implicit ones for the two backend services if needed) are the confidential clients that do real OAuth work. API resources are just audiences — they make tokens point at the right service.
+
+Login flow at runtime (Hop 1):
+```
+Browser → /authorize (client_id=orchestrator-app, requested_actor=orchestrator-agent)
+        → consent screen
+        → redirect to SPA http://localhost:3001/callback?code=...
+SPA     → /token (PKCE verifier; no secret)
+        → user_delegated_token  {sub:user, act.sub:orchestrator-agent}
+SPA     → orchestrator backend (8090) /api/* with Bearer <token>
+```
+
+All subsequent token-exchange (Hops 2/3a/3b/4/5) is done by the orchestrator backend and the specialist backends, using their respective **agent identity** credentials, never the SPA.
+
+---
+
 ## 1. Naming conventions used in this guide
 
 Substitute these into the curl scripts and Console fields. Pick once, use consistently.
@@ -50,7 +81,7 @@ Console → **Applications** → **+ New Application** → **Single-Page Applica
 | Field | Value |
 |---|---|
 | Application name | `orchestrator-app` |
-| Authorized redirect URLs | `http://localhost:5001/callback` |
+| Authorized redirect URLs | `http://localhost:3001/callback` |
 | Allowed origins | `http://localhost:3001` |
 | Public client | ✓ (required for PKCE) |
 
@@ -58,12 +89,14 @@ Console → **Applications** → **+ New Application** → **Single-Page Applica
 
 ### Protocol tab
 - ☑ **PKCE** mandatory.
-- Grant types:
-  - ☑ Authorization Code
-  - ☑ **Token Exchange** (urn:ietf:params:oauth:grant-type:token-exchange) — required for Hops 3 / 4 / 5.
+- Grant types — keep what the SPA template offers; **do not try to add Token Exchange here**:
+  - ☑ Code (Authorization Code)
+  - ☐ Implicit (leave OFF)
   - ☑ Refresh Token
 - Access token: **JWT**. Lifetime: 3600 s (default).
 - Refresh token lifetime: 86400 s.
+
+**Note on Token Exchange:** the SPA application template intentionally does NOT expose `urn:ietf:params:oauth:grant-type:token-exchange` because SPAs are public clients (no secret) and token-exchange requires confidential authentication. Token exchange in this POC is performed by `orchestrator-agent` (the Agent identity registered in Step 2) using its client_id + client_secret — not by `orchestrator-app`. The SPA app handles only the user-login auth-code flow.
 
 ### Advanced tab
 - ☑ **App-Native Authentication: enabled** (gotcha #A — off by default).
@@ -75,8 +108,9 @@ Console → **Applications** → **+ New Application** → **Single-Page Applica
 ### User Attributes tab
 - Mandatory: `username`, `email`, `roles`.
 
-### Logout URLs (Sprint 2 prep)
-- **Back-channel logout URL:** `http://localhost:5001/auth/backchannel-logout`
+### Logout URLs (Sprint 2 prep — can be deferred until Sprint 2)
+- **Back-channel logout URL:** `http://localhost:8090/auth/backchannel-logout`
+  *(Orchestrator backend host port; Asgardeo POSTs the logout token here. If your dev machine is behind NAT, you'll need ngrok pointing at 8090 — not 5001.)*
 - Confirm `id_token_signed_response_alg`: typically `RS256`.
 
 **Capture for `.env`:**
@@ -277,7 +311,7 @@ This requires a registered `backchannel_logout_uri`. Spin up a tiny listener:
 # Terminal 1: listener
 python3 -m http.server 9999 --bind 127.0.0.1
 # OR for actual handling:
-ngrok http 5001  # if behind NAT
+ngrok http 8090  # if behind NAT (orchestrator backend host port)
 ```
 
 Then trigger logout (e.g., from SPA, or admin-terminate the session in Console).

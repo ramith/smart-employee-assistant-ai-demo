@@ -239,8 +239,8 @@ A step-by-step instruction file the lead engineer follows to bring an Asgardeo t
 **Required content for the Sprint 0 baseline:**
 1. **Prerequisites** — which Asgardeo tenant to use; admin credentials needed; any required Asgardeo plan/feature flags.
 2. **Application registration**
-    - `orchestrator-app` — Single-page application (PKCE), redirect URI `http://localhost:5001/callback`, configured to permit `requested_actor=orchestrator-agent`.
-    - **Enable RFC 8693 token-exchange grant** on `orchestrator-app` with permitted resources `hr-agent-api`, `it-agent-api`, `hr-server-api` (the canonical resource URIs are listed in §3.3 of the milestone plan).
+    - `orchestrator-app` — **Single-page application** (public PKCE client; no client_secret), redirect URI `http://localhost:3001/callback` (the SPA at `client/` port 3001 handles the redirect, calls /token with PKCE verifier, then forwards the bearer to the orchestrator backend at port 8090). Configure **Authorized Actors** to permit `requested_actor=<orchestrator-agent>` on this app (per §2.9 Step 6 of `asgardeo-setup.md`).
+    - **RFC 8693 token-exchange grant is NOT on `orchestrator-app`** — SPAs are public clients and cannot use that grant. It is enabled on `orchestrator-agent` (the Agent identity in Step 3), which has a confidential client_id + client_secret.
     - Document the **App-Native Authentication** toggle (existing gotcha #A from `project_readme_pending_improvements.md`).
 3. **Agent identity registration**
     - `orchestrator-agent`, `hr-agent`, `it-agent` — three Agent identities. Capture client_id / client_secret for each.
@@ -255,7 +255,7 @@ A step-by-step instruction file the lead engineer follows to bring an Asgardeo t
     - `employee` and `hr_admin` roles, with the scope assignments per `docs/scope-policy.md`.
     - Assign the appropriate agent identities to each role (gotcha #D).
 6. **Back-channel logout configuration** (Sprint 2 prep — can be staged)
-    - Set `backchannel_logout_uri = http://localhost:5001/auth/backchannel-logout` on `orchestrator-app`.
+    - Set `backchannel_logout_uri = http://localhost:8090/auth/backchannel-logout` on `orchestrator-app` (target = orchestrator backend host port; Asgardeo POSTs the logout token here).
     - Confirm the application's `id_token_signed_response_alg`.
 7. **Verification curl scripts** — one curl per probe (P1–P13) the lead engineer runs to confirm each capability before declaring spike-ready. These reduce the spike (§2.1) to "run scripts, paste output, sign off."
 8. **Troubleshooting** — copy the four gotcha symptoms from `project_readme_pending_improvements.md` and add new ones for v3 (e.g., "consent screen not shown" → check `requested_actor` policy; "token-exchange returns no `act` claim" → P1 fail, see plan §3.6 fallback).
@@ -286,17 +286,19 @@ Negative tests prove (a) the agent cards are not the trust anchor — tokens are
 ### 3.3 Token flow
 
 ```
-─── Hop 1: User → Orchestrator (login) ─────────────────────────────────
-  Browser → Asgardeo /authorize?
-              client_id=orchestrator-app&
-              requested_actor=orchestrator-agent&
+─── Hop 1: User → SPA → Orchestrator (login) ───────────────────────────
+  Browser ── PKCE → Asgardeo /authorize?
+              client_id=<orchestrator-app SPA client_id>&
+              requested_actor=<orchestrator-agent agent_id>&
               scope=openid+agent_access+hr_read_mcp+hr_approve_mcp+it_assets_read_mcp&
-              code_challenge=...&audience=orchestrator-resource
+              code_challenge=...&redirect_uri=http://localhost:3001/callback
             (consent screen: "Delegate to Orchestrator Agent?")
-  Browser → Orchestrator /callback?code=...
-  Orchestrator → Asgardeo /token (code, code_verifier)
+  Browser → SPA (client/, port 3001) /callback?code=...
+  SPA → Asgardeo /token (code, code_verifier)   [public PKCE — no secret]
             ⇒ user_delegated_token: {sub: user, act.sub: orchestrator-agent,
-                                      aud: orchestrator-resource, scope: <requested>}
+                                      aud: <orchestrator-app aud>, scope: <requested>}
+  SPA → Orchestrator backend (port 8090) /api/* with Authorization: Bearer <token>
+            (orchestrator validates the bearer, opens its own session)
 
 ─── Hop 2: Orchestrator → Asgardeo (mint actor token; cached) ───────────
   Orchestrator → Asgardeo /token  (client_credentials, scope=internal)
