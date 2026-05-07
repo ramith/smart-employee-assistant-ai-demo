@@ -374,6 +374,39 @@ def test_no_oauth_client_id_collision():
 
 ---
 
+## F-17 — MCP Server registration on IS 7.2 is metadata-only (CIBA `aud` correction)
+
+**Source:** Stage 8 prep council review (architect, python-pro, security) + empirical c10 probe on 2026-05-07.
+
+**Background.** F-06 in `docs/spikes/wso2-is-capability-memo.md` stated multi-resource CIBA was unsupported (aud collapsed to client_id). The user discovered IS 7.2 Console has a dedicated **"Add new MCP server"** registration entity with URI identifiers like `mcp://hr-server.local` — which suggested F-06 might have been over-broad and a single-resource CIBA against a registered MCP Server might bind `aud` correctly.
+
+**Probe (`idp_capability_test/c10_ciba_single_resource.py`):** Registered `mcp://probe-hr-server.local` as MCP Server in IS Console with scope `probe.hr_mcp_read`; subscribed `probe-agent-b`'s Agent App to it. Ran CIBA with `resource=mcp://probe-hr-server.local` AND `scope="openid probe.hr_mcp_read"`.
+
+**Outcome:** Token returned with `aud = <probe-agent-b's OAuth Client ID>` (NOT the MCP URI). Scope reduced to `openid` only — the `probe.hr_mcp_read` scope was stripped. Both the `resource=` parameter AND the requested MCP scope were silently ignored on the CIBA grant path.
+
+**Conclusions:**
+1. **F-06 confirmed for single-resource case.** IS 7.2 CIBA does NOT honor `resource=` parameter; aud always collapses to the calling OAuth Client ID.
+2. **MCP Server registration is metadata-only on the CIBA path.** The Console's MCP Server entity is useful for: (a) RFC 9728 protected-resource-metadata discovery, (b) scope catalog management. It does NOT participate in CIBA token issuance audience-binding.
+3. **The WSO2 reference at `mcp-auth/python/main.py` confirms this** — it uses `audience=client_id` even though the sample is built around the MCP-Server-registration concept.
+
+**Decision (Path C Hybrid, simplified to Path A given probe outcome):** Validator stays at `aud == <agent's OAuth Client ID>`. Apply the architect's future-proofing recommendation as a low-cost type change:
+
+`hr_server/auth/validators.py` and `it_server/auth/validators.py`:
+```python
+# OLD:
+expected_aud: str
+# NEW:
+expected_aud: frozenset[str]   # accept any token whose aud is in this set
+```
+
+This makes the validator forward-compatible if WSO2 fixes CIBA's `resource=` handling in a future IS release (or if we adopt a different grant flow that DOES honor resource indicators); the env var continues to provide a single value for now (parsed into a one-element frozenset).
+
+**Sprint impact: deferred to Sprint 2 polish.** Probe outcome locked Path A — `aud` is always the agent's OAuth Client ID; the frozenset is always size 1 with that value. The future-proofing has zero behavior delta today, so the ~1-hour cost (validator field type + env parser + 10 test fixtures) is dead-weight rework for the live demo. Sprint 2 picks it up alongside the multi-aud retest if WSO2 fixes CIBA's `resource=` handling in a future IS release.
+
+**Setup doc impact:** the `docs/wso2-is-setup.md` rewrite includes an MCP Server registration step, but documents that this is for metadata/discovery — NOT for binding tokens via CIBA. Validators expect `aud=<agent-OAuth-Client-ID>`.
+
+---
+
 ## F-16 — Sprint 2 hooks (NOT Sprint 1 work, just flagged)
 
 - **T3 rate limiting** (consent fatigue prevention): `(specialist_oauth_client_id, login_hint) → 1 request / 5s` window. Sprint 2 task.
