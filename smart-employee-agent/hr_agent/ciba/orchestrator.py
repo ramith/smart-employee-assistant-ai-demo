@@ -61,24 +61,30 @@ __all__ = ["HRDispatcherDeps", "HRDispatcher"]
 # Tool registry
 # ---------------------------------------------------------------------------
 
-# Map tool name → (action_text, mcp_method_name, args_to_kwargs_fn)
+# Map tool name → (action_text, mcp_method_name, args_to_kwargs_fn, scope_override)
 # ``args_to_kwargs_fn`` converts the raw ``args`` dict from the A2A request
 # into the keyword arguments expected by the MCP client method.
-_TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict]]] = {
+# ``scope_override`` (when non-None) selects a different CIBA scope than the
+# agent's env-default ``deps.ciba_scope``. Required for write-tier tools per
+# scope-policy.md §3 rule 2.
+_TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] = {
     "hr.read_balance": (
         "View your leave balance",
         "get_leave_balance",
         lambda args: {"employee_id": args.get("employee_id")},
+        None,
     ),
     "hr.read_history": (
         "View your leave history",
         "get_leave_history",
         lambda args: {"employee_id": args.get("employee_id")},
+        None,
     ),
     "hr.approve_leave": (
         "Approve a leave request on your behalf",
         "approve_leave",
         lambda args: {"leave_id": args["leave_id"]},
+        "openid hr_approve_rest",
     ),
 }
 
@@ -189,7 +195,8 @@ class HRDispatcher:
                 reason=f"Tool {tool!r} is not registered in the HR dispatcher",
             )
 
-        action_text, mcp_method, kwargs_builder = registry_entry
+        action_text, mcp_method, kwargs_builder, tool_scope_override = registry_entry
+        ciba_scope = tool_scope_override or deps.ciba_scope
 
         # ── 2. Render binding message (F-05) ──────────────────────────────────
         binding_msg = render(
@@ -221,7 +228,7 @@ class HRDispatcher:
                 login_hint=user_sub,
                 binding_message=binding_msg,
                 actor_token=actor_token_obj.access_token,
-                scope=deps.ciba_scope,
+                scope=ciba_scope,
             )
         except Exception as exc:
             logger.error(
@@ -281,7 +288,7 @@ class HRDispatcher:
             auth_url=ciba_request.auth_url,
             agent_label=self._deps.agent_label,
             action=action_text,
-            scope=self._deps.ciba_scope,
+            scope=ciba_scope,
             binding_message=binding_msg,
             expires_in=ciba_request.expires_in_s,
         )

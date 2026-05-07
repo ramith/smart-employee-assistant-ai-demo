@@ -95,6 +95,14 @@ class KeywordRule:
 # ---------------------------------------------------------------------------
 
 DEFAULT_RULES: tuple[KeywordRule, ...] = (
+    # Specific verbs first; dedup-by-agent in route() means the first match
+    # per agent wins. "approve my leave" therefore fires hr.approve_leave only,
+    # not also hr.read_balance.
+    KeywordRule(
+        keywords=("approve", "approval"),
+        agent_id="hr_agent",
+        tool_id="hr.approve_leave",
+    ),
     KeywordRule(
         keywords=("leave", "vacation", "time off", "pto"),
         agent_id="hr_agent",
@@ -108,13 +116,18 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
 )
 """Default routing rules shipped with the demo run-book (F-14).
 
-Rule 0 — HR leave
+Rule 0 — HR approve (HR Admin write path; D2.7)
+    Keywords ``approve``, ``approval`` → ``hr_agent / hr.approve_leave``.
+
+Rule 1 — HR leave read
     Keywords ``leave``, ``vacation``, ``time off``, ``pto`` → ``hr_agent /
     hr.read_balance``.
 
-Rule 1 — IT assets
+Rule 2 — IT assets read
     Keywords ``laptop``, ``asset``, ``equipment``, ``hardware``, ``computer``
     → ``it_agent / it.list_available_assets``.
+
+The ``it.issue_asset`` rule is added in Sprint 2A.2 once the MCP tool is built.
 """
 
 
@@ -203,11 +216,11 @@ class KeywordRouter:
     def route(self, user_message: str) -> list[ToolCall]:
         """Return an ordered list of :class:`ToolCall` objects for *user_message*.
 
-        Each rule in the configured rule set is evaluated exactly once.  If
-        any keyword in a rule is found (word-boundary, case-insensitive) in
-        the message the rule fires and contributes one :class:`ToolCall` to
-        the result.  A rule fires **at most once** per call regardless of how
-        many of its keywords match.
+        Each rule is evaluated in order. At most one ToolCall is emitted per
+        ``agent_id`` — the first matching rule per agent wins. This lets the
+        rule table list specific verbs (e.g. ``approve``) before general nouns
+        (e.g. ``leave``) so "approve my leave" routes to ``hr.approve_leave``
+        only, not also to ``hr.read_balance``.
 
         Args:
             user_message: Raw user input string.
@@ -217,7 +230,10 @@ class KeywordRouter:
             rule matches.
         """
         result: list[ToolCall] = []
+        seen_agents: set[str] = set()
         for idx, rule in enumerate(self._rules):
+            if rule.agent_id in seen_agents:
+                continue
             if self._rule_matches(idx, user_message):
                 result.append(
                     ToolCall(
@@ -226,6 +242,7 @@ class KeywordRouter:
                         args=rule.args,
                     )
                 )
+                seen_agents.add(rule.agent_id)
         return result
 
     def explain(self, user_message: str) -> str:
