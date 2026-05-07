@@ -67,6 +67,15 @@ __all__ = ["HRDispatcherDeps", "HRDispatcher"]
 # ``scope_override`` (when non-None) selects a different CIBA scope than the
 # agent's env-default ``deps.ciba_scope``. Required for write-tier tools per
 # scope-policy.md §3 rule 2.
+# Args that the dispatcher MUST receive (sourced from the message body or
+# extracted by orchestrator's keyword router). Tools not listed here accept
+# empty args (defaults applied downstream — e.g. employee_id falls back to
+# token.sub). Write-tier tools name what they need to fail clearly.
+_REQUIRED_ARGS: dict[str, list[str]] = {
+    "hr.approve_leave": ["leave_id"],
+}
+
+
 _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] = {
     "hr.read_balance": (
         "View your leave balance",
@@ -83,7 +92,7 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
     "hr.approve_leave": (
         "Approve a leave request on your behalf",
         "approve_leave",
-        lambda args: {"leave_id": args.get("leave_id", "LV-004")},
+        lambda args: {"leave_id": args.get("leave_id")},
         "openid hr_approve_rest",
     ),
 }
@@ -198,6 +207,22 @@ class HRDispatcher:
         action_text, mcp_method, kwargs_builder, tool_scope_override = registry_entry
         ciba_scope = tool_scope_override or deps.ciba_scope
 
+        # ── 1b. Validate required args BEFORE wasting a CIBA round-trip ───────
+        # Only write tools require args; read tools can default to token.sub.
+        mcp_kwargs = kwargs_builder(args)
+        missing = sorted(k for k in _REQUIRED_ARGS.get(tool, []) if not args.get(k))
+        if missing:
+            logger.warning(
+                "hr_dispatcher_args_missing tool=%s missing=%s request_id=%s",
+                tool,
+                missing,
+                request_id,
+            )
+            return ErrorPayload(
+                error_id="ERR-AGENT-002",
+                reason=f"Missing required arguments for {tool}: {missing}",
+            )
+
         # ── 2. Render binding message (F-05) ──────────────────────────────────
         binding_msg = render(
             FRESH,
@@ -258,7 +283,7 @@ class HRDispatcher:
                 state=state,
                 ciba_request=ciba_request,
                 mcp_method=mcp_method,
-                mcp_kwargs=kwargs_builder(args),
+                mcp_kwargs=mcp_kwargs,
                 request_id=request_id,
             ),
             name=f"hr_poll_{ciba_request.auth_req_id[:8]}",

@@ -49,6 +49,14 @@ __all__ = ["ITDispatcherDeps", "ITDispatcher"]
 # ``scope_override`` (when non-None) selects a different CIBA scope than the
 # agent's env-default ``deps.ciba_scope``. Required for write-tier tools per
 # scope-policy.md §3 rule 2. ``it.issue_asset`` lands in Sprint 2A.2.
+# Args that the dispatcher MUST receive. Tools not listed here accept empty
+# args (read tools default to token.sub etc.). Write-tier tools name what they
+# need to fail clearly with ERR-AGENT-002.
+_REQUIRED_ARGS: dict[str, list[str]] = {
+    "it.issue_asset": ["asset_id", "employee_id"],
+}
+
+
 _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] = {
     "it.list_available_assets": (
         "List available IT assets",
@@ -66,8 +74,8 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "Issue an IT asset to an employee",
         "issue_asset",
         lambda args: {
-            "asset_id": args.get("asset_id", "MBP-14-001"),
-            "employee_id": args.get("employee_id", "default"),
+            "asset_id": args.get("asset_id"),
+            "employee_id": args.get("employee_id"),
         },
         "openid it_assets_write_rest",
     ),
@@ -170,6 +178,22 @@ class ITDispatcher:
         action_text, mcp_method, kwargs_builder, tool_scope_override = registry_entry
         ciba_scope = tool_scope_override or deps.ciba_scope
 
+        # ── 1b. Validate required args BEFORE wasting a CIBA round-trip ───────
+        # Only write tools require args; read tools default downstream.
+        mcp_kwargs = kwargs_builder(args)
+        missing = sorted(k for k in _REQUIRED_ARGS.get(tool, []) if not args.get(k))
+        if missing:
+            logger.warning(
+                "it_dispatcher_args_missing tool=%s missing=%s request_id=%s",
+                tool,
+                missing,
+                request_id,
+            )
+            return ErrorPayload(
+                error_id="ERR-AGENT-002",
+                reason=f"Missing required arguments for {tool}: {missing}",
+            )
+
         # ── 2. Render binding message (F-05) ──────────────────────────────────
         binding_msg = render(
             FRESH,
@@ -230,7 +254,7 @@ class ITDispatcher:
                 state=state,
                 ciba_request=ciba_request,
                 mcp_method=mcp_method,
-                mcp_kwargs=kwargs_builder(args),
+                mcp_kwargs=mcp_kwargs,
                 request_id=request_id,
             ),
             name=f"it_poll_{ciba_request.auth_req_id[:8]}",

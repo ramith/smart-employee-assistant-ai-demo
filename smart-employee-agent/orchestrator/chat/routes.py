@@ -175,7 +175,7 @@ _ERROR_COPY: dict[str, str] = {
     "ERR-MCP-003": "You don't have permission to perform this action. Your administrator can grant the required role.",
     "ERR-MCP-005": "The agent could not complete the request. Try again or contact admin.",
     "ERR-AGENT-001": "The agent service is temporarily unavailable. Try again in a moment.",
-    "ERR-AGENT-002": "The agent encountered an internal error.",
+    "ERR-AGENT-002": "I couldn't tell which item you meant. Try formats like 'approve LV-004' or 'issue MBP-14-001 to alice'.",
 }
 
 _DEFAULT_ERROR_COPY = "An error occurred while processing your request. Please try again."

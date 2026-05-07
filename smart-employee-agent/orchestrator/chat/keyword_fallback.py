@@ -144,23 +144,33 @@ Rule 3 — IT assets read
 
 _LEAVE_ID_RE = re.compile(r"\bLV-\d+\b", re.IGNORECASE)
 _ASSET_ID_RE = re.compile(r"\b[A-Z]{2,4}-[A-Z0-9]+-\d+\b", re.IGNORECASE)
+# "to <name>" — captures the next non-space token after "to" or "for".
+_RECIPIENT_RE = re.compile(r"\b(?:to|for)\s+(\S+)", re.IGNORECASE)
 
 
 def _extract_inline_args(tool_id: str, message: str) -> dict:
     """Extract simple inline arguments from the user message.
 
-    Scope is intentionally narrow — only ``leave_id`` for ``hr.approve_leave``
-    and ``asset_id`` for ``it.issue_asset``. Anything else falls through to
-    the dispatcher's default-arg handling.
+    - ``hr.approve_leave``: pulls ``leave_id`` from a token like ``LV-004``.
+    - ``it.issue_asset``: pulls ``asset_id`` (canonical ``MBP-14-001`` shape)
+      and ``employee_id`` (the token following ``to`` or ``for``).
+
+    Returns an empty dict when nothing parses; the dispatcher then surfaces
+    ERR-AGENT-002 to the user instead of silently substituting defaults.
     """
     if tool_id == "hr.approve_leave":
         match = _LEAVE_ID_RE.search(message)
         if match:
             return {"leave_id": match.group(0).upper()}
     if tool_id == "it.issue_asset":
-        match = _ASSET_ID_RE.search(message)
-        if match:
-            return {"asset_id": match.group(0).upper()}
+        out: dict = {}
+        m_asset = _ASSET_ID_RE.search(message)
+        if m_asset:
+            out["asset_id"] = m_asset.group(0).upper()
+        m_recip = _RECIPIENT_RE.search(message)
+        if m_recip:
+            out["employee_id"] = m_recip.group(1).rstrip(".,;:!?")
+        return out
     return {}
 
 
