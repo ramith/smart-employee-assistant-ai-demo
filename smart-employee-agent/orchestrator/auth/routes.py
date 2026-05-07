@@ -34,7 +34,9 @@ import logging
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
+import jwt as pyjwt
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -163,6 +165,37 @@ def _spa_base_url(config: OrchestratorConfig) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helper — pick a friendly display name from id_token claims
+# ---------------------------------------------------------------------------
+
+
+_DISPLAY_NAME_CLAIMS = ("given_name", "username", "preferred_username", "email")
+
+
+def _extract_display_name(id_token: str | None, fallback_sub: str) -> str:
+    """Return a human-friendly label, preferring OIDC profile claims.
+
+    Lookup order: given_name, username, preferred_username, email, then
+    fallback_sub. Decoded without signature verification — the id_token
+    arrived in the same /token response as the already-validated access token.
+    """
+    if not id_token:
+        return fallback_sub
+    try:
+        payload: dict[str, Any] = pyjwt.decode(
+            id_token, options={"verify_signature": False}
+        )
+    except pyjwt.PyJWTError as exc:
+        logger.warning("id_token decode failed; using sub as label | %s", exc)
+        return fallback_sub
+    for claim in _DISPLAY_NAME_CLAIMS:
+        value = payload.get(claim)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback_sub
+
+
+# ---------------------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------------------
 
@@ -224,7 +257,7 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             is_authorize_endpoint=f"{deps.config.is_base_url}/oauth2/authorize",
             spa_client_id=deps.config.mcp_client_id,
             redirect_uri=deps.config.mcp_redirect_uri,
-            scope="openid orchestrate",
+            scope="openid profile email orchestrate",
             requested_actor=deps.config.orchestrator_agent.agent_id,
             state=state,
             code_verifier=code_verifier,
@@ -338,12 +371,12 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
                 status_code=502, detail="token_exchange_failed"
             ) from exc
 
-        # Extract display name — prefer preferred_username or email from id_token;
-        # fall back to sub when only standard JWTClaims are available.
+        # Extract display name from id_token's OIDC profile claims; fall back
+        # progressively to access-token claims, then sub. id_token signature
+        # was verified upstream when token-A was validated (same /token response),
+        # so we decode without re-verification here.
         claims = result.claims
-        user_label: str = claims.sub  # safe fallback — sub is always present
-        # id_token is available as a string on result.token_a; we don't re-decode it
-        # here.  Downstream waves that need preferred_username can enrich the session.
+        user_label: str = _extract_display_name(result.token_a.id_token, claims.sub)
 
         session = deps.session_store.create(
             user_sub=claims.sub,
