@@ -180,18 +180,49 @@ _ERROR_COPY: dict[str, str] = {
 
 _DEFAULT_ERROR_COPY = "An error occurred while processing your request. Please try again."
 
+# Error ids that represent the user (or IS-on-behalf-of-the-user) declining
+# the CIBA consent. These get agent-aware copy per UC-04 EX-1/EX-3 acceptance.
+_DENIED_ERROR_IDS: frozenset[str] = frozenset({
+    "ERR-CIBA-005", "ERR-CIBA-006", "ERR-CIBA-007", "ERR-CIBA-008",
+})
 
-def _friendly_error(error_id: str, reason: str) -> str:
+# Error id that represents the auth_req_id timing out before user approved.
+_EXPIRED_ERROR_ID = "ERR-CIBA-009"
+
+
+def _friendly_error(error_id: str, reason: str, agent_label: str | None = None) -> str:
     """Return a user-facing sentence for an error_id.
+
+    For consent-denied and consent-expired cases the copy is agent-aware so
+    the user sees *which* specialist could not run (UC-04 EX-1/EX-3): e.g.
+    "I couldn't access HR Agent (you declined the authorization). Ask again
+    if you'd like to retry." This makes the multi-agent partial-result reply
+    read naturally when one agent is approved and another is declined.
+
+    Other error families fall back to the static ``_ERROR_COPY`` map; these
+    are not user-controllable so they read fine without an agent name.
 
     Args:
         error_id: Machine-readable error code from ERR-CIBA-*, ERR-MCP-*, ERR-AGENT-*.
         reason: Technical description from the specialist (NOT shown to the user).
+        agent_label: Display name of the specialist (e.g. "HR Agent"). When
+            None, copy falls back to the agent-agnostic default.
 
     Returns:
         A one-sentence user-facing string suitable for the chat view.
     """
     _ = reason  # intentionally unused — reason is for ops logs only
+    if agent_label:
+        if error_id in _DENIED_ERROR_IDS:
+            return (
+                f"I couldn't access {agent_label} (you declined the authorization). "
+                "Ask again if you'd like to retry."
+            )
+        if error_id == _EXPIRED_ERROR_ID:
+            return (
+                f"{agent_label} approval timed out. "
+                "Ask again if you'd like to retry."
+            )
     return _ERROR_COPY.get(error_id, _DEFAULT_ERROR_COPY)
 
 
@@ -330,7 +361,7 @@ async def _run_serial_fan_out(
                 first.error_id,
                 first.reason,
             )
-            fragment = _friendly_error(first.error_id, first.reason)
+            fragment = _friendly_error(first.error_id, first.reason, agent_label)
             per_tool_outputs.append(fragment)
             continue
 
@@ -438,7 +469,7 @@ async def _run_serial_fan_out(
                 second.error_id,
                 second.reason,
             )
-            fragment = _friendly_error(second.error_id, second.reason)
+            fragment = _friendly_error(second.error_id, second.reason, agent_label)
             per_tool_outputs.append(fragment)
 
         else:

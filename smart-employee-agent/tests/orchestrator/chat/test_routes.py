@@ -773,3 +773,89 @@ def test_chat_missing_agent_card_pushes_error_event() -> None:
     chat_events = [e for e in events if isinstance(e, ChatMessageEvent)]
     assert len(chat_events) == 1
     assert "Dell-XPS" in chat_events[0].content or "assets" in chat_events[0].content.lower()
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2B.1a — D2.1 deny UX polish: agent-aware copy for denial / expiry
+# ---------------------------------------------------------------------------
+
+_friendly_error = _routes_mod._friendly_error
+
+
+def test_friendly_error_denied_with_agent_label() -> None:
+    """ERR-CIBA-005..008 with agent_label produces agent-aware decline copy."""
+    for err in ("ERR-CIBA-005", "ERR-CIBA-006", "ERR-CIBA-007", "ERR-CIBA-008"):
+        msg = _friendly_error(err, "user_denied", agent_label="HR Agent")
+        assert "HR Agent" in msg
+        assert "declined" in msg.lower()
+        assert "ask again" in msg.lower()
+
+
+def test_friendly_error_expired_with_agent_label() -> None:
+    """ERR-CIBA-009 with agent_label names the agent in the timeout copy."""
+    msg = _friendly_error("ERR-CIBA-009", "expired", agent_label="IT Agent")
+    assert "IT Agent" in msg
+    assert "timed out" in msg.lower()
+    assert "ask again" in msg.lower()
+
+
+def test_friendly_error_falls_back_to_generic_without_label() -> None:
+    """Without agent_label, denied/expired errors use the static map copy."""
+    denied = _friendly_error("ERR-CIBA-005", "user_denied")
+    expired = _friendly_error("ERR-CIBA-009", "expired")
+    # The agent-aware sentence is *not* used.
+    assert "Agent" not in denied  # no specific specialist named
+    assert "Agent" not in expired
+
+
+def test_friendly_error_non_consent_errors_unaffected_by_label() -> None:
+    """Non-consent errors (MCP / AGENT) ignore agent_label and use static copy."""
+    msg = _friendly_error(
+        "ERR-MCP-003", "missing required scope", agent_label="HR Agent"
+    )
+    assert "permission" in msg.lower()
+    # ERR-MCP-003 copy mentions admin, not the specialist label.
+    assert "HR Agent" not in msg
+
+
+def test_chat_mid_flow_denial_includes_agent_label_in_copy() -> None:
+    """Mid-flow deny: final chat must mention IT Agent + the decline phrasing."""
+    hr_result = _result_payload({"leave_days": 12})
+    it_consent = _consent_payload("auth-req-it", "https://is.example.com/it")
+    it_denial = _error_payload("ERR-CIBA-005")
+
+    hr_client = MagicMock()
+    hr_client.message_send = AsyncMock(return_value=hr_result)
+
+    it_client = MagicMock()
+    it_client.message_send = AsyncMock(return_value=it_consent)
+    it_client.await_completion = AsyncMock(return_value=it_denial)
+
+    tool_calls = [
+        ToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={}),
+        ToolCall(agent_id="it_agent", tool_id="it.list_available_assets", args={}),
+    ]
+    app, session = _build_app(
+        tool_calls=tool_calls,
+        hr_a2a_client=hr_client,
+        it_a2a_client=it_client,
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "leave and laptops"},
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+
+    events = _drain_queue(session)
+    chat_events = [e for e in events if isinstance(e, ChatMessageEvent)]
+    assert len(chat_events) == 1
+    content = chat_events[0].content
+
+    # HR's success fragment must be present (12 days of leave).
+    assert "12" in content
+    # IT denial fragment must name IT Agent and include "declined".
+    assert "IT Agent" in content
+    assert "declined" in content.lower()
