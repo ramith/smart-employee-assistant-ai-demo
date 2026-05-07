@@ -347,14 +347,26 @@ class ITDispatcher:
 
         # ── g. MCP HTTP error ─────────────────────────────────────────────────
         except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else "?"
+            upstream_id: str | None = None
+            try:
+                if exc.response is not None:
+                    payload = exc.response.json()
+                    detail = payload.get("detail", payload)
+                    if isinstance(detail, dict):
+                        upstream_id = detail.get("error_id")
+            except Exception:  # noqa: BLE001
+                upstream_id = None
+            error_id = upstream_id or "ERR-MCP-005"
             logger.error(
-                "it_dispatcher_mcp_http_error request_id=%s status=%s",
+                "it_dispatcher_mcp_http_error request_id=%s status=%s upstream_id=%s",
                 request_id,
-                exc.response.status_code if exc.response is not None else "?",
+                status,
+                upstream_id,
             )
             state.error = ErrorPayload(
-                error_id="ERR-MCP-005",
-                reason=f"MCP HTTP {exc.response.status_code if exc.response is not None else 'unknown'}: {exc}",
+                error_id=error_id,
+                reason=f"MCP HTTP {status}: {exc}",
             )
 
         # ── h. Unexpected exception ───────────────────────────────────────────

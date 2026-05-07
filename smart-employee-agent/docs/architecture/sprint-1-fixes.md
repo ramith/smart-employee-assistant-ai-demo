@@ -423,3 +423,43 @@ This makes the validator forward-compatible if WSO2 fixes CIBA's `resource=` han
 5. **Implement** the two-phase A2A protocol (F-01) — this is the single most consequential design lock.
 
 Stage 6 unblocks once these fixes are reflected in the source docs OR implementing agents are told explicitly to read this addendum first. Recommend the latter for speed; defer source-doc edits to Sprint 1 polish.
+
+---
+
+## F-18 — Role-based scope denial path on IS 7.2 (Sprint 2A.3 finding)
+
+**Surfaced:** 2026-05-08 manual test as `employee_user`, "please approve LV-004" and "issue MBP-14-001 to alice".
+
+### Outcome
+
+WSO2 IS 7.2 does **NOT** reject at CIBA initiation when the requested scope exceeds the user's role grant. It follows **Path C — silent scope downgrade + server-side enforcement**:
+
+1. `/oauth2/ciba` accepts the request, returns `auth_req_id` + `auth_url` (HTTP 200).
+2. User completes consent at IS — IS issues a token, but the token's `scope` claim contains only the scopes the user's role permits. Excess scopes are silently dropped.
+3. The agent's MCP call to the resource server fails with HTTP 401 + `error_id=ERR-MCP-003` because the server's `required_scopes` guard catches the missing scope.
+
+This is hybrid: IS issues a deliberately reduced token, the resource server enforces.
+
+### Implication for the architecture
+
+- **Defense-in-depth holds.** Server-side scope guard is authoritative; even if the agent had no error-handling, the user could not invoke a write tool.
+- **No consent-denial widget** is shown for permission failures — the consent flow completes "successfully" before the denial surfaces.
+- **The agent dispatcher must parse the upstream MCP response body** to lift `error_id` from the 401's `detail` dict, otherwise it surfaces the generic `ERR-MCP-005` and the orchestrator's `_friendly_error` falls to the default copy.
+- **Audit narrative:** the IS access log shows the user's role-bound token issuance; the resource server's log shows the scope-denial. Two complementary records — exactly the audit story the security pitch wants.
+
+### What changed in code (Sprint 2A.3 partial)
+
+- `hr_agent/ciba/orchestrator.py` and `it_agent/ciba/orchestrator.py`: the `httpx.HTTPStatusError` handler now extracts `detail.error_id` from the response body. Falls back to `ERR-MCP-005` only when the body is unparseable.
+- `orchestrator/chat/routes.py` `_ERROR_COPY`: rewrote `ERR-MCP-003` from "resource server is misconfigured. Contact admin." to **"You don't have permission to perform this action. Your administrator can grant the required role."** Added `ERR-MCP-005` mapping.
+- `idp_capability_test/c11_role_denial.py`: capability probe (uncommitted; user can inspect) for empirical regression detection if IS upgrades change the denial path.
+
+### Acceptance evidence (manual test, both HR and IT)
+
+```
+hr_server / it_server : ERR-MCP-003 (token validation failed)
+hr_agent / it_agent   : upstream_id=ERR-MCP-003
+orchestrator          : chat_fan_out error_id=ERR-MCP-003
+SPA                   : "You don't have permission to perform this action..."
+```
+
+N30 / N31 mock-IS fixtures (Sprint 2B.3) should mirror Path C — issue a token without the required scope, then assert MCP returns 401 / `ERR-MCP-003`. Do not mock initiation-time `invalid_scope`; that path doesn't exist on IS 7.2.

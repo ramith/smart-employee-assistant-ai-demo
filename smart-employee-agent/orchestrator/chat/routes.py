@@ -172,7 +172,8 @@ _ERROR_COPY: dict[str, str] = {
     "ERR-CIBA-009": "You took too long to approve. Please ask again.",
     "ERR-MCP-001": "The agent could not access the requested data. Contact admin.",
     "ERR-MCP-002": "Token was rejected by the resource server. Contact admin.",
-    "ERR-MCP-003": "The resource server is misconfigured. Contact admin.",
+    "ERR-MCP-003": "You don't have permission to perform this action. Your administrator can grant the required role.",
+    "ERR-MCP-005": "The agent could not complete the request. Try again or contact admin.",
     "ERR-AGENT-001": "The agent service is temporarily unavailable. Try again in a moment.",
     "ERR-AGENT-002": "The agent encountered an internal error.",
 }
