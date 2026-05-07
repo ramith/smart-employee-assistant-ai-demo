@@ -162,6 +162,43 @@ function announce(text, urgency = "polite") {
   requestAnimationFrame(() => { el.textContent = text; });
 }
 
+// ─── Diagnostic logger ───────────────────────────────────────────────────────
+// All client-side console output flows through `log(tag, ...)` so each line
+// carries an ISO-8601 timestamp comparable against `docker compose logs`.
+function log(tag, ...args)  { console.log(new Date().toISOString(), tag, ...args); }
+function logWarn(tag, ...args) { console.warn(new Date().toISOString(), tag, ...args); }
+function logErr(tag, ...args)  { console.error(new Date().toISOString(), tag, ...args); }
+
+// ─── Trace store (D2.4 in-app debug panel) ───────────────────────────────────
+// Captures the SSE timeline for each chat request, keyed by X-Request-ID.
+// Bounded to TRACES_MAX entries (oldest dropped) so the panel stays bounded.
+const TRACES_MAX = 50;
+const traces = [];   // newest-first; each = {rid, message, startedAt, status, agents:Set, events:[]}
+
+function recordTraceStart(rid, message) {
+  const trace = {
+    rid,
+    message,
+    startedAt: new Date(),
+    status: "in-flight",
+    agents: new Set(),
+    events: [{ at: new Date(), type: "chat_request", summary: `len=${message.length}` }],
+  };
+  traces.unshift(trace);
+  while (traces.length > TRACES_MAX) traces.pop();
+  renderTracePanel();
+}
+
+function recordTraceEvent(rid, type, summary, opts = {}) {
+  if (!rid) return;
+  const trace = traces.find((t) => t.rid === rid);
+  if (!trace) return;
+  trace.events.push({ at: new Date(), type, summary });
+  if (opts.agentId) trace.agents.add(opts.agentId);
+  if (opts.status) trace.status = opts.status;
+  renderTracePanel();
+}
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 let sessionId = null;          // from /auth/exchange response
@@ -171,6 +208,7 @@ let sseRetryCount = 0;
 const SSE_MAX_RETRIES = 3;
 let requestInFlight = false;   // true while a chat request is live
 let pendingUserMessage = null; // saved for Retry / Re-approve
+let pendingRequestId = null;   // X-Request-ID for the in-flight chat call
 let cibaState = null;          // current widget state object
 
 // cibaState shape:
@@ -282,6 +320,12 @@ function wireStaticUI() {
     });
   });
 
+  // Trace panel toggle
+  const traceBtn = $("trace-toggle-btn");
+  if (traceBtn) traceBtn.addEventListener("click", toggleTracePanel);
+  const traceClose = $("trace-panel-close");
+  if (traceClose) traceClose.addEventListener("click", () => setTracePanelOpen(false));
+
   // Consent widget buttons
   $("cw-approve-btn").addEventListener("click", onApproveClick);
   $("cw-deny-btn").addEventListener("click", onDenyClick);
@@ -311,9 +355,11 @@ async function completeLogin(code, state) {
   // POSTs /auth/exchange. But per the contract we also support direct SPA callback.
   // We POST /auth/exchange with {code, state}. The orchestrator holds the verifier.
   try {
+    const exchangeRid = (crypto.randomUUID && crypto.randomUUID()) ||
+                        (Date.now().toString(16) + "-" + Math.random().toString(16).slice(2));
     const resp = await fetch("/auth/exchange", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Request-ID": exchangeRid },
       credentials: "include",
       body: JSON.stringify({ code, state }),
     });
@@ -344,7 +390,7 @@ async function completeLogin(code, state) {
     connectSse(sessionId);
 
   } catch (e) {
-    console.error("[auth] completeLogin error:", e);
+    logErr("[auth]", "completeLogin error:", e);
     window.history.replaceState({}, "", "/");
     showSigninPage();
     showSigninError(COPY.stateMismatch, true);
@@ -432,13 +478,14 @@ function connectSse(sid) {
     try {
       event = JSON.parse(e.data);
     } catch (err) {
-      console.warn("[sse] could not parse event:", e.data);
+      logWarn("[sse]", "could not parse event:", e.data);
       return;
     }
     handleSseEvent(event);
   };
 
   sseSource.onerror = () => {
+    logWarn("[sse]", "error event", { retry: sseRetryCount });
     setConnStatus("reconnecting");
     toast(COPY.toastConnLost, "warn", 0); // persist until reconnected
 
@@ -500,7 +547,7 @@ function handleSseEvent(event) {
       break;
 
     default:
-      console.log("[sse] unknown event type:", type, event);
+      log("[sse]", "unknown event type:", type, event);
   }
 }
 
@@ -509,6 +556,9 @@ function handleSseEvent(event) {
 function onRoutingEvent(event) {
   routingCount++;
   const label = event.agent_label || agentLabel(event.agent_id);
+  recordTraceEvent(event.request_id, "routing", `→ ${label}`, {
+    agentId: event.agent_id,
+  });
 
   let text;
   if (routingCount === 1) {
@@ -552,6 +602,16 @@ function onCibaUrlEvent(event) {
     prior_consent_at: priorConsentAt,
   } = event;
 
+  log("[ciba]", "ciba_url received", {
+    rid: requestId,
+    agentId,
+    expiresIn,
+    bindingCode: bindingCode ? bindingCode.slice(0, 8) : null,
+  });
+  recordTraceEvent(requestId || pendingRequestId, "ciba_url", `${agentId} expires=${expiresIn}s`, {
+    agentId,
+  });
+
   const label = agentLabelRaw || agentLabel(agentId);
   const actionText = scopeToAction(scope);
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
@@ -590,6 +650,9 @@ function onCibaStateChangeEvent(event) {
 
   const newState = event.state;
   cibaState.widgetState = newState;
+  recordTraceEvent(event.request_id || pendingRequestId, "ciba_state", `${cibaState.agentId}: ${newState}`, {
+    agentId: cibaState.agentId,
+  });
 
   switch (newState) {
     case "VERIFYING":
@@ -611,7 +674,7 @@ function onCibaStateChangeEvent(event) {
       transitionWidgetToError(event);
       break;
     default:
-      console.warn("[widget] unknown ciba_state_change state:", newState);
+      logWarn("[widget]", "unknown ciba_state_change state:", newState);
   }
 }
 
@@ -620,6 +683,9 @@ function onCibaStateChangeEvent(event) {
 function onChatMessageEvent(event) {
   hideRoutingLine();
   appendAssistantMessage(event.content);
+  recordTraceEvent(event.request_id || pendingRequestId, "chat_message", "assistant reply", {
+    status: "done",
+  });
   requestInFlight = false;
   routingCount = 0;
   setComposerEnabled(true);
@@ -630,6 +696,9 @@ function onChatMessageEvent(event) {
 function onSseErrorEvent(event) {
   const code = event.code || "";
   const message = event.message || "Something went wrong handling your request.";
+  recordTraceEvent(event.request_id || pendingRequestId, "error", `${code || "ERR"}: ${message}`, {
+    status: "error",
+  });
 
   if (code.startsWith("ERR-AUTH-")) {
     // Session-level auth error — redirect to sign-in
@@ -895,6 +964,10 @@ function transitionWidgetToError(event) {
 
 function onApproveClick() {
   if (!cibaState) return;
+  log("[ciba]", "approve clicked, opening auth_url", {
+    rid: cibaState.requestId,
+    agentId: cibaState.agentId,
+  });
   // Open IS consent URL in a new tab
   window.open(cibaState.authUrl, "_blank", "noopener,noreferrer");
   // Transition to VERIFYING visually — actual confirmation comes via SSE
@@ -941,7 +1014,7 @@ async function cancelCiba() {
       body: JSON.stringify({ auth_req_id: authReqId }),
     });
   } catch (e) {
-    console.error("[ciba] cancel failed:", e);
+    logErr("[ciba]", "cancel failed:", e);
   }
 }
 
@@ -1008,10 +1081,19 @@ async function sendMessage(text) {
   routingCount = 0;
   setComposerEnabled(false);
 
+  // Generate the X-Request-ID at the user-action boundary so the audit trail
+  // originates one hop earlier than the orchestrator. The middleware accepts
+  // and echoes it; if absent it auto-generates with WARN.
+  const rid = (crypto.randomUUID && crypto.randomUUID()) ||
+              (Date.now().toString(16) + "-" + Math.random().toString(16).slice(2));
+  pendingRequestId = rid;
+  log("[chat]", "send", { rid, len: text.length });
+  recordTraceStart(rid, text);
+
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Request-ID": rid },
       credentials: "include",
       body: JSON.stringify({ message: text }),
     });
@@ -1034,7 +1116,7 @@ async function sendMessage(text) {
     // Ack received — full response comes via SSE
 
   } catch (e) {
-    console.error("[chat] sendMessage error:", e);
+    logErr("[chat]", "sendMessage error:", e);
     appendErrorMessage("Something went wrong handling your request.");
     requestInFlight = false;
     setComposerEnabled(true);
@@ -1207,7 +1289,7 @@ function scopeToAction(scopeStr) {
   for (const s of scopes) {
     if (SCOPE_ACTION_MAP[s]) return SCOPE_ACTION_MAP[s];
   }
-  console.warn("[widget] unmapped scope:", scopeStr);
+  logWarn("[widget]", "unmapped scope:", scopeStr);
   return "Perform an action on your behalf";
 }
 
@@ -1233,6 +1315,84 @@ function humanizeDuration(seconds) {
     return h + " hours";
   }
   return "over a day";
+}
+
+// ─── Trace panel rendering ───────────────────────────────────────────────────
+
+function setTracePanelOpen(open) {
+  const panel = $("trace-panel");
+  if (!panel) return;
+  panel.hidden = !open;
+  const btn = $("trace-toggle-btn");
+  if (btn) btn.setAttribute("aria-expanded", String(open));
+  if (open) renderTracePanel();
+}
+
+function toggleTracePanel() {
+  const panel = $("trace-panel");
+  if (!panel) return;
+  setTracePanelOpen(panel.hidden);
+}
+
+function renderTracePanel() {
+  const list = $("trace-list");
+  const badge = $("trace-toggle-count");
+  if (badge) badge.textContent = String(traces.length);
+  if (!list || $("trace-panel").hidden) return;
+
+  if (!traces.length) {
+    list.innerHTML = '<p class="trace-empty">No requests yet. Send a message to see its trace.</p>';
+    return;
+  }
+
+  const fmtClock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const fmtDelta = (a, b) => {
+    const ms = b - a;
+    if (ms < 1000) return `+${ms}ms`;
+    return `+${(ms / 1000).toFixed(2)}s`;
+  };
+
+  const html = traces.map((t) => {
+    const ridShort = t.rid.slice(0, 8);
+    const agents = Array.from(t.agents).join(", ") || "—";
+    const evRows = t.events.map((e, i) => {
+      const delta = i === 0 ? "" : fmtDelta(t.events[0].at, e.at);
+      return `<tr><td class="te-time">${fmtClock(e.at)}</td><td class="te-delta">${delta}</td><td class="te-type">${e.type}</td><td class="te-summary">${escapeHtml(e.summary)}</td></tr>`;
+    }).join("");
+    const statusClass = t.status === "done" ? "ok" : t.status === "error" ? "err" : "live";
+    return `
+      <details class="trace-row" ${t.status === "in-flight" ? "open" : ""}>
+        <summary>
+          <span class="trace-status trace-status-${statusClass}" aria-label="status: ${t.status}"></span>
+          <code class="trace-rid" title="${t.rid}">${ridShort}</code>
+          <span class="trace-msg">${escapeHtml(t.message)}</span>
+          <span class="trace-meta">${agents} · ${fmtClock(t.startedAt)}</span>
+          <button class="trace-copy" data-rid="${t.rid}" title="Copy full request id">copy rid</button>
+        </summary>
+        <table class="trace-events"><tbody>${evRows}</tbody></table>
+      </details>
+    `;
+  }).join("");
+
+  list.innerHTML = html;
+
+  list.querySelectorAll(".trace-copy").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rid = btn.dataset.rid;
+      navigator.clipboard?.writeText(rid).then(
+        () => { btn.textContent = "copied"; setTimeout(() => { btn.textContent = "copy rid"; }, 1200); },
+        () => { btn.textContent = "copy failed"; }
+      );
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────

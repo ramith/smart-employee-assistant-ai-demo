@@ -59,9 +59,26 @@
         </div>
         <!-- User identity + sign-out -->
         <span class="user-display" id="user-display-name"></span>
+        <button
+          class="btn-ghost btn-sm trace-toggle"
+          id="trace-toggle-btn"
+          aria-expanded="false"
+          aria-controls="trace-panel"
+          title="Show audit trace panel — see every request_id and the SSE timeline of its trip through orchestrator → agents → MCP servers"
+        >Trace<span class="trace-toggle-count" id="trace-toggle-count">0</span></button>
         <button class="btn-ghost btn-sm" id="signout-btn">Sign out</button>
       </div>
     </header>
+
+    <!-- ── Trace panel (in-app debug view of X-Request-ID timeline) ─────── -->
+    <aside id="trace-panel" class="trace-panel" hidden role="region" aria-label="Audit trace panel">
+      <div class="trace-header">
+        <span class="trace-title">Audit traces</span>
+        <span class="trace-help">Each row = one chat request. Expand for the SSE event timeline — keyed by <code>X-Request-ID</code>. Run <code>./scripts/grep-trace.sh &lt;rid&gt;</code> to see the matching server-side log lines across all 5 services.</span>
+        <button class="btn-ghost btn-sm" id="trace-panel-close" aria-label="Close trace panel">Close</button>
+      </div>
+      <div id="trace-list" class="trace-list"></div>
+    </aside>
 
     <!-- Sign-out confirmation dialog (non-modal, inline) -->
     <div id="signout-dialog" class="signout-dialog" hidden role="dialog" aria-labelledby="signout-dialog-title">
