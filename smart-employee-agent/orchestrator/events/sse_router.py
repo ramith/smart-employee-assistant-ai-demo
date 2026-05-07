@@ -38,12 +38,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Awaitable, Callable
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from common.logging.correlation import get_request_id
-from orchestrator.auth.session_store import SessionStore
+from orchestrator.auth.session_store import Session, SessionStore
 from orchestrator.events.sse import SessionReadyEvent, SseChannel
 
 logger = logging.getLogger(__name__)
@@ -61,10 +62,17 @@ class SseRouterDeps:
         session_store: The orchestrator's in-memory session store.
         keepalive_seconds: Interval between keep-alive comment emissions on
             idle streams.  Defaults to 15 s.
+        on_disconnect: Optional async hook called when the SSE stream ends
+            (browser-closed or natural completion). Receives the session and
+            is expected to fan out cancel signals to any in-flight CIBA flows
+            so they don't keep polling against IS for a user that is no
+            longer listening (UC-05 / D2.2). Idempotent — may be called for
+            sessions whose pending_ciba is already empty.
     """
 
     session_store: SessionStore
     keepalive_seconds: float = 15.0
+    on_disconnect: Callable[[Session], Awaitable[None]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -173,8 +181,31 @@ def build_sse_router(deps: SseRouterDeps) -> APIRouter:
             request_id,
         )
 
+        # Wrap channel.stream() so the disconnect callback fires whenever the
+        # generator terminates — natural close, client disconnect, or
+        # CancelledError. The wrapper's finally block runs in the same task
+        # context so async hooks (e.g. A2A cancel fan-out) can complete.
+        async def _stream_with_cleanup():  # type: ignore[no-untyped-def]
+            try:
+                async for chunk in channel.stream(
+                    keepalive_seconds=deps.keepalive_seconds
+                ):
+                    yield chunk
+            finally:
+                if deps.on_disconnect is not None:
+                    try:
+                        await deps.on_disconnect(session)
+                    except Exception:  # noqa: BLE001
+                        # Cleanup hook must never propagate — log and move on.
+                        logger.exception(
+                            "[SSE] on_disconnect hook raised "
+                            "session_id=%s request_id=%s",
+                            session_id,
+                            request_id,
+                        )
+
         return StreamingResponse(
-            channel.stream(keepalive_seconds=deps.keepalive_seconds),
+            _stream_with_cleanup(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

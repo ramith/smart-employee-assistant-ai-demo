@@ -374,9 +374,44 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
     )
 
     # ── SSE router ────────────────────────────────────────────────────────────
+    # On SSE disconnect (browser-closed / network drop), cancel any in-flight
+    # CIBA flows for that session so the specialist stops polling IS for a
+    # user that is no longer listening (UC-05 / D2.2). Cancellation is
+    # best-effort; A2A failures are swallowed inside the helper.
+    async def _cancel_pending_ciba_for_session(session) -> None:  # type: ignore[no-untyped-def]
+        from orchestrator.auth.session_store import Session as _S  # local import keeps top-level lean
+        sess: _S = session
+        if not sess.pending_ciba:
+            return
+        # Snapshot so we don't mutate while iterating.
+        items = list(sess.pending_ciba.items())
+        logger.info(
+            "sse_disconnect_cancel | session_id=%s pending=%d",
+            sess.session_id,
+            len(items),
+        )
+        for auth_req_id, pending in items:
+            client = a2a_clients.get(pending.agent_id)
+            if client is not None:
+                try:
+                    await client.cancel(sess.token_a.access_token, auth_req_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "sse_disconnect_cancel | a2a_cancel_failed "
+                        "agent_id=%s auth_req_id=%s error=%r",
+                        pending.agent_id,
+                        auth_req_id,
+                        exc,
+                    )
+            pending.cancel_event.set()
+            pending.status = "cancelled"
+
     app.include_router(
         build_sse_router(
-            SseRouterDeps(session_store=session_store)
+            SseRouterDeps(
+                session_store=session_store,
+                on_disconnect=_cancel_pending_ciba_for_session,
+            )
         )
     )
 

@@ -560,3 +560,82 @@ async def test_disconnect_mid_stream_no_error() -> None:
 
     # Nothing should have been collected (queue was empty and keepalive is 60 s).
     assert collected == []
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2B.2 — D2.2 browser-closed: on_disconnect callback fires when the
+# SSE stream terminates (UC-05 cleanup hook)
+# ---------------------------------------------------------------------------
+
+
+def test_on_disconnect_callback_fires_when_stream_ends() -> None:
+    """When the SSE stream terminates the SseRouterDeps.on_disconnect hook
+    must run with the active session as its argument.
+
+    A test client's `with client.stream(...)` context manager closes the
+    response cleanly when it exits, which propagates the cancel through
+    the wrapped generator's finally block.
+    """
+    session = _FakeSession(session_id=_SESSION_ID, user_label=_USER_LABEL)
+    store = _make_fake_store(session)
+
+    captured: list[object] = []
+
+    async def _on_disconnect(s: object) -> None:
+        captured.append(s)
+
+    app = FastAPI()
+    deps = SseRouterDeps(
+        session_store=store,
+        keepalive_seconds=60.0,
+        on_disconnect=_on_disconnect,
+    )
+    app.include_router(build_sse_router(deps))
+
+    # Pre-load the close sentinel so stream() exits cleanly without waiting.
+    session.sse_queue.put_nowait(None)
+
+    client = TestClient(app)
+    with client.stream(
+        "GET",
+        f"/events/{_SESSION_ID}",
+        cookies={"orch_sid": _SESSION_ID},
+    ) as resp:
+        assert resp.status_code == 200
+        # Drain the response so the generator completes naturally.
+        for _ in resp.iter_bytes():
+            pass
+
+    # The hook fired exactly once with the same session object.
+    assert len(captured) == 1
+    assert captured[0] is session
+
+
+def test_on_disconnect_hook_exception_does_not_propagate() -> None:
+    """A failing on_disconnect must not break the SSE response."""
+    session = _FakeSession(session_id=_SESSION_ID, user_label=_USER_LABEL)
+    store = _make_fake_store(session)
+
+    async def _broken_on_disconnect(_s: object) -> None:
+        raise RuntimeError("boom")
+
+    app = FastAPI()
+    deps = SseRouterDeps(
+        session_store=store,
+        keepalive_seconds=60.0,
+        on_disconnect=_broken_on_disconnect,
+    )
+    app.include_router(build_sse_router(deps))
+
+    session.sse_queue.put_nowait(None)
+
+    client = TestClient(app)
+    with client.stream(
+        "GET",
+        f"/events/{_SESSION_ID}",
+        cookies={"orch_sid": _SESSION_ID},
+    ) as resp:
+        assert resp.status_code == 200
+        for _ in resp.iter_bytes():
+            pass
+    # Reaching here without an exception confirms the hook's error was swallowed.

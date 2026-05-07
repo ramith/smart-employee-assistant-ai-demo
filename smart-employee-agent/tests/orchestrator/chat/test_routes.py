@@ -859,3 +859,38 @@ def test_chat_mid_flow_denial_includes_agent_label_in_copy() -> None:
     # IT denial fragment must name IT Agent and include "declined".
     assert "IT Agent" in content
     assert "declined" in content.lower()
+
+
+def test_chat_auth_req_id_expiry_emits_expired_state_and_friendly_copy() -> None:
+    """auth_req_id expired before approval (ERR-CIBA-009) →
+    CibaStateChangeEvent with state=EXPIRED is published and the final
+    ChatMessage uses the agent-aware timeout copy (D2.3 / UC-05 N20)."""
+    consent = _consent_payload("auth-req-expire", "https://is.example.com/x")
+    expired_err = _error_payload("ERR-CIBA-009")
+
+    hr_client = MagicMock()
+    hr_client.message_send = AsyncMock(return_value=consent)
+    hr_client.await_completion = AsyncMock(return_value=expired_err)
+
+    tool_calls = [ToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={})]
+    app, session = _build_app(tool_calls=tool_calls, hr_a2a_client=hr_client)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "leave"},
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+
+    events = _drain_queue(session)
+
+    state_events = [e for e in events if isinstance(e, CibaStateChangeEvent)]
+    states = {e.state for e in state_events}
+    assert "EXPIRED" in states
+
+    chat_events = [e for e in events if isinstance(e, ChatMessageEvent)]
+    assert len(chat_events) == 1
+    content = chat_events[0].content
+    assert "HR Agent" in content
+    assert "timed out" in content.lower()
