@@ -97,11 +97,6 @@
         <div id="empty-state" class="empty-state">
           <h2 class="empty-heading">What can I help you with?</h2>
           <p class="empty-body">I can check your leave balance, look up available equipment, and answer routine HR and IT questions. Each request will ask you to approve the agent that handles it.</p>
-          <div class="example-chips">
-            <button class="chip" data-msg="What is my leave balance?">What is my leave balance?</button>
-            <button class="chip" data-msg="What laptops are available?">What laptops are available?</button>
-            <button class="chip" data-msg="Show me my leave balance and what laptops are available.">Show me my leave balance and what laptops are available.</button>
-          </div>
         </div>
 
         <!-- Routing status line (transient, replaced by events) -->
@@ -194,6 +189,12 @@
 
       <!-- ── Composer ─────────────────────────────────────────────────── -->
       <div class="composer-wrap">
+        <!-- Persistent demo prompts; always visible to make demo flow obvious. -->
+        <div class="example-chips example-chips-docked" aria-label="Sample questions">
+          <button class="chip" data-msg="What is my leave balance?">What is my leave balance?</button>
+          <button class="chip" data-msg="What laptops are available?">What laptops are available?</button>
+          <button class="chip" data-msg="Show me my leave balance and what laptops are available.">Show me my leave balance and what laptops are available.</button>
+        </div>
         <form id="chat-form" class="composer" autocomplete="off">
           <textarea
             id="msg-input"

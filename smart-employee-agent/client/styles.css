@@ -397,6 +397,13 @@ textarea, input {
   justify-content: center;
 }
 
+.example-chips-docked {
+  justify-content: flex-start;
+  padding: 0.5rem 0 0.75rem;
+  margin: 0 auto;
+  max-width: var(--composer-max-w, 760px);
+}
+
 .chip {
   background: var(--surface);
   border: 1px solid var(--border);
