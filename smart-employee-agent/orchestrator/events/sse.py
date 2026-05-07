@@ -51,12 +51,20 @@ class RoutingEvent(BaseModel):
 
     Allows the SPA to show a "Routing to HR Agent…" indicator before the consent
     widget appears.  ``request_id`` ties back to the originating ``POST /api/chat``.
+
+    ``tool_index`` is 0-based; ``total_tools`` is the count of routed agents
+    in this fan-out. Together they let the SPA render natural copy:
+        - 1 of 1 → "Routing to HR Agent…"
+        - 1 of 2 → "Routing to HR Agent first…"
+        - 2 of 2 → "Now routing to IT Agent…"
     """
 
     type: Literal["routing"] = "routing"
     request_id: str
     agent_id: str
     agent_label: str
+    tool_index: int = 0
+    total_tools: int = 1
 
 
 class CibaUrlEvent(BaseModel):

@@ -894,3 +894,86 @@ def test_chat_auth_req_id_expiry_emits_expired_state_and_friendly_copy() -> None
     content = chat_events[0].content
     assert "HR Agent" in content
     assert "timed out" in content.lower()
+
+
+def test_chat_all_deny_combined_chat_message_mentions_both_agents() -> None:
+    """N19: when both specialists in a fan-out are denied, the final chat
+    message contains both agent labels and the 'declined' phrasing for
+    each. (Spec EX-2 hinted at a single-line "all denied" copy; the
+    current behaviour is per-agent-line concatenation, which still
+    surfaces both denials clearly.)"""
+    hr_consent = _consent_payload("auth-req-hr", "https://is.example.com/hr")
+    hr_denial = _error_payload("ERR-CIBA-005")
+    it_consent = _consent_payload("auth-req-it", "https://is.example.com/it")
+    it_denial = _error_payload("ERR-CIBA-005")
+
+    hr_client = MagicMock()
+    hr_client.message_send = AsyncMock(return_value=hr_consent)
+    hr_client.await_completion = AsyncMock(return_value=hr_denial)
+
+    it_client = MagicMock()
+    it_client.message_send = AsyncMock(return_value=it_consent)
+    it_client.await_completion = AsyncMock(return_value=it_denial)
+
+    tool_calls = [
+        ToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={}),
+        ToolCall(agent_id="it_agent", tool_id="it.list_available_assets", args={}),
+    ]
+    app, session = _build_app(
+        tool_calls=tool_calls,
+        hr_a2a_client=hr_client,
+        it_a2a_client=it_client,
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "leave and laptops"},
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+
+    events = _drain_queue(session)
+
+    # Both routing events emitted with total_tools=2 and increasing tool_index.
+    routing = [e for e in events if isinstance(e, RoutingEvent)]
+    assert [r.total_tools for r in routing] == [2, 2]
+    assert [r.tool_index for r in routing] == [0, 1]
+
+    # Both DENIED state events emitted.
+    state_events = [e for e in events if isinstance(e, CibaStateChangeEvent)]
+    denied_states = [e for e in state_events if e.state == "DENIED"]
+    assert len(denied_states) == 2
+
+    # Final chat message names both agents and contains "declined" twice.
+    chat_events = [e for e in events if isinstance(e, ChatMessageEvent)]
+    assert len(chat_events) == 1
+    content = chat_events[0].content
+    assert "HR Agent" in content
+    assert "IT Agent" in content
+    assert content.lower().count("declined") >= 2
+
+
+def test_chat_routing_event_carries_total_tools_metadata() -> None:
+    """A-3: single-tool fan-out gets total_tools=1; SPA can pick the
+    "Routing to X…" copy without guessing."""
+    hr_result = _result_payload({"leave_days": 7})
+    hr_client = MagicMock()
+    hr_client.message_send = AsyncMock(return_value=hr_result)
+
+    tool_calls = [ToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={})]
+    app, session = _build_app(tool_calls=tool_calls, hr_a2a_client=hr_client)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "leave"},
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+
+    events = _drain_queue(session)
+    routing = [e for e in events if isinstance(e, RoutingEvent)]
+    assert len(routing) == 1
+    assert routing[0].total_tools == 1
+    assert routing[0].tool_index == 0

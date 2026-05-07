@@ -560,12 +560,16 @@ function onRoutingEvent(event) {
     agentId: event.agent_id,
   });
 
+  // A-3: orchestrator tells us the total fan-out size and our 0-based
+  // index, so the SPA can pick natural copy without having to guess on
+  // the first event.
+  const totalTools = Number.isInteger(event.total_tools) ? event.total_tools : 1;
+  const toolIndex = Number.isInteger(event.tool_index) ? event.tool_index : 0;
   let text;
-  if (routingCount === 1) {
-    // Could be single or first-of-two; use single format by default.
-    // Orchestrator can distinguish with a flag — we use "first" only if
-    // we later see a second routing event. For now use single.
+  if (totalTools <= 1) {
     text = COPY.routingSingle.replace("{agent_label}", label);
+  } else if (toolIndex === 0) {
+    text = COPY.routingFirst.replace("{agent_label}", label);
   } else {
     text = COPY.routingSecond.replace("{agent_label}", label);
   }

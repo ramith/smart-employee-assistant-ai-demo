@@ -273,8 +273,9 @@ async def _run_serial_fan_out(
     """
     channel = SseChannel(session.sse_queue)
     per_tool_outputs: list[str] = []
+    total_tools = len(tool_calls)
 
-    for tool_call in tool_calls:
+    for tool_index, tool_call in enumerate(tool_calls):
         agent_id = tool_call.agent_id
 
         # --- Resolve agent card ---
@@ -305,6 +306,8 @@ async def _run_serial_fan_out(
                 request_id=request_id,
                 agent_id=agent_id,
                 agent_label=agent_label,
+                tool_index=tool_index,
+                total_tools=total_tools,
             )
         )
 
