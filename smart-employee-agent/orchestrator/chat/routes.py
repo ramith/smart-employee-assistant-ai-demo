@@ -543,6 +543,13 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
                 lines.append(f"  • {a}")
         return "\n".join(lines)
 
+    if tool_id == "it.issue_asset":
+        asset_id = data.get("asset_id", "?")
+        employee_id = data.get("employee_id", "?")
+        issued_at = data.get("issued_at", "")
+        date_clause = f" on {issued_at[:10]}" if issued_at else ""
+        return f"Asset {asset_id} issued to {employee_id}{date_clause}."
+
     # Generic fallback for any future tool not yet in the switch above.
     pairs = ", ".join(f"{k}: {v}" for k, v in data.items())
     return f"{agent_label} returned: {pairs}."

@@ -11,15 +11,22 @@
       "id": "it.list_available_assets",
       "name": "List available assets",
       "description": "Return the list of IT assets available for allocation.",
-      "scope": "it_read_a2a",
-      "required_scopes": ["it_read_a2a"]
+      "scope": "it_assets_read_rest",
+      "required_scopes": ["it_assets_read_rest"]
     },
     {
-      "id": "it.request_asset",
-      "name": "Request an asset",
-      "description": "Submit a request to allocate a specific IT asset to the user.",
-      "scope": "it_write_a2a",
-      "required_scopes": ["it_write_a2a"]
+      "id": "it.get_my_assets",
+      "name": "Get my assigned assets",
+      "description": "Return assets currently assigned to the authenticated user.",
+      "scope": "it_assets_read_rest",
+      "required_scopes": ["it_assets_read_rest"]
+    },
+    {
+      "id": "it.issue_asset",
+      "name": "Issue an asset to an employee",
+      "description": "Assign a catalogued IT asset to an employee (HR Admin only).",
+      "scope": "it_assets_write_rest",
+      "required_scopes": ["it_assets_write_rest"]
     }
   ],
   "capabilities": {
@@ -28,7 +35,7 @@
   },
   "auth": {
     "scheme": "oauth2",
-    "issuer": "https://api.asgardeo.io/t/ddademo/oauth2/token",
+    "issuer": "https://13.60.190.47:9443/oauth2/token",
     "audience": "https://it.smart-employee.local"
   }
 }

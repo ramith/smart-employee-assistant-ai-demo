@@ -484,3 +484,66 @@ async def test_get_my_assets_explicit_employee_id(rsa_keypair, sign_token, it_re
     assert data["employee_id"] == "user-uuid-abc123"
     assert len(data["assets"]) == 1
     assert data["assets"][0]["asset_id"] == "MBP-16-002"
+
+
+# ---------------------------------------------------------------------------
+# T-IT-MCP-11: issue_asset write tool — Sprint 2A.2 / D2.8 / N33
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def it_write_payload() -> dict[str, Any]:
+    """Valid JWT payload with it_assets_write_rest scope (HR Admin write path)."""
+    now = int(time.time())
+    return {
+        "iss": ISSUER,
+        "sub": SUBJECT,
+        "aud": IT_AGENT_CLIENT_ID,
+        "exp": now + 300,
+        "iat": now,
+        "jti": JTI + "-w",
+        "scope": "openid it_assets_write_rest",
+        "act": {"sub": IT_AGENT_UUID},
+    }
+
+
+@pytest.mark.asyncio
+async def test_issue_asset_valid_write_token(rsa_keypair, sign_token, it_write_payload):
+    """T-IT-MCP-11: Token with it_assets_write_rest issues an asset successfully."""
+    _, public_jwk = rsa_keypair
+    token = sign_token(it_write_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/issue_asset",
+        json={"asset_id": "MBP-14-001", "employee_id": "user-uuid-abc123"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["asset_id"] == "MBP-14-001"
+    assert data["employee_id"] == "user-uuid-abc123"
+    assert data["issued_by"] == IT_AGENT_UUID  # act.sub
+    assert "issued_at" in data
+
+
+@pytest.mark.asyncio
+async def test_issue_asset_read_token_rejected(rsa_keypair, sign_token, it_read_payload):
+    """T-IT-MCP-12: Token with only it_assets_read_rest cannot issue assets."""
+    _, public_jwk = rsa_keypair
+    token = sign_token(it_read_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/issue_asset",
+        json={"asset_id": "MBP-14-001", "employee_id": "user-uuid-abc123"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+
+    assert resp.status_code == 401
+    body = resp.json()
+    detail = body.get("detail", body)
+    assert detail["error_id"] == "ERR-MCP-003"

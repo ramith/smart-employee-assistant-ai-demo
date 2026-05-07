@@ -62,6 +62,15 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         lambda args: {"employee_id": args.get("employee_id")},
         None,
     ),
+    "it.issue_asset": (
+        "Issue an IT asset to an employee",
+        "issue_asset",
+        lambda args: {
+            "asset_id": args.get("asset_id", "MBP-14-001"),
+            "employee_id": args.get("employee_id", "default"),
+        },
+        "openid it_assets_write_rest",
+    ),
 }
 
 

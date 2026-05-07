@@ -104,6 +104,11 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         tool_id="hr.approve_leave",
     ),
     KeywordRule(
+        keywords=("issue", "assign", "give"),
+        agent_id="it_agent",
+        tool_id="it.issue_asset",
+    ),
+    KeywordRule(
         keywords=("leave", "vacation", "time off", "pto"),
         agent_id="hr_agent",
         tool_id="hr.read_balance",
@@ -119,21 +124,44 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
 Rule 0 — HR approve (HR Admin write path; D2.7)
     Keywords ``approve``, ``approval`` → ``hr_agent / hr.approve_leave``.
 
-Rule 1 — HR leave read
+Rule 1 — IT issue (HR Admin write path; D2.8)
+    Keywords ``issue``, ``assign``, ``give`` → ``it_agent / it.issue_asset``.
+
+Rule 2 — HR leave read
     Keywords ``leave``, ``vacation``, ``time off``, ``pto`` → ``hr_agent /
     hr.read_balance``.
 
-Rule 2 — IT assets read
+Rule 3 — IT assets read
     Keywords ``laptop``, ``asset``, ``equipment``, ``hardware``, ``computer``
     → ``it_agent / it.list_available_assets``.
-
-The ``it.issue_asset`` rule is added in Sprint 2A.2 once the MCP tool is built.
 """
 
 
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
+
+
+_LEAVE_ID_RE = re.compile(r"\bLV-\d+\b", re.IGNORECASE)
+_ASSET_ID_RE = re.compile(r"\b[A-Z]{2,4}-[A-Z0-9]+-\d+\b", re.IGNORECASE)
+
+
+def _extract_inline_args(tool_id: str, message: str) -> dict:
+    """Extract simple inline arguments from the user message.
+
+    Scope is intentionally narrow — only ``leave_id`` for ``hr.approve_leave``
+    and ``asset_id`` for ``it.issue_asset``. Anything else falls through to
+    the dispatcher's default-arg handling.
+    """
+    if tool_id == "hr.approve_leave":
+        match = _LEAVE_ID_RE.search(message)
+        if match:
+            return {"leave_id": match.group(0).upper()}
+    if tool_id == "it.issue_asset":
+        match = _ASSET_ID_RE.search(message)
+        if match:
+            return {"asset_id": match.group(0).upper()}
+    return {}
 
 
 def _compile_patterns(keywords: Sequence[str]) -> list[re.Pattern[str]]:
@@ -222,6 +250,10 @@ class KeywordRouter:
         (e.g. ``leave``) so "approve my leave" routes to ``hr.approve_leave``
         only, not also to ``hr.read_balance``.
 
+        For tools that need parameters (e.g. ``hr.approve_leave`` needs
+        ``leave_id``), this method extracts simple inline patterns from the
+        message and merges them with ``rule.args``.
+
         Args:
             user_message: Raw user input string.
 
@@ -235,11 +267,13 @@ class KeywordRouter:
             if rule.agent_id in seen_agents:
                 continue
             if self._rule_matches(idx, user_message):
+                merged_args = dict(rule.args)
+                merged_args.update(_extract_inline_args(rule.tool_id, user_message))
                 result.append(
                     ToolCall(
                         agent_id=rule.agent_id,
                         tool_id=rule.tool_id,
-                        args=rule.args,
+                        args=merged_args,
                     )
                 )
                 seen_agents.add(rule.agent_id)

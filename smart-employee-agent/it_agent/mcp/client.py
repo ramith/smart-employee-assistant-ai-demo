@@ -226,6 +226,40 @@ class ITMcpClient:
             body=body,
         )
 
+    async def issue_asset(
+        self,
+        *,
+        token_b: OAuthToken,
+        asset_id: str,
+        employee_id: str,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST {base_url}/mcp/tools/issue_asset`` with Bearer token-B.
+
+        Required scope on token-B: ``it_assets_write_rest`` (HR Admin only;
+        enforced by it_server). D2.8 / N33 acceptance.
+
+        Args:
+            token_b: The user-OBO token (HR Admin's, with `act.sub` = it_agent).
+            asset_id: Catalogue asset_id to assign, e.g. ``"MBP-14-001"``.
+            employee_id: Target employee sub.
+            request_id: Optional ``X-Request-ID`` propagation override.
+
+        Returns:
+            Tool result body, e.g.
+            ``{"asset_id": "MBP-14-001", "employee_id": "...",
+               "issued_by": "<agent UUID>", "issued_at": "<ISO-8601>"}``.
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx response.
+        """
+        return await self._post(
+            "/mcp/tools/issue_asset",
+            token_b=token_b,
+            request_id=request_id,
+            body={"asset_id": asset_id, "employee_id": employee_id},
+        )
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def aclose(self) -> None:

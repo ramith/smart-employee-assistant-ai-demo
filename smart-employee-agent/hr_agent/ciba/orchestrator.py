@@ -83,7 +83,7 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
     "hr.approve_leave": (
         "Approve a leave request on your behalf",
         "approve_leave",
-        lambda args: {"leave_id": args["leave_id"]},
+        lambda args: {"leave_id": args.get("leave_id", "LV-004")},
         "openid hr_approve_rest",
     ),
 }

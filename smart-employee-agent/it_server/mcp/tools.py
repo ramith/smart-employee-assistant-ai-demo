@@ -50,6 +50,8 @@ __all__ = [
     "GetMyAssetsArgs",
     "AssignedAsset",
     "GetMyAssetsResult",
+    "IssueAssetArgs",
+    "IssueAssetResult",
 ]
 
 # ---------------------------------------------------------------------------
@@ -150,6 +152,26 @@ class GetMyAssetsResult(BaseModel):
 
     employee_id: str
     assets: list[AssignedAsset]
+
+
+class IssueAssetArgs(BaseModel):
+    """Request body for ``issue_asset`` (HR Admin write path; D2.8).
+
+    Assigns a catalogued asset to a target employee.  Requires
+    ``it_assets_write_rest`` (HR Admin role only) — N33 acceptance.
+    """
+
+    asset_id: str = Field(description="Catalogue asset_id, e.g. 'MBP-14-001'")
+    employee_id: str = Field(description="Target employee sub")
+
+
+class IssueAssetResult(BaseModel):
+    """Response for ``issue_asset``."""
+
+    asset_id: str
+    employee_id: str
+    issued_by: str  # act.sub of the token (the agent acting for HR Admin)
+    issued_at: str  # ISO-8601 datetime
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +337,54 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         return GetMyAssetsResult(
             employee_id=employee_id,
             assets=[AssignedAsset(**a) for a in raw_assets],
+        )
+
+    # ── issue_asset (HR Admin write path; D2.8) ────────────────────────────────
+
+    @router.post("/issue_asset", response_model=IssueAssetResult)
+    async def issue_asset(
+        body: IssueAssetArgs,
+        request: Request,
+    ) -> IssueAssetResult:
+        """Issue an asset to an employee.
+
+        Required scope: ``it_assets_write_rest``.  Sprint 1 used canned data;
+        this endpoint records the issuance in-memory only and returns success.
+        """
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+
+        try:
+            claims = await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"it_assets_write_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "issue_asset token validation failed error_id=%s rid=%s",
+                exc.error_id,
+                rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        from datetime import datetime, timezone
+
+        act_sub: str = (
+            claims.act.get("sub") if isinstance(claims.act, dict) else None
+        ) or claims.sub
+        return IssueAssetResult(
+            asset_id=body.asset_id,
+            employee_id=body.employee_id,
+            issued_by=act_sub,
+            issued_at=datetime.now(tz=timezone.utc).isoformat(),
         )
 
     return router
