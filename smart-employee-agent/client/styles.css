@@ -4,6 +4,10 @@
  * No build step. No preprocessor.
  */
 
+/* Force `hidden` attribute to win over ID-level `display:` rules below
+   (ID specificity beats UA stylesheet's [hidden] without !important). */
+[hidden] { display: none !important; }
+
 /* ── Design tokens ─────────────────────────────────────────────────────────── */
 
 :root {

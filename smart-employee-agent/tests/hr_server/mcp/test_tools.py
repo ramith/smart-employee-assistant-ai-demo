@@ -166,14 +166,14 @@ def hr_read_payload() -> dict[str, Any]:
         "exp": now + 300,
         "iat": now,
         "jti": JTI,
-        "scope": "openid hr.read",
+        "scope": "openid hr_self_rest",
         "act": {"sub": HR_AGENT_UUID},
     }
 
 
 @pytest.fixture
 def hr_write_payload() -> dict[str, Any]:
-    """Valid JWT payload with hr.write scope (for approve_leave)."""
+    """Valid JWT payload with hr_approve_rest scope (for approve_leave)."""
     now = int(time.time())
     return {
         "iss": ISSUER,
@@ -182,7 +182,7 @@ def hr_write_payload() -> dict[str, Any]:
         "exp": now + 300,
         "iat": now,
         "jti": JTI + "-w",
-        "scope": "openid hr.read hr.write",
+        "scope": "openid hr_self_rest hr_approve_rest",
         "act": {"sub": HR_AGENT_UUID},
     }
 

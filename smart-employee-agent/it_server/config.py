@@ -3,7 +3,7 @@
 Single source of truth for all environment variables consumed by it_server.
 Replaces the Sprint 0 module-level globals stub with a frozen dataclass per F-09.
 Structural mirror of ``hr_server/config.py`` with ``IT_`` prefixed variables and
-it-specific defaults (port 8004, it.read scope).
+it-specific defaults (port 8004, it_assets_read_rest scope).
 
 F-04: ``expected_aud`` is the IT-agent's OAuth Client ID; the validator enforces
 ``aud == expected_aud`` on every inbound token-B.
@@ -154,7 +154,7 @@ class ITServerConfig:
         # F-04 audience + trust
         expected_aud = _require(env, "IT_SERVER_EXPECTED_AUD")
         trusted_act_subs = _parse_frozenset(env.get("IT_SERVER_TRUSTED_PEER_AGENTS", ""))
-        required_scopes = _parse_frozenset(env.get("IT_SERVER_REQUIRED_SCOPES", "it.read"))
+        required_scopes = _parse_frozenset(env.get("IT_SERVER_REQUIRED_SCOPES", "it_assets_read_rest"))
 
         # CORS
         allowed_origins = _parse_frozenset(

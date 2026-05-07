@@ -20,7 +20,7 @@ User asks: *"What's my leave balance?"* — for the second time, more than 60 mi
 ## Main flow
 1. UC-02 main flow restarts. Orchestrator's LLM routes to HR Agent.
 2. HR Agent receives the A2A request, validates token-A (orchestrator's session token, still alive — it has its own 3600s TTL but assume it's been refreshed via a fresh login OR is still within window).
-3. HR Agent's session-state cache check: *"do I have a valid token-B for `(user_sub, hr.read scope set)`?"*
+3. HR Agent's session-state cache check: *"do I have a valid token-B for `(user_sub, hr_self_rest scope set)`?"*
 4. Cache lookup returns: token-B exists, but `exp < now`. **Expired.**
 5. HR Agent must mint a fresh OBO. This means a fresh CIBA flow.
 6. HR Agent calls `POST <IS>/oauth2/ciba` with the same shape as UC-02 step 7, but with a different `binding_message`:

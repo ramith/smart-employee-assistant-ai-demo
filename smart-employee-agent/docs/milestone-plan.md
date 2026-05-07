@@ -147,7 +147,7 @@ Same as HR flow with hr_agent → it_agent. **Serial:** orchestrator does HR ful
 - D1.4 — User clicks Approve; specialist receives OBO token within polling budget.
 - D1.5 — Specialist calls its MCP backend; MCP returns canned data; specialist returns A2A response.
 - D1.6 — Orchestrator's LLM renders user-facing answer.
-- D1.7 — Two-specialist serial demo query ("leave + laptops") works end-to-end.
+- D1.7 — Two-specialist serial demo query ("leave + laptops") works end-to-end. CIBA scopes use canonical 4-tier names (`hr_self_rest` for HR, `it_assets_read_rest` for IT). Wave 6 simplified `hr.read`/`it.read` strings must not appear in any CIBA initiation call by Sprint 1 close.
 
 **Tasks (in build order):**
 
@@ -184,6 +184,11 @@ Same as HR flow with hr_agent → it_agent. **Serial:** orchestrator does HR ful
 - D2.4 — Every log line at every hop has `X-Request-ID`. Manual `grep` reconstructs the user→orchestrator→hr→hr-mcp chain end-to-end.
 - D2.5 — Token expires mid-task (T+3600s) → next user request triggers re-CIBA, framed as "Re-authorizing HR Agent (your access expired)."
 - D2.6 — N-tests N18–N26 (council BA recommendations) all pass.
+- D2.7 — `hr.admin` can successfully invoke `approve_leave_request` via HR Agent; IS issues token with `scope=hr_approve_rest`; hr_server approves and returns `{success: true}`. **N32** passes.
+- D2.8 — `hr.admin` can successfully invoke `issue_asset` via IT Agent (UC-07); IS issues token with `scope=it_assets_write_rest`; it_server records assignment and returns `{success: true, asset_id}`. **N33** passes.
+- D2.9 — `probe.user` calling `approve_leave_request` or `issue_asset` is denied at IS (role check); ERR-CIBA-003 (or ERR-CIBA-005) emitted; user sees copy-deck §7.17 message; **no write-tier token ever appears in the IS audit log for `probe.user`**. **N30 + N31** pass.
+- D2.10 — All scope strings in CIBA initiation calls, MCP token validators, and test fixtures use the canonical 4-tier names (`hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`, `it_assets_read_rest`, `it_assets_write_rest`). A grep for `hr\.read|hr\.write|it\.read|it\.assign` returns zero hits in non-archived source files.
+- D2.11 — `ERR-MCP-003` (insufficient scope) is reachable and tested: a token-B with `scope=hr_self_rest` presented to `approve_leave_request` returns 401 with `ERR-MCP-003`. Verifies server-side scope guard is enforced even if IS's role check were bypassed by misconfiguration. **N34** passes.
 
 **Tasks:**
 
@@ -268,6 +273,12 @@ Numbering preserved from v3 where applicable. New tests N18+ added per BA + secu
 | N26 | Missing `X-Request-ID` on A2A request → specialist auto-generates + warns OR refuses (decide & enforce) | 2 |
 | N27 | **Consent fatigue under serial fan-out:** moderated 5-user usability bar — measure consent-read-time on widget #2 vs #1 to detect muscle-click. Acceptance: ≥80% of users pause on widget #2 (read or hover before clicking). | 2 |
 | N28 | **client_id collision detection (T9):** boot MCP server with deliberately-wrong `EXPECTED_AGENT_OAUTH_CLIENT_ID` env → all calls return 401 with clear log line "configured client_id does not match incoming token aud". | 1 |
+| N29 | **Token-expiry re-CIBA (UC-06):** set agent token TTL to 60s; run UC-02; wait 70s; resubmit — assert Session Refresh widget fires and new token-B' is issued with `scope=openid hr_self_rest`. | 2 |
+| N30 | **Role-denial — Employee → `hr_approve_rest` (UC-08):** `probe.user` triggers CIBA with `scope=openid hr_approve_rest`. IS must deny (`invalid_scope` at init OR `access_denied` at consent). Acceptance: `ERR-CIBA-003` emitted; hr_server never reached. | 2 |
+| N31 | **Role-denial — Employee → `it_assets_write_rest` (UC-08):** same pattern with `it_assets_write_rest`. Acceptance: `ERR-CIBA-003` emitted; it_server never reached. | 2 |
+| N32 | **HR Admin write happy path — `hr_approve_rest` (UC-07 sibling):** `hr.admin` asks "approve leave LR-001"; CIBA `scope=hr_approve_rest`; hr_server returns `{success:true}`. Acceptance: token has `act.sub=hr_agent`, scope contains `hr_approve_rest`. | 2 |
+| N33 | **HR Admin write happy path — `it_assets_write_rest` (UC-07):** `hr.admin` issues laptop; CIBA `scope=it_assets_write_rest`; it_server returns `{success:true, asset_id, assigned_to}`. | 2 |
+| N34 | **Cross-scope replay — write-scope token to wrong server:** capture token-C with `scope=it_assets_write_rest`; present to hr_server → 401 `ERR-MCP-001` (aud mismatch). Distinct from N21 because the scope tier adds a second layer of enforcement beyond aud. | 2 |
 | R1–R13 | Sprint 2 → moved to Sprint 3 (revocation tests) | 3 |
 | R14 | Pending CIBA at logout: user logs out while consent widget visible; subsequent Approve produces invalid token | 3 |
 | R15 | Half-fan-out logout: token-B revoked OK, token-C revoke fails → it_agent's introspect catches active=false | 3 |

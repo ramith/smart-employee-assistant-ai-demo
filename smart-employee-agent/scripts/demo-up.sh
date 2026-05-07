@@ -28,8 +28,9 @@ python3 scripts/demo-smoke.py --skip-chat-test
 
 echo
 echo "==> All services up."
-echo "    Browser:  http://localhost:3001"
-echo "    Sign in:  probe.user / NewsMax@1234"
+echo "    Browser:  http://localhost:8090"
+echo "    Sign in:  employee_user / NewsMax@1234   (Employee role)"
+echo "              hr_admin_user / NewsMax@1234  (HR Admin role — UC-07 asset issue)"
 echo
 echo "    Demo query: \"Show me my leave balance and what laptops are available\""
 echo "    Tip:  LLM_FALLBACK_MODE=keyword is on — demo works without Gemini."

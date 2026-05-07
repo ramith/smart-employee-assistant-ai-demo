@@ -1,6 +1,6 @@
 {
   "schema_version": "v3-custom",
-  "id": "it-agent",
+  "id": "it_agent",
   "name": "IT Agent",
   "description": "Handles IT queries: assets, equipment, devices.",
   "url": "https://it.smart-employee.local",

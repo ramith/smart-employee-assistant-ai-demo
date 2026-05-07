@@ -55,5 +55,7 @@ Sprint 1 = orchestrator + 2 specialist agents + per-agent CIBA + serial fan-out 
 | [UC-04](UC-04-user-denies-consent.md) | User denies a CIBA consent mid-flow | High | Scenario B-1 | written |
 | [UC-05](UC-05-browser-closed-during-ciba.md) | Browser closed during CIBA polling | High | Scenario D-7 | written |
 | [UC-06](UC-06-token-expiry-mid-conversation.md) | Token expiry mid-conversation (re-CIBA) | Medium | §7.3 | written |
+| [UC-07](UC-07-hr-admin-issues-asset.md) | HR Admin issues IT asset (write-scope demo) | High | Scenario B (HR Admin variant) | written; **Sprint 2 build** |
+| [UC-08](UC-08-employee-denied-scope.md) | Employee requests denied scope (role-based denial) | High | §7.4 | written; **Sprint 2 build**; demonstrable verbally in Sprint 1 Act II |
 
 Sprint 2 UCs (denial polish, correlation-ID, audit) and Sprint 3 UCs (revocation) will be added when those sprints kick off.

@@ -121,12 +121,18 @@ class ExchangeRequest(BaseModel):
 class ExchangeResponse(BaseModel):
     """Success response from ``POST /auth/exchange``.
 
-    The session cookie is set separately on the ``Response`` object; this body
-    only carries the display name so the SPA can personalise the UI immediately.
+    The session cookie is set separately on the ``Response`` object.  The body
+    additionally exposes ``session_id`` because the SPA needs it as a *path*
+    parameter on the SSE URL (``/events/{session_id}``); the HttpOnly cookie
+    cannot be read by JS, so the SPA stashes ``session_id`` in localStorage to
+    survive page reloads.  ``user_display_name`` mirrors ``user_label`` under
+    the field name the SPA reads.
     """
 
     ok: bool = True
     user_label: str
+    session_id: str
+    user_display_name: str
 
 
 class LogoutResponse(BaseModel):
@@ -211,9 +217,12 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             next,
         )
 
+        # NOTE: authorize and token-exchange must use the SAME client_id
+        # (WSO2 IS rejects cross-client code redemption with invalid_grant).
+        # We use the MCP Client App for both — matches c1_pattern_c.py spike.
         authorize_url, _ = build_authorize_url(
             is_authorize_endpoint=f"{deps.config.is_base_url}/oauth2/authorize",
-            spa_client_id=deps.config.spa_client_id,
+            spa_client_id=deps.config.mcp_client_id,
             redirect_uri=deps.config.mcp_redirect_uri,
             scope="openid orchestrate",
             requested_actor=deps.config.orchestrator_agent.agent_id,
@@ -226,7 +235,7 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
     # GET /auth/callback
     # ------------------------------------------------------------------
 
-    @router.get("/auth/callback", response_class=HTMLResponse)
+    @router.get("/agent-callback", response_class=HTMLResponse)
     async def callback(
         state: str | None = None,
         code: str | None = None,
@@ -356,7 +365,12 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             max_age=deps.config.session_ttl_seconds,
         )
 
-        return ExchangeResponse(ok=True, user_label=session.user_label)
+        return ExchangeResponse(
+            ok=True,
+            user_label=session.user_label,
+            session_id=session.session_id,
+            user_display_name=session.user_label,
+        )
 
     # ------------------------------------------------------------------
     # POST /auth/logout
@@ -457,6 +471,13 @@ def _make_exchange_relay_html(
           body: JSON.stringify({{ code: '{safe_code}', state: '{safe_state}' }})
         }});
         if (resp.ok) {{
+          // Persist session_id + user name so SPA's resume-from-localStorage path works.
+          // (Cookie alone isn't enough — SPA reads orch_session_id from localStorage on init.)
+          try {{
+            const data = await resp.json();
+            if (data.session_id) localStorage.setItem('orch_session_id', data.session_id);
+            if (data.user_display_name) localStorage.setItem('orch_user_name', data.user_display_name);
+          }} catch (e) {{ /* fall through; cookie still authenticates */ }}
           window.location.href = '{safe_redirect}';
         }} else {{
           window.location.href = '/login?error=exchange_failed';

@@ -90,6 +90,7 @@ services:
     environment:
       - ORCHESTRATOR_HOST=0.0.0.0
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+      - AGENT_CARDS_DIR=/app/agent_cards
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]
@@ -119,7 +120,8 @@ services:
       - ./hr_agent/.env
     environment:
       - HR_AGENT_HOST=0.0.0.0
-      - HR_MCP_SERVER_URL=http://hr_server:8000/mcp
+      - HR_MCP_SERVER_URL=http://hr_server:8000
+      - HR_EXPECTED_INBOUND_AUD=${ORCHESTRATOR_MCP_CLIENT_ID:-Ry9Wx_Q7w2FSi27miUpYr3O0xR4a}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz', timeout=3)"]
@@ -143,7 +145,8 @@ services:
       - ./it_agent/.env
     environment:
       - IT_AGENT_HOST=0.0.0.0
-      - IT_MCP_SERVER_URL=http://it_server:8004/mcp
+      - IT_MCP_SERVER_URL=http://it_server:8004
+      - IT_EXPECTED_INBOUND_AUD=${ORCHESTRATOR_MCP_CLIENT_ID:-Ry9Wx_Q7w2FSi27miUpYr3O0xR4a}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8002/healthz', timeout=3)"]

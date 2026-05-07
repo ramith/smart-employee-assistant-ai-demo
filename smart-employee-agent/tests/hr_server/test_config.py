@@ -93,7 +93,7 @@ class TestSuccessfulConstruction:
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 8000
         assert cfg.introspect_enabled is True
-        assert cfg.required_scopes == frozenset({"hr.read"})
+        assert cfg.required_scopes == frozenset({"hr_self_rest"})
 
     def test_instance_is_frozen(self) -> None:
         cfg = HRServerConfig.from_env(_base_env())

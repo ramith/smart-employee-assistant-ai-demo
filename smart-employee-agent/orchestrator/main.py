@@ -391,6 +391,30 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         """
         return {"ok": True, "service": "orchestrator"}
 
+    # ── SPA static mount (last so API routes take priority) ───────────────────
+    _spa_dir = Path("/app/client_static")
+    if _spa_dir.is_dir():
+        from fastapi.responses import FileResponse
+        from fastapi.staticfiles import StaticFiles
+
+        @app.get("/", include_in_schema=False)
+        async def spa_root() -> FileResponse:
+            return FileResponse(_spa_dir / "index.html")
+
+        app.mount(
+            "/static",
+            StaticFiles(directory=str(_spa_dir)),
+            name="spa-static",
+        )
+
+        @app.get("/app.js", include_in_schema=False)
+        async def spa_appjs() -> FileResponse:
+            return FileResponse(_spa_dir / "app.js", media_type="application/javascript")
+
+        @app.get("/styles.css", include_in_schema=False)
+        async def spa_styles() -> FileResponse:
+            return FileResponse(_spa_dir / "styles.css", media_type="text/css")
+
     return app
 
 

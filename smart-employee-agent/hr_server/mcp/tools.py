@@ -2,9 +2,9 @@
 
 Exposes three FastAPI POST endpoints under ``/mcp/tools/``:
 
-    POST /mcp/tools/get_leave_balance   scope: hr.read
-    POST /mcp/tools/get_leave_history   scope: hr.read
-    POST /mcp/tools/approve_leave       scope: hr.write
+    POST /mcp/tools/get_leave_balance   scope: hr_self_rest
+    POST /mcp/tools/get_leave_history   scope: hr_self_rest
+    POST /mcp/tools/approve_leave       scope: hr_approve_rest
 
 Each handler:
   1. Extracts a Bearer token from the ``Authorization`` header.
@@ -261,7 +261,7 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
     ) -> LeaveBalanceResult:
         """Return the employee's current leave balance.
 
-        Required scope: ``hr.read``.
+        Required scope: ``hr_self_rest``.
         Uses ``token.sub`` as the employee identifier unless ``body.employee_id``
         is supplied (manager use-case).
         """
@@ -276,7 +276,7 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         try:
             claims = await deps.validator.validate_token(
                 token_str,
-                required_scopes=frozenset({"hr.read"}),
+                required_scopes=frozenset({"hr_self_rest"}),
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
@@ -307,7 +307,7 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
     ) -> GetLeaveHistoryResult:
         """Return the employee's leave history.
 
-        Required scope: ``hr.read``.
+        Required scope: ``hr_self_rest``.
         Returns at most ``body.limit`` entries (default 10, max 50).
         """
         rid = _get_rid(request)
@@ -321,7 +321,7 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         try:
             claims = await deps.validator.validate_token(
                 token_str,
-                required_scopes=frozenset({"hr.read"}),
+                required_scopes=frozenset({"hr_self_rest"}),
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
@@ -353,7 +353,7 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
     ) -> ApproveLeaveResult:
         """Approve a pending leave request.
 
-        Required scope: ``hr.write``.
+        Required scope: ``hr_approve_rest``.
         Manager-only.  Sprint 1: canned response; the scope guard is exercised
         even though this tool is not exposed in the demo query path.
         """
@@ -368,7 +368,7 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         try:
             claims = await deps.validator.validate_token(
                 token_str,
-                required_scopes=frozenset({"hr.write"}),
+                required_scopes=frozenset({"hr_approve_rest"}),
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(

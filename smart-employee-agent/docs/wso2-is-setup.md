@@ -29,8 +29,10 @@ The 7 entities you'll create or already have:
 | 3 | `orchestrator-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Named in `requested_actor=` at SPA login; mints actor_token | NEW (or rename `probe-agent-a`) |
 | 4 | `hr-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Initiates CIBA on `/oauth2/ciba` when invoked over A2A | NEW (or rename `probe-agent-b`) |
 | 5 | `it-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Same role as hr-agent | NEW |
-| 6 | `HR API` | **API Resource** with scopes `hr.read`, `hr.write` | Subscribed by hr-agent's auto-created Agent App | NEW |
-| 7 | `IT API` | **API Resource** with scope `it.read` | Subscribed by it-agent's auto-created Agent App | NEW |
+| 6 | `HR API` | **API Resource** with 4-tier scopes `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest` | Subscribed by hr-agent's auto-created Agent App | NEW |
+| 7 | `IT API` | **API Resource** with scopes `it_assets_read_rest`, `it_assets_write_rest` | Subscribed by it-agent's auto-created Agent App | NEW |
+| 8 | `HR Admin` | **Role** (Organization audience) | Grants `hr_read_rest`, `hr_approve_rest`, `it_assets_write_rest`; assigned to user `hr.admin` | NEW |
+| 9 | `hr.admin` user | Local user | Tests HR-Admin-only flows (approve leave, issue assets) | NEW |
 
 > **About MCP Servers (per F-17 in `architecture/sprint-1-fixes.md`):** WSO2 IS 7.2 has a dedicated "MCP Server" registration entity, but per the c10 probe its `aud` binding does **not** apply on the CIBA grant path — `aud` always collapses to the calling agent's OAuth Client ID. We therefore do **not** register hr-server / it-server as MCP Server entities for Sprint 1. They are pure HTTP resource servers; their token validators check `aud == <agent's OAuth Client ID>`. If you want to register MCP Servers anyway for RFC 9728 protected-resource-metadata discovery, that's fine but not required.
 
@@ -129,7 +131,12 @@ Then go to Console → **Applications** → find the auto-created app named afte
 - ☐ Email, ☐ SMS — leave off
 
 **Advanced tab:**
-- ☑ **App-Native Authentication** (needed for `/oauth2/authn` 3-step flow)
+- ☑ **App-Native Authentication** (needed for `/oauth2/authn` 3-step flow). Note: this toggle may be absent on Agent OAuth Apps in IS 7.2 — agents have it auto-enabled. Don't worry if you can't find it; C4 probe in M0 confirmed the flow works.
+
+**Roles tab — IMPORTANT:**
+- **Role Audience: Organization** (default is Application; flip to Organization). Application-audience roles don't propagate across the agent chain; Organization audience does. Required for Sprint 2/3 role-based scopes (e.g. `hr_admin` for `approve_leave`).
+
+Click **Update** to save.
 
 Capture from the Agent's General/Credentials tab AND the auto-created OAuth App's Info/Protocol tab:
 
@@ -143,22 +150,54 @@ ALSO: copy `HR_AGENT_OAUTH_CLIENT_ID` into `hr_server/.env` as `HR_SERVER_EXPECT
 
 ---
 
-## 5. Step 4 — Create the 2 API Resources
+## 5. Step 4 — Create the 2 API Resources (legacy 4-tier HR + 2-tier IT)
 
 Console → **API Resources** → **+ New API Resource** (regular, NOT MCP Server — see F-17 note above).
+
+The scope structure mirrors the existing `hr_server/service/hr_service.py` 4-tier organization, which the original Sprint 0 demo built around. The Wave 6 build (`hr_server/mcp/tools.py`) used simplified `hr.read`/`hr.write` names; those will be patched after this step to match the legacy tier names below.
 
 ### 5.1 HR API
 - **Identifier:** `urn:hr:api`
 - **Display name:** HR API
-- **Scopes:**
-  - `hr.read` — "View HR information"
-  - `hr.write` — "Modify HR information"
+- **Scopes (4 — full tier model):**
+
+| Scope | Display name | Description | Tier / who has it |
+|---|---|---|---|
+| `hr_basic_rest` | View company HR info | Holidays, leave policy | every employee |
+| `hr_self_rest` | View own leave info | Own leave balance + own requests | every employee (default Sprint 1 demo path) |
+| `hr_read_rest` | View all leave requests | Dashboard view across all employees | **HR Admin only** |
+| `hr_approve_rest` | Approve/reject leave | Modify leave requests | **HR Admin only** |
 
 ### 5.2 IT API
 - **Identifier:** `urn:it:api`
 - **Display name:** IT API
-- **Scopes:**
-  - `it.read` — "View IT asset information"
+- **Scopes (2):**
+
+| Scope | Display name | Description | Tier / who has it |
+|---|---|---|---|
+| `it_assets_read_rest` | View IT asset info | Look up employee asset assignments | every employee |
+| `it_assets_write_rest` | Issue IT assets to employees | Assign laptops, mice, screens (HR onboarding flow) | **HR Admin only** |
+
+## 5.5 Step 4.5 — Roles + HR Admin user
+
+Console → **Roles** → **+ New Role**
+
+| Role | Audience | Granted scopes |
+|---|---|---|
+| `HR Admin` | **Organization** | **All HR API scopes** (`hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`) **+ `it_assets_write_rest`**. Rationale: HR admins also take their own leave; they should be a superset of Employee for HR-domain operations. |
+| `Employee` | **Organization** | `hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`. Granted to `employee_user`. |
+
+The denial path tests (N30, N31, UC-08) still work cleanly: `employee_user` does NOT have `hr_approve_rest` or `it_assets_write_rest` in its role, so any CIBA request for those scopes fails — that's the security demo.
+
+Console → **Users** → **+ Add User**:
+
+| Username | Password | Role |
+|---|---|---|
+| `employee_user` | `NewsMax@1234` | **Employee** (explicit role assignment) |
+| `hr_admin_user` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
+| `probe.user` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in Sprint 1 demo) |
+
+Credentials captured in `scripts/probes/.test-users.env` (gitignored).
 
 ---
 
@@ -168,8 +207,10 @@ For each agent's **auto-created OAuth Application**:
 
 | Subscribe app | To resource | Authorized scopes |
 |---|---|---|
-| `hr-agent`'s OAuth App | HR API | `hr.read`, `hr.write` |
-| `it-agent`'s OAuth App | IT API | `it.read` |
+| `hr-agent`'s OAuth App | HR API | all 4: `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest` |
+| `it-agent`'s OAuth App | IT API | both: `it_assets_read_rest`, `it_assets_write_rest` |
+
+(The agent's CIBA initiation requests a SUBSET of these per-tool; the IS consent screen narrows further to what the user's role permits. So an Employee asking for `hr_approve_rest` will be denied by IS even though hr-agent's OAuth App is subscribed to it.)
 
 Console → Applications → that app → **API Authorization** tab → **+ Authorize resource** → pick the API → check the scopes → **Add**.
 
@@ -187,7 +228,7 @@ For the demo, one user is sufficient (you can add more for multi-role testing la
 |---|---|---|
 | `probe.user` (already exists from M0 spike — reuse) | `NewsMax@1234` | (none required for Sprint 1 happy path) |
 
-If you want to test the `hr.write` / `hr.approve_leave` path, create an additional user with an `hr_admin` role and ensure the HR API's `hr.write` scope is conditioned on that role. Roles wiring is a Sprint 2 polish item.
+For HR-Admin-only flows (approve leave, issue assets), use `hr.admin` from Step 4.5. Roles wiring is set up in 4.5; Sprint 1 demo's canonical UC-03 query (leave balance + asset list) only needs `probe.user` (Employee tier).
 
 ---
 
@@ -247,7 +288,7 @@ HR_AGENT_OAUTH_CLIENT_SECRET=<auto-created OAuth App>
 HR_TRUSTED_PEER_AGENTS=<orchestrator-agent's Agent ID UUID>
 
 # CIBA scopes (Step 4 — what HR API authorizes)
-HR_CIBA_SCOPE=openid hr.read
+HR_CIBA_SCOPE=openid hr_self_rest
 
 # MCP backend
 HR_MCP_SERVER_URL=http://hr-server:8000
@@ -257,7 +298,7 @@ HR_AGENT_PORT=8001
 ```
 
 ### `it_agent/.env`
-Identical shape with `IT_*` prefixes; `IT_CIBA_SCOPE=openid it.read`; `IT_MCP_SERVER_URL=http://it-server:8004`.
+Identical shape with `IT_*` prefixes; `IT_CIBA_SCOPE=openid it_assets_read_rest`; `IT_MCP_SERVER_URL=http://it-server:8004`.
 
 ### `hr_server/.env`
 ```bash

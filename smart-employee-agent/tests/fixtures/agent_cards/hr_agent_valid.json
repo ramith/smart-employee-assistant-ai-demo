@@ -1,6 +1,6 @@
 {
   "schema_version": "v3-custom",
-  "id": "hr-agent",
+  "id": "hr_agent",
   "name": "HR Agent",
   "description": "Handles HR queries: leave, time-off, employee info.",
   "url": "https://hr.smart-employee.local",

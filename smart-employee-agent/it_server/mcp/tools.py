@@ -2,8 +2,8 @@
 
 Exposes two FastAPI POST endpoints under ``/mcp/tools/``:
 
-    POST /mcp/tools/list_available_assets   scope: it.read
-    POST /mcp/tools/get_my_assets           scope: it.read
+    POST /mcp/tools/list_available_assets   scope: it_assets_read_rest
+    POST /mcp/tools/get_my_assets           scope: it_assets_read_rest
 
 Each handler:
   1. Extracts a Bearer token from the ``Authorization`` header.
@@ -234,7 +234,7 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
     ) -> ListAvailableAssetsResult:
         """Return asset catalogue, optionally filtered by ``asset_type``.
 
-        Required scope: ``it.read``.
+        Required scope: ``it_assets_read_rest``.
         Not user-specific; ``employee_id`` from the token is not used for
         the catalogue lookup, but the token is still fully validated.
         """
@@ -249,7 +249,7 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         try:
             await deps.validator.validate_token(
                 token_str,
-                required_scopes=frozenset({"it.read"}),
+                required_scopes=frozenset({"it_assets_read_rest"}),
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
@@ -279,7 +279,7 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
     ) -> GetMyAssetsResult:
         """Return assets assigned to the requesting user (or to ``body.employee_id``).
 
-        Required scope: ``it.read``.
+        Required scope: ``it_assets_read_rest``.
         Defaults to ``token.sub`` for self-service; managers may pass an explicit
         ``employee_id``.
         """
@@ -294,7 +294,7 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         try:
             claims = await deps.validator.validate_token(
                 token_str,
-                required_scopes=frozenset({"it.read"}),
+                required_scopes=frozenset({"it_assets_read_rest"}),
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(

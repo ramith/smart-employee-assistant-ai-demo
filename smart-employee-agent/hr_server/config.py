@@ -152,7 +152,7 @@ class HRServerConfig:
         # F-04 audience + trust
         expected_aud = _require(env, "HR_SERVER_EXPECTED_AUD")
         trusted_act_subs = _parse_frozenset(env.get("HR_SERVER_TRUSTED_PEER_AGENTS", ""))
-        required_scopes = _parse_frozenset(env.get("HR_SERVER_REQUIRED_SCOPES", "hr.read"))
+        required_scopes = _parse_frozenset(env.get("HR_SERVER_REQUIRED_SCOPES", "hr_self_rest"))
 
         # CORS
         allowed_origins = _parse_frozenset(

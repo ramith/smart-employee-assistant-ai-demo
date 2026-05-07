@@ -2,7 +2,7 @@
 
 Single source of truth for all environment variables consumed by it_agent.
 Uses a frozen dataclass per F-09.  Structural mirror of ``hr_agent/config.py``
-with ``IT_`` prefixed variables and it-specific defaults (port 8002, it.read scope).
+with ``IT_`` prefixed variables and it-specific defaults (port 8002, it_assets_read_rest scope).
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ class ITAgentConfig:
     port: int = 8002
 
     # CIBA
-    ciba_scope: str = "openid it.read"
+    ciba_scope: str = "openid it_assets_read_rest"
     max_poll_seconds: int = 240
 
     # Self-referential canonical URL (agent-card)
@@ -177,7 +177,7 @@ class ITAgentConfig:
         port = _parse_port(env.get("IT_AGENT_PORT", "8002"), "IT_AGENT_PORT")
 
         # CIBA
-        ciba_scope = env.get("IT_CIBA_SCOPE", "openid it.read").strip()
+        ciba_scope = env.get("IT_CIBA_SCOPE", "openid it_assets_read_rest").strip()
         max_poll_seconds_raw = env.get("IT_MAX_POLL_SECONDS", "240")
         try:
             max_poll_seconds = int(max_poll_seconds_raw)

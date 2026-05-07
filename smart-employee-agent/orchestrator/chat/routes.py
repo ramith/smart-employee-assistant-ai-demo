@@ -368,13 +368,9 @@ async def _run_serial_fan_out(
         )
         session.pending_ciba[consent.auth_req_id] = pending
 
-        # 6c. Push VERIFYING state.
-        await channel.publish(
-            CibaStateChangeEvent(
-                request_id=request_id,
-                state="VERIFYING",
-            )
-        )
+        # 6c. (intentionally no eager VERIFYING publish — that race-replaced the
+        # AWAITING_APPROVAL UI before the user could click the auth_url. The
+        # widget stays in AWAITING_APPROVAL until await_completion resolves.)
 
         # 6d. Phase 2: await_completion (long-poll until user approves or flow expires).
         second: Any
@@ -472,27 +468,82 @@ async def _run_serial_fan_out(
 
 
 def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str:
-    """Produce a simple human-readable fragment from a ResultPayload.
+    """Produce a human-readable fragment from a ResultPayload.
 
-    Sprint 1 implementation: formats the raw ``data`` dict inline.
+    Sprint 1: per-tool formatting switch keyed on tool_id.
     Sprint 2 will replace this with an LLM composition call.
 
     Args:
         agent_label: Display name of the specialist (e.g. "HR Agent").
-        tool_id: Tool identifier (e.g. "hr.read_balance").
+        tool_id: Tool identifier from the keyword router (e.g. "hr.read_balance").
         result: The successful ResultPayload from the specialist.
 
     Returns:
-        A one-line string suitable for inclusion in the final chat message.
+        A plain-text string suitable for inclusion in the final chat message.
+        The SPA renders it via ``textContent``, so no HTML is used here.
     """
     data = result.data
-    # Provide slightly nicer formatting for the two known Sprint-1 tools.
-    if "leave_days" in data:
-        return f"You have {data['leave_days']} days of leave."
-    if "assets" in data:
-        items = ", ".join(str(a) for a in data["assets"])
-        return f"Available assets: {items}."
-    # Generic fallback for any other tool.
+
+    if tool_id == "hr.read_balance":
+        days = data.get("leave_days", "?")
+        leave_type = data.get("leave_type", "annual")
+        as_of = data.get("as_of_date", "")
+        date_clause = f" (as of {as_of})" if as_of else ""
+        return f"You have {days} days of {leave_type} leave remaining{date_clause}."
+
+    if tool_id == "hr.read_history":
+        entries = data.get("entries", [])
+        if not entries:
+            return "You have no leave history on record."
+        lines = ["Your recent leave:"]
+        for e in entries:
+            if isinstance(e, dict):
+                lines.append(
+                    f"  • {e.get('start_date', '?')} to {e.get('end_date', '?')}"
+                    f" — {e.get('days', '?')} day(s), {e.get('type', '?')}"
+                    f" ({e.get('status', '?')})"
+                )
+            else:
+                lines.append(f"  • {e}")
+        return "\n".join(lines)
+
+    if tool_id == "hr.approve_leave":
+        leave_id = data.get("leave_id", "?")
+        approved_at = data.get("approved_at", "")
+        date_clause = f" on {approved_at[:10]}" if approved_at else ""
+        return f"Leave request {leave_id} has been approved{date_clause}."
+
+    if tool_id == "it.list_available_assets":
+        assets = data.get("assets", [])
+        if not assets:
+            return "No equipment is currently available."
+        lines = ["Available equipment:"]
+        for a in assets:
+            if isinstance(a, dict):
+                lines.append(
+                    f"  • {a.get('model', '?')} ({a.get('asset_id', '?')})"
+                    f" — {a.get('type', '?')}, {a.get('available_count', '?')} available"
+                )
+            else:
+                lines.append(f"  • {a}")
+        return "\n".join(lines)
+
+    if tool_id == "it.get_my_assets":
+        assets = data.get("assets", [])
+        if not assets:
+            return "You have no assets assigned."
+        lines = ["Your assigned equipment:"]
+        for a in assets:
+            if isinstance(a, dict):
+                lines.append(
+                    f"  • {a.get('model', '?')} ({a.get('asset_id', '?')})"
+                    f" — {a.get('type', '?')}, assigned since {a.get('assigned_since', '?')}"
+                )
+            else:
+                lines.append(f"  • {a}")
+        return "\n".join(lines)
+
+    # Generic fallback for any future tool not yet in the switch above.
     pairs = ", ".join(f"{k}: {v}" for k, v in data.items())
     return f"{agent_label} returned: {pairs}."
 

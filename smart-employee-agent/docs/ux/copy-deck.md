@@ -112,12 +112,12 @@ The widget appears in the assistant panel above the composer. It is non-modal. S
 
 | Scope | Action text |
 |---|---|
-| `hr.read` | `View your leave balance` |
-| `hr.approve` | `Approve a leave request on your behalf` |
-| `hr.write` | `Submit a leave request on your behalf` |
-| `it.read` | `Look up available laptops` |
-| `it.assign` | `Assign a laptop to you` |
-| `directory.read` | `Look up team contact information` |
+| `hr_basic_rest` | `View company leave policy and holidays` |
+| `hr_self_rest` | `View your leave balance and requests` |
+| `hr_read_rest` | `View all employee leave requests` |
+| `hr_approve_rest` | `Approve or reject a leave request on your behalf` |
+| `it_assets_read_rest` | `Look up available IT equipment` |
+| `it_assets_write_rest` | `Issue IT assets to employees` |
 
 If a scope arrives that is not in the map, render: `Perform an action on your behalf` and log a warning (do not show the raw scope to the user).
 
@@ -157,12 +157,12 @@ If a scope arrives that is not in the map, render: `Perform an action on your be
 
 | Scope | Gerund phrase |
 |---|---|
-| `hr.read` | `checking your leave balance` |
-| `hr.approve` | `approving the leave request` |
-| `hr.write` | `submitting your leave request` |
-| `it.read` | `looking up available laptops` |
-| `it.assign` | `assigning your laptop` |
-| `directory.read` | `looking up team contacts` |
+| `hr_basic_rest` | `looking up leave policy` |
+| `hr_self_rest` | `checking your leave balance` |
+| `hr_read_rest` | `reviewing employee leave requests` |
+| `hr_approve_rest` | `approving the leave request` |
+| `it_assets_read_rest` | `looking up available equipment` |
+| `it_assets_write_rest` | `issuing the IT asset` |
 
 Fallback: `working on it`.
 
@@ -343,7 +343,7 @@ Per user-experience.md §8, the following must never be rendered to the user. Re
 - Hostnames from the internal service mesh: `hr_agent:`, `it_agent:`, `hr_server:`, `it_server:`, `:8001`, `:8002`, `:8003`, `:8004`.
 - The strings `OAuth`, `CIBA`, `JWT`, `JWKS`, `act.sub`, `aud`, `iss`, `scope` — in user-facing chat or widget copy. (They are fine in developer-facing logs and in the README.)
 - Stack-trace fragments: `Traceback`, `at <anonymous>`, `Error: `, `TypeError`, `ValueError`.
-- The literal scope strings (`hr.read`, `it.read`, etc.) — always render via the action map (5.A) or gerund map (5.C).
+- The literal scope strings (`hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`, `it_assets_read_rest`, `it_assets_write_rest`) — always render via the action map (5.A) or gerund map (5.C). Never expose the underscore-delimited scope string to the user.
 - `localhost:`, `127.0.0.1`, `13.60.190.47` (or any IP literal).
 - The word `token` in chat copy. Use `access` or `permission`. Exception: the sign-out dialog (8.2) may say "lose their access".
 

@@ -102,7 +102,7 @@ class TestSuccessfulConstruction:
         cfg = HRAgentConfig.from_env(_base_env())
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 8001
-        assert cfg.ciba_scope == "openid hr.read"
+        assert cfg.ciba_scope == "openid hr_self_rest"
         assert cfg.max_poll_seconds == 240
         assert cfg.canonical_url == "http://hr_agent:8001/a2a"
 

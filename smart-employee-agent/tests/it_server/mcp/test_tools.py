@@ -166,7 +166,7 @@ def it_read_payload() -> dict[str, Any]:
         "exp": now + 300,
         "iat": now,
         "jti": JTI,
-        "scope": "openid it.read",
+        "scope": "openid it_assets_read_rest",
         "act": {"sub": IT_AGENT_UUID},
     }
 

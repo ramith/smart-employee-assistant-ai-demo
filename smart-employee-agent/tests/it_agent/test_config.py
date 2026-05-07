@@ -102,7 +102,7 @@ class TestSuccessfulConstruction:
         cfg = ITAgentConfig.from_env(_base_env())
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 8002
-        assert cfg.ciba_scope == "openid it.read"
+        assert cfg.ciba_scope == "openid it_assets_read_rest"
         assert cfg.max_poll_seconds == 240
         assert cfg.canonical_url == "http://it_agent:8002/a2a"
 

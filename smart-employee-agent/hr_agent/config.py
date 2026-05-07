@@ -106,7 +106,7 @@ class HRAgentConfig:
     port: int = 8001
 
     # CIBA
-    ciba_scope: str = "openid hr.read"
+    ciba_scope: str = "openid hr_self_rest"
     max_poll_seconds: int = 240
 
     # Self-referential canonical URL (agent-card)
@@ -177,7 +177,7 @@ class HRAgentConfig:
         port = _parse_port(env.get("HR_AGENT_PORT", "8001"), "HR_AGENT_PORT")
 
         # CIBA
-        ciba_scope = env.get("HR_CIBA_SCOPE", "openid hr.read").strip()
+        ciba_scope = env.get("HR_CIBA_SCOPE", "openid hr_self_rest").strip()
         max_poll_seconds_raw = env.get("HR_MAX_POLL_SECONDS", "240")
         try:
             max_poll_seconds = int(max_poll_seconds_raw)

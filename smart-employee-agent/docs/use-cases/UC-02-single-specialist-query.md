@@ -24,15 +24,15 @@ User types a single-purpose message, e.g., *"What's my leave balance?"* (HR only
 4. Orchestrator `POST <hr_agent>:8001/a2a/message/send` with `Authorization: Bearer <token-A>`, `X-Request-ID: <same>`, body=`{tool, args}`.
 5. HR Agent validates token-A: signature via JWKS, `iss` matches IS, `aud` matches `orchestrator-app`, `act.sub` is in `HR_TRUSTED_PEER_AGENTS` allowlist. Extracts `user_sub = token_a.sub`.
 6. HR Agent ensures it has its own actor_token via App-Native Auth (cached, re-mint if needed).
-7. HR Agent `POST <IS>/oauth2/ciba` authenticated as its Agent App (Basic), body: `scope=openid hr.read, login_hint=<user_sub>, binding_message=<F11.template>, actor_token=<own actor token>, notification_channel=external`.
+7. HR Agent `POST <IS>/oauth2/ciba` authenticated as its Agent App (Basic), body: `scope=openid hr_self_rest, login_hint=<user_sub>, binding_message=<F11.template>, actor_token=<own actor token>, notification_channel=external`.
 8. IS responds with `{auth_req_id, auth_url, interval=2, expires_in=300}`.
 9. HR Agent returns A2A response immediately with `{type: "consent_required", auth_req_id, auth_url, agent_label: "HR Agent", action: "View your leave balance"}`. Continues polling in background.
 10. Orchestrator forwards the consent payload to SPA via SSE: `{type: "ciba_url", agent_label, auth_url, binding_code, expires_in, ...}`.
 11. SPA renders the **Consent Widget** in the assistant panel.
 12. User clicks **Approve**. Browser opens `auth_url` in a new tab. User sees the IS consent screen with the same binding code; clicks Approve. IS records the consent. The browser tab shows a "you may close this window" page (reused from `_archive/agent.before-v3/obo_flow.py:callback_html`).
-13. Meanwhile, HR Agent's polling loop hits `/oauth2/token` → IS returns **token-B**: `{sub=user_sub, aut=APPLICATION_USER, act:{sub:hr_agent-id}, aud=<hr_agent OAuth Client ID>, scope=openid hr.read, exp=now+3600}`.
+13. Meanwhile, HR Agent's polling loop hits `/oauth2/token` → IS returns **token-B**: `{sub=user_sub, aut=APPLICATION_USER, act:{sub:hr_agent-id}, aud=<hr_agent OAuth Client ID>, scope=openid hr_self_rest, exp=now+3600}`.
 14. HR Agent records token-B in the orchestrator's session map (via callback or correlation-ID — Stage 4 designs the channel). Then calls hr_server's MCP tool `get_leave_balance` with `Authorization: Bearer <token-B>`, `X-Request-ID: <same>`.
-15. HR Server validates token-B: signature, `iss`, `aud == HR_AGENT_OAUTH_CLIENT_ID`, `act.sub == hr_agent-id`, `scope` contains `hr.read`. Returns `{leave_days: 12}`.
+15. HR Server validates token-B: signature, `iss`, `aud == HR_AGENT_OAUTH_CLIENT_ID`, `act.sub == hr_agent-id`, `scope` contains `hr_self_rest`. Returns `{leave_days: 12}`.
 16. HR Agent returns A2A final response to orchestrator: `{type: "result", payload: {leave_days: 12}}`.
 17. Orchestrator's LLM composes user-facing reply from the tool output: *"You have 12 days of leave."*
 18. SSE delivers the reply to the SPA chat view.
