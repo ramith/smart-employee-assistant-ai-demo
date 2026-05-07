@@ -33,7 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import httpx
@@ -46,9 +46,10 @@ from common.a2a.models import (
 )
 from common.a2a.server import A2APendingState
 from common.auth.actor_token_provider import ActorTokenProvider
-from common.auth.binding_messages import FRESH, render
+from common.auth.binding_messages import FRESH, REFRESH, render
 from common.auth.ciba_client import CIBAClient
 from common.auth.errors import CIBADeniedError, CIBAExpiredError, CIBATimeoutError
+from common.auth.models import OAuthToken
 
 from ..mcp.client import HRMcpClient
 
@@ -96,6 +97,38 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "openid hr_approve_rest",
     ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Token cache (UC-06 / D2.5)
+# ---------------------------------------------------------------------------
+
+# Buffer used to decide whether a cached token is "fresh enough" to reuse vs
+# "near enough to expiry that we should pre-emptively re-CIBA". Mirrors
+# common.auth.models.OBOToken.is_expired's default and matches the buffer in
+# _archive/agent.before-v3/agent_auth.py per UC-06 §Architecture note.
+_TOKEN_EXPIRY_BUFFER = timedelta(seconds=30)
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedToken:
+    """One cached OBO token entry per (user_sub, ciba_scope) per dispatcher.
+
+    Attributes:
+        token: The raw OAuth token returned by the CIBA poll.
+        iat: Issuance time (UTC); used to populate the SPA's
+            ``prior_consent_at`` so the Session Refresh widget can render
+            "you approved this 47 min ago" (copy-deck §6).
+        expires_at: Mirror of ``token.expires_at`` for explicit comparisons.
+    """
+
+    token: OAuthToken
+    iat: datetime
+    expires_at: datetime
+
+    def is_near_expiry(self, *, now: datetime, buffer: timedelta = _TOKEN_EXPIRY_BUFFER) -> bool:
+        """Return True if the token is within *buffer* of expiry."""
+        return now >= self.expires_at - buffer
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +184,13 @@ class HRDispatcher:
 
     def __init__(self, deps: HRDispatcherDeps) -> None:
         self._deps = deps
+        # UC-06 / D2.5: per-(user_sub, ciba_scope) OBO token cache.
+        # On a cache hit with a non-near-expiry token we skip the entire CIBA
+        # round-trip and call MCP directly. On a cache hit near expiry we run
+        # CIBA again but mark it ``is_refresh=True`` and surface the previous
+        # iat as ``prior_consent_at`` so the SPA can render the Session
+        # Refresh widget variant.
+        self._token_cache: dict[tuple[str, str], _CachedToken] = {}
 
     # ── DispatchProtocol entry point ──────────────────────────────────────────
 
@@ -223,9 +263,62 @@ class HRDispatcher:
                 reason=f"Missing required arguments for {tool}: {missing}",
             )
 
+        # ── 1c. Token cache lookup (UC-06 / D2.5) ─────────────────────────────
+        # Three outcomes:
+        #   - Hit + valid → call MCP directly, return ResultPayload synchronously
+        #   - Hit + near expiry → re-CIBA, is_refresh=True, prior_consent_at=iat
+        #   - Miss → fresh CIBA (is_refresh=False)
+        cache_key = (user_sub, ciba_scope)
+        now = datetime.now(tz=timezone.utc)
+        cached = self._token_cache.get(cache_key)
+        # Captured separately so we can still mark is_refresh=True even after
+        # we drop a hit-but-MCP-rejected cache entry.
+        prior_iat: datetime | None = cached.iat if cached is not None else None
+
+        if cached and not cached.is_near_expiry(now=now):
+            logger.info(
+                "hr_dispatcher_cache_hit tool=%s request_id=%s user_sub=%s "
+                "exp_in_s=%d",
+                tool,
+                request_id,
+                user_sub,
+                int((cached.expires_at - now).total_seconds()),
+            )
+            try:
+                tool_result = await getattr(deps.mcp_client, mcp_method)(
+                    token_b=cached.token,
+                    request_id=request_id,
+                    **mcp_kwargs,
+                )
+            except httpx.HTTPStatusError as exc:
+                # Cached token unexpectedly rejected (revoked, scope changed).
+                # Drop it and fall through to fresh CIBA so the user sees a
+                # consent widget instead of a silent error. ``prior_iat`` is
+                # preserved so this still surfaces as a Session Refresh.
+                logger.warning(
+                    "hr_dispatcher_cache_hit_mcp_rejected | dropping cache + "
+                    "falling back to re-CIBA tool=%s status=%s",
+                    tool,
+                    exc.response.status_code if exc.response is not None else "?",
+                )
+                self._token_cache.pop(cache_key, None)
+            else:
+                return ResultPayload(
+                    data=tool_result,
+                    token_jti=getattr(cached.token, "jti", "") or "",
+                    token_exp=int(cached.expires_at.timestamp()),
+                    token_iat=int(cached.iat.timestamp()),
+                )
+
+        # is_refresh is True when there *was* a cache entry (now expired,
+        # near-expiry, or freshly dropped). prior_consent_at lets the SPA
+        # show "approved 47m ago".
+        is_refresh = prior_iat is not None
+        prior_consent_at = prior_iat
+
         # ── 2. Render binding message (F-05) ──────────────────────────────────
         binding_msg = render(
-            FRESH,
+            REFRESH if is_refresh else FRESH,
             agent_label=deps.agent_label,
             action=action_text,
             request_id=request_id,
@@ -285,6 +378,7 @@ class HRDispatcher:
                 mcp_method=mcp_method,
                 mcp_kwargs=mcp_kwargs,
                 request_id=request_id,
+                cache_key=cache_key,
             ),
             name=f"hr_poll_{ciba_request.auth_req_id[:8]}",
         )
@@ -316,6 +410,8 @@ class HRDispatcher:
             scope=ciba_scope,
             binding_message=binding_msg,
             expires_in=ciba_request.expires_in_s,
+            is_refresh=is_refresh,
+            prior_consent_at=prior_consent_at,
         )
 
     # ── Background task ───────────────────────────────────────────────────────
@@ -328,6 +424,7 @@ class HRDispatcher:
         mcp_method: str,
         mcp_kwargs: dict,
         request_id: str,
+        cache_key: tuple[str, str] | None = None,
     ) -> None:
         """Background task: poll for token-B, call MCP, write result into state.
 
@@ -364,6 +461,23 @@ class HRDispatcher:
                 request_id=request_id,
                 **mcp_kwargs,
             )
+
+            # ── b'. Cache the freshly issued token (UC-06 / D2.5) ─────────────
+            # Only cache *after* the MCP call succeeded, so a token that the
+            # resource server refuses (e.g. silent scope downgrade per F-18)
+            # does not pollute the cache for the next request.
+            if cache_key is not None and hasattr(token_b, "expires_at"):
+                token_iat_dt = token_b.expires_at - timedelta(seconds=token_b.expires_in)
+                self._token_cache[cache_key] = _CachedToken(
+                    token=token_b,
+                    iat=token_iat_dt,
+                    expires_at=token_b.expires_at,
+                )
+                logger.info(
+                    "hr_dispatcher_token_cached request_id=%s exp_in_s=%d",
+                    request_id,
+                    token_b.expires_in,
+                )
 
             # ── c. Write ResultPayload ────────────────────────────────────────
             state.result = ResultPayload(

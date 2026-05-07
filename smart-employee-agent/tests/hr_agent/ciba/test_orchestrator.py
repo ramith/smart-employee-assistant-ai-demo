@@ -527,3 +527,173 @@ async def test_binding_message_rendered_correctly_via_fresh_template(
     )
     # Verify the short-ID is in the message
     assert "abcdef12" in binding_message
+
+
+# ─── Sprint 2B.1b — D2.5 token-expiry re-CIBA cache tests ────────────────────
+
+from datetime import timedelta as _td  # noqa: E402  (module-level import after code)
+import asyncio as _asyncio  # noqa: E402
+
+_CachedToken = _orch_mod._CachedToken
+REFRESH = _binding_mod.REFRESH
+
+
+def _fresh_oauth_token(expires_in: int = 3600, expires_at: datetime | None = None) -> OAuthToken:
+    """Token with a non-expired ``expires_at`` so the cache treats it as valid."""
+    if expires_at is None:
+        expires_at = datetime.now(tz=timezone.utc) + _td(seconds=expires_in)
+    return OAuthToken(
+        access_token="fresh-token-b",
+        token_type="Bearer",
+        expires_in=expires_in,
+        expires_at=expires_at,
+        refresh_token=None,
+        scope="openid hr.read",
+        id_token=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cache_miss_first_call_does_full_ciba_and_populates_cache(
+    deps: HRDispatcherDeps,
+    ciba_client: MagicMock,
+    mcp_client: MagicMock,
+) -> None:
+    """First call: cache empty → standard CIBA path + cache populated after MCP."""
+    # Use a fresh token so the cache can be populated with a non-expired entry.
+    ciba_client.poll_for_token = AsyncMock(return_value=_fresh_oauth_token())
+    dispatcher = HRDispatcher(deps)
+    _, pending_register = _make_pending_register()
+
+    result = await dispatcher(
+        tool="hr.read_balance",
+        args={"employee_id": "emp-001"},
+        user_sub="user-sub-cache-1",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-cache-1",
+        pending_register=pending_register,
+    )
+    # First call returns ConsentRequiredPayload (CIBA flow).
+    assert isinstance(result, ConsentRequiredPayload)
+    assert result.is_refresh is False
+    assert result.prior_consent_at is None
+
+    # Wait for the background poll task to finish populating the cache.
+    for _ in range(50):
+        if dispatcher._token_cache:
+            break
+        await _asyncio.sleep(0.01)
+
+    cache_key = ("user-sub-cache-1", "openid hr.read")
+    assert cache_key in dispatcher._token_cache
+    cached = dispatcher._token_cache[cache_key]
+    assert cached.token.access_token == "fresh-token-b"
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_returns_result_payload_synchronously_no_ciba(
+    deps: HRDispatcherDeps,
+    ciba_client: MagicMock,
+    mcp_client: MagicMock,
+) -> None:
+    """Cache hit + valid token: __call__ returns ResultPayload, no CIBA initiate."""
+    dispatcher = HRDispatcher(deps)
+    cache_key = ("user-sub-cache-2", "openid hr.read")
+    now = datetime.now(tz=timezone.utc)
+    dispatcher._token_cache[cache_key] = _CachedToken(
+        token=_fresh_oauth_token(expires_at=now + _td(minutes=30)),
+        iat=now - _td(minutes=5),
+        expires_at=now + _td(minutes=30),
+    )
+    _, pending_register = _make_pending_register()
+
+    result = await dispatcher(
+        tool="hr.read_balance",
+        args={"employee_id": "emp-001"},
+        user_sub="user-sub-cache-2",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-cache-2",
+        pending_register=pending_register,
+    )
+    assert isinstance(result, ResultPayload)
+    assert result.data == {"leave_days": 12}
+    # CIBA path must not have been touched.
+    ciba_client.initiate.assert_not_called()
+    ciba_client.poll_for_token.assert_not_called()
+    # MCP must have been called with the cached token.
+    assert mcp_client.get_leave_balance.called
+    kwargs = mcp_client.get_leave_balance.call_args.kwargs
+    assert kwargs["token_b"].access_token == "fresh-token-b"
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_near_expiry_triggers_re_ciba_with_refresh_flag(
+    deps: HRDispatcherDeps,
+    ciba_client: MagicMock,
+) -> None:
+    """Cache hit but within expiry buffer → re-CIBA, is_refresh=True, prior_consent_at set."""
+    dispatcher = HRDispatcher(deps)
+    cache_key = ("user-sub-cache-3", "openid hr.read")
+    now = datetime.now(tz=timezone.utc)
+    prior_iat = now - _td(minutes=58)
+    # Token expires in 10s, well inside the 30s buffer.
+    dispatcher._token_cache[cache_key] = _CachedToken(
+        token=_fresh_oauth_token(expires_at=now + _td(seconds=10)),
+        iat=prior_iat,
+        expires_at=now + _td(seconds=10),
+    )
+    _, pending_register = _make_pending_register()
+
+    result = await dispatcher(
+        tool="hr.read_balance",
+        args={"employee_id": "emp-001"},
+        user_sub="user-sub-cache-3",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-cache-3",
+        pending_register=pending_register,
+    )
+    assert isinstance(result, ConsentRequiredPayload)
+    assert result.is_refresh is True
+    assert result.prior_consent_at == prior_iat
+    # Binding message must use the REFRESH template.
+    expected_phrase = "previous access has expired"
+    assert expected_phrase in result.binding_message
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_mcp_rejects_falls_back_to_re_ciba(
+    deps: HRDispatcherDeps,
+    mcp_client: MagicMock,
+) -> None:
+    """Cache valid + MCP returns 401 → cache evicted + fall through to re-CIBA."""
+    dispatcher = HRDispatcher(deps)
+    cache_key = ("user-sub-cache-4", "openid hr.read")
+    now = datetime.now(tz=timezone.utc)
+    prior_iat = now - _td(minutes=10)
+    dispatcher._token_cache[cache_key] = _CachedToken(
+        token=_fresh_oauth_token(expires_at=now + _td(minutes=30)),
+        iat=prior_iat,
+        expires_at=now + _td(minutes=30),
+    )
+    # MCP rejects the cached token (e.g. revoked).
+    fake_response = MagicMock()
+    fake_response.status_code = 401
+    mcp_client.get_leave_balance = AsyncMock(
+        side_effect=httpx.HTTPStatusError("revoked", request=MagicMock(), response=fake_response)
+    )
+
+    _, pending_register = _make_pending_register()
+    result = await dispatcher(
+        tool="hr.read_balance",
+        args={"employee_id": "emp-001"},
+        user_sub="user-sub-cache-4",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-cache-4",
+        pending_register=pending_register,
+    )
+    # Falls through to ConsentRequiredPayload (re-CIBA path).
+    assert isinstance(result, ConsentRequiredPayload)
+    assert result.is_refresh is True
+    assert result.prior_consent_at == prior_iat
+    # Cache entry was evicted.
+    assert cache_key not in dispatcher._token_cache
