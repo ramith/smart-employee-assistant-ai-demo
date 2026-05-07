@@ -1,0 +1,34 @@
+{
+  "schema_version": "v3-custom",
+  "id": "hr-agent",
+  "name": "HR Agent",
+  "description": "Handles HR queries: leave, time-off, employee info.",
+  "url": "https://hr.smart-employee.local",
+  "oauth_client_id": "hr-agent-oauth-client-id-abc123",
+  "api_version": "1.0.0",
+  "skills": [
+    {
+      "id": "hr.approve_leave",
+      "name": "Approve leave request",
+      "description": "Approve or reject a leave request by id.",
+      "scope": "hr_approve_a2a",
+      "required_scopes": ["hr_approve_a2a"]
+    },
+    {
+      "id": "hr.get_leave_balance",
+      "name": "Get leave balance",
+      "description": "Return the remaining leave balance for the authenticated user.",
+      "scope": "hr_read_a2a",
+      "required_scopes": ["hr_read_a2a"]
+    }
+  ],
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "auth": {
+    "scheme": "oauth2",
+    "issuer": "https://api.asgardeo.io/t/ddademo/oauth2/token",
+    "audience": "https://hr.smart-employee.local"
+  }
+}

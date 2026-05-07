@@ -8,10 +8,10 @@ COPY orchestrator/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY orchestrator/ ./orchestrator
-WORKDIR /app/orchestrator
+# WORKDIR /app/orchestrator removed — use module form
 
 USER 10014
 
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+CMD ["python", "-m", "orchestrator.main"]

@@ -1,259 +1,226 @@
 <!DOCTYPE html>
 <!--
-  Copyright (c) 2025, WSO2 LLC. (http://www.wso2.com). All Rights Reserved.
-
-  Smart Employee Agent — Client Application
-
-  Tabbed UI: Dashboard, Apply for Leave, Manage Requests (HR Admin).
-  Persistent Assistant side panel for AI agent interaction.
-  Manual actions go through the REST API (with *_rest scopes).
-  Assistant goes through the agent server, which uses MCP tools (with *_mcp
-  scopes via OBO when elevated actions are needed).
+  Smart Employee Agent — Sprint 1 SPA
+  Pattern C auth (orchestrator cookie session), SSE events, CIBA consent widget.
+  No build step. No npm. Vanilla HTML + CSS + JS.
 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Employee Agent</title>
+  <title>Smart Employee Assistant</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
 
-  <!-- ─── Login Overlay ───────────────────────────────────────────────── -->
-  <div id="login-overlay">
-    <div class="login-box">
-      <h1>Smart Employee Agent</h1>
-      <p class="subtitle">Your AI Concierge for Leave Management</p>
-      <button class="login-btn" id="login-btn" onclick="app.initiateLogin()">
-        Sign In
-      </button>
-      <p class="login-footer">Secure login via Asgardeo</p>
+  <!-- ── Accessibility live regions ──────────────────────────────────── -->
+  <div id="a11y-polite"   aria-live="polite"   aria-atomic="true" class="sr-only"></div>
+  <div id="a11y-assertive" aria-live="assertive" aria-atomic="true" class="sr-only"></div>
+
+  <!-- ── Sign-in page (shown when no session) ─────────────────────── -->
+  <div id="signin-page" hidden>
+    <div class="signin-box">
+      <h1 class="signin-heading">Smart Employee Assistant</h1>
+      <p class="signin-subtitle">Sign in to ask about your leave, equipment, and team.</p>
+
+      <!-- Session notices (reason=session_expired / signed_out) -->
+      <div id="signin-notice" class="signin-notice" hidden></div>
+
+      <!-- Dev-only cert warning (collapsed by default) -->
+      <details class="cert-hint" id="cert-hint-details">
+        <summary>First time? Certificate notice</summary>
+        <p>Your browser may show a certificate warning for the development identity server. Choose "Advanced" then "Proceed".</p>
+      </details>
+
+      <button class="btn-primary signin-btn" id="signin-btn">Sign in</button>
+      <p class="signin-helper">You will be redirected to your identity provider.</p>
+
+      <!-- Error states -->
+      <div id="signin-error" class="signin-error" hidden></div>
     </div>
   </div>
 
-  <!-- ─── Authenticated App Shell ─────────────────────────────────────── -->
-  <div id="app-shell">
+  <!-- ── Authenticated app shell ───────────────────────────────────── -->
+  <div id="app-shell" hidden>
 
-    <!-- Top Bar -->
-    <header id="topbar">
-      <div class="brand">
-        <span class="brand-mark">●</span>
-        <span class="brand-name">Concierge HR</span>
+    <!-- Header -->
+    <header id="app-header">
+      <div class="header-left">
+        <span class="product-name">Smart Employee Assistant</span>
       </div>
-
-      <nav id="tabs" role="tablist">
-        <button class="tab" data-tab="dashboard" role="tab" aria-selected="true">
-          Dashboard
-        </button>
-        <button class="tab" data-tab="apply" role="tab" aria-selected="false" data-requires-scope="hr_self_rest">
-          Apply for Leave
-        </button>
-        <button class="tab" data-tab="manage" role="tab" aria-selected="false" data-requires-scope="hr_approve_rest">
-          Manage Requests
-          <span id="pending-badge" class="pending-badge" hidden>0</span>
-        </button>
-      </nav>
-
-      <button class="assistant-toggle" id="assistant-toggle" onclick="app.toggleAssistant()" title="Toggle Assistant">
-        <svg class="assistant-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1.27A7 7 0 0 1 14 23h-4a7 7 0 0 1-6.73-4H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/>
-          <circle cx="9.5" cy="15.5" r="1"/>
-          <circle cx="14.5" cy="15.5" r="1"/>
-        </svg>
-        <span class="assistant-label">Assistant</span>
-      </button>
-
-      <div id="user-menu">
-        <button class="user-btn" id="user-btn" onclick="app.toggleUserMenu()">
-          <span class="user-name" id="user-name-label">User</span>
-          <span class="role-badge" id="role-badge">Employee</span>
-          <span class="caret">▾</span>
-        </button>
-        <div class="user-menu-popover" id="user-menu-popover" hidden>
-          <button class="menu-item" onclick="app.resetDatabase()">Reset demo data</button>
-          <button class="menu-item danger" onclick="app.signOut()">Sign out</button>
+      <div class="header-right">
+        <!-- Connection status indicator -->
+        <div class="conn-indicator" id="conn-indicator"
+             role="status"
+             aria-label="Connected to the assistant."
+             title="Connected">
+          <span class="conn-dot" id="conn-dot"></span>
+          <span class="conn-label" id="conn-label">Connected</span>
         </div>
+        <!-- User identity + sign-out -->
+        <span class="user-display" id="user-display-name"></span>
+        <button class="btn-ghost btn-sm" id="signout-btn">Sign out</button>
       </div>
     </header>
 
-    <!-- Main work area: one panel per tab -->
-    <main id="work-area">
+    <!-- Sign-out confirmation dialog (non-modal, inline) -->
+    <div id="signout-dialog" class="signout-dialog" hidden role="dialog" aria-labelledby="signout-dialog-title">
+      <p id="signout-dialog-title" class="dialog-title">Sign out?</p>
+      <p class="dialog-body" id="signout-dialog-body">You will be signed out of the assistant and any agents that acted on your behalf will lose their access.</p>
+      <div class="dialog-actions">
+        <button class="btn-primary btn-danger-primary" id="signout-confirm-btn">Sign out</button>
+        <button class="btn-ghost" id="signout-cancel-btn">Stay signed in</button>
+      </div>
+    </div>
 
-      <!-- ── Dashboard Tab ─────────────────────────────────────────── -->
-      <section id="tab-dashboard" class="tab-panel" role="tabpanel">
-        <div class="page-header">
-          <h2>Dashboard</h2>
-          <button class="btn-ghost" onclick="app.refreshDashboard()" title="Refresh">
-            ↻ Refresh
+    <!-- Sign-out in-progress overlay -->
+    <div id="signout-progress" class="signout-progress" hidden>
+      <span>Signing you out…</span>
+    </div>
+
+    <!-- Main chat area -->
+    <main id="chat-main">
+
+      <!-- Toast container -->
+      <div id="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+
+      <!-- Service banners (degraded / down) -->
+      <div id="service-banner" class="service-banner" hidden>
+        <span id="service-banner-text"></span>
+        <button class="banner-dismiss" id="service-banner-dismiss" aria-label="Dismiss">×</button>
+      </div>
+
+      <!-- Chat transcript -->
+      <div id="chat-transcript" class="chat-transcript" aria-label="Chat transcript" role="log" aria-live="off">
+
+        <!-- Empty state (shown until first message) -->
+        <div id="empty-state" class="empty-state">
+          <h2 class="empty-heading">What can I help you with?</h2>
+          <p class="empty-body">I can check your leave balance, look up available equipment, and answer routine HR and IT questions. Each request will ask you to approve the agent that handles it.</p>
+          <div class="example-chips">
+            <button class="chip" data-msg="What is my leave balance?">What is my leave balance?</button>
+            <button class="chip" data-msg="What laptops are available?">What laptops are available?</button>
+            <button class="chip" data-msg="Show me my leave balance and what laptops are available.">Show me my leave balance and what laptops are available.</button>
+          </div>
+        </div>
+
+        <!-- Routing status line (transient, replaced by events) -->
+        <div id="routing-line" class="routing-line" hidden aria-live="polite"></div>
+
+      </div>
+
+      <!-- ── Consent Widget ──────────────────────────────────────────── -->
+      <!--
+        States: AWAITING_APPROVAL | VERIFYING | WORKING | DONE | DENIED | EXPIRED | ERROR
+        Rendered above the composer. Slides in when active.
+        Only ONE widget visible at a time (serial fan-out, Q2).
+      -->
+      <div id="consent-widget" class="consent-widget" hidden role="region" aria-label="Approval required">
+
+        <!-- Full card: shown in AWAITING_APPROVAL, EXPIRED, ERROR -->
+        <div id="cw-card" class="cw-card">
+          <div class="cw-card-header">
+            <span id="cw-card-title" class="cw-card-title">Action requires your approval</span>
+          </div>
+
+          <!-- Session-refresh amber banner (UC-06) -->
+          <div id="cw-refresh-banner" class="cw-refresh-banner" hidden>
+            <span id="cw-refresh-banner-text"></span>
+          </div>
+
+          <!-- Mid-flight resume banner (UC-05 EX-2) -->
+          <div id="cw-resume-banner" class="cw-resume-banner" hidden>
+            <span id="cw-resume-banner-text"></span>
+          </div>
+
+          <div class="cw-agent-row">
+            <span id="cw-agent-icon" class="cw-agent-icon" aria-hidden="true"></span>
+            <span id="cw-agent-label" class="cw-agent-label"></span>
+          </div>
+
+          <!-- Prior-consent timestamp (UC-06) -->
+          <div id="cw-prior-consent" class="cw-prior-consent" hidden></div>
+
+          <div class="cw-action-row">
+            <span class="cw-action-prefix">Wants to:</span>
+            <span id="cw-action-text" class="cw-action-text"></span>
+          </div>
+
+          <div class="cw-binding-row">
+            <span id="cw-binding-code" class="cw-binding-code"></span>
+          </div>
+
+          <div class="cw-footer-text" id="cw-footer-text">Each agent asks for its own approval. Your identity provider records every consent.</div>
+
+          <!-- Expired body (hidden unless EXPIRED) -->
+          <div id="cw-expired-body" class="cw-expired-body" hidden>
+            <span id="cw-expired-body-text"></span>
+          </div>
+
+          <!-- Error body (hidden unless ERROR) -->
+          <div id="cw-error-body" class="cw-error-body" hidden>
+            <span id="cw-error-body-text"></span>
+          </div>
+
+          <div class="cw-actions-row">
+            <!-- AWAITING_APPROVAL buttons -->
+            <button class="btn-primary cw-approve-btn" id="cw-approve-btn">Approve</button>
+            <button class="btn-outline cw-deny-btn" id="cw-deny-btn">Deny</button>
+
+            <!-- EXPIRED buttons (hidden unless EXPIRED) -->
+            <button class="btn-primary" id="cw-retry-btn" hidden>Ask again</button>
+            <button class="btn-ghost" id="cw-dismiss-btn" hidden>Dismiss</button>
+
+            <!-- ERROR buttons (hidden unless ERROR) -->
+            <button class="btn-primary" id="cw-error-retry-btn" hidden>Try again</button>
+            <button class="btn-ghost" id="cw-error-cancel-btn" hidden>Cancel</button>
+
+            <!-- Countdown (AWAITING_APPROVAL) -->
+            <span id="cw-countdown" class="cw-countdown"></span>
+          </div>
+        </div>
+
+        <!-- Slim row: shown in VERIFYING, WORKING -->
+        <div id="cw-slim" class="cw-slim" hidden>
+          <span id="cw-slim-icon" class="cw-slim-icon" aria-hidden="true"></span>
+          <span id="cw-slim-dots" class="cw-slim-dots" hidden aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span id="cw-slim-text" class="cw-slim-text"></span>
+          <button class="cw-cancel-link" id="cw-cancel-btn">Cancel</button>
+        </div>
+
+      </div>
+
+      <!-- ── Composer ─────────────────────────────────────────────────── -->
+      <div class="composer-wrap">
+        <form id="chat-form" class="composer" autocomplete="off">
+          <textarea
+            id="msg-input"
+            class="composer-input"
+            placeholder="Ask about your leave, equipment, or team…"
+            aria-label="Message the assistant."
+            rows="1"
+            maxlength="2000"
+          ></textarea>
+          <button type="submit" id="send-btn" class="composer-send" aria-label="Send message.">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+            <span class="sr-only">Send</span>
           </button>
+        </form>
+        <div class="composer-hints">
+          <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
+          <span class="char-counter" id="char-counter" hidden></span>
         </div>
-
-        <div id="balance-cards" class="stat-cards"></div>
-
-        <div id="upcoming-holidays" class="card">
-          <h3>Upcoming Holidays</h3>
-          <div id="holidays-list" class="holidays-strip">
-            <p class="muted">Loading…</p>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <h3 id="leaves-heading">Leave Requests</h3>
-            <div class="filters">
-              <input type="search" id="leaves-search"
-                     placeholder="Search employee…"
-                     oninput="app.onLeaveFilterChange()" hidden />
-              <select id="leaves-status-filter" onchange="app.onLeaveFilterChange()">
-                <option value="">All statuses</option>
-                <option value="Pending">Pending</option>
-                <option value="Approved">Approved</option>
-                <option value="Rejected">Rejected</option>
-              </select>
-            </div>
-          </div>
-          <div id="leaves-table-container">
-            <p class="muted">Loading…</p>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Apply for Leave Tab ───────────────────────────────────── -->
-      <section id="tab-apply" class="tab-panel" role="tabpanel" hidden>
-        <div class="page-header">
-          <h2>Apply for Leave</h2>
-        </div>
-
-        <div class="card">
-          <form id="apply-form" onsubmit="return app.submitApplyLeave(event)">
-            <div class="form-row">
-              <label for="leave-type">Leave type</label>
-              <select id="leave-type" required>
-                <option value="">Select…</option>
-              </select>
-              <p class="hint" id="leave-type-hint"></p>
-            </div>
-
-            <div class="form-row split">
-              <div>
-                <label for="start-date">Start date</label>
-                <input type="date" id="start-date" required />
-              </div>
-              <div>
-                <label for="end-date">End date</label>
-                <input type="date" id="end-date" required />
-              </div>
-            </div>
-
-            <div class="form-row">
-              <label for="reason">Reason</label>
-              <textarea id="reason" rows="3" required maxlength="500"
-                        placeholder="Briefly describe the reason for this leave."></textarea>
-            </div>
-
-            <div id="apply-summary" class="summary" hidden></div>
-
-            <div class="form-actions">
-              <button type="button" class="btn-ghost" onclick="app.resetApplyForm()">Reset</button>
-              <button type="submit" class="btn-primary" id="apply-submit">Submit request</button>
-            </div>
-          </form>
-        </div>
-      </section>
-
-      <!-- ── Manage Requests Tab (HR Admin) ───────────────────────── -->
-      <section id="tab-manage" class="tab-panel" role="tabpanel" hidden>
-        <div class="page-header">
-          <h2>Manage Pending Requests</h2>
-          <button class="btn-ghost" onclick="app.refreshManageQueue()" title="Refresh">
-            ↻ Refresh
-          </button>
-        </div>
-
-        <div class="card">
-          <div id="manage-queue-container">
-            <p class="muted">Loading…</p>
-          </div>
-        </div>
-      </section>
+      </div>
 
     </main>
 
-    <!-- ─── Assistant Side Panel ──────────────────────────────────────── -->
-    <aside id="assistant-panel" class="assistant-panel" hidden>
-      <div class="assistant-header">
-        <div class="assistant-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1.27A7 7 0 0 1 14 23h-4a7 7 0 0 1-6.73-4H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/>
-            <circle cx="9.5" cy="15.5" r="1"/>
-            <circle cx="14.5" cy="15.5" r="1"/>
-          </svg>
-          <h3>Assistant</h3>
-        </div>
-        <button class="btn-ghost btn-small" onclick="app.toggleAssistant()" aria-label="Close assistant">✕</button>
-      </div>
-
-      <div id="chat-messages"></div>
-
-      <div id="authorize-section" hidden>
-        <p class="muted">The agent needs your authorization to perform this action.</p>
-        <button id="authorize-btn" class="btn-primary" onclick="app.initiateOBOFlow()">
-          Authorize
-        </button>
-      </div>
-
-      <form id="chat-form" onsubmit="return app.handleChatSubmit(event)">
-        <input type="text" id="message-input"
-               placeholder="Ask me anything about leave…"
-               autocomplete="off" disabled />
-        <button type="submit" id="send-btn" class="btn-primary" disabled>Send</button>
-      </form>
-    </aside>
-
   </div>
 
-  <!-- ─── Reusable Overlays ──────────────────────────────────────────── -->
-
-  <!-- Toast container (top-right) -->
-  <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
-
-  <!-- Reject reason modal -->
-  <div id="reject-modal" class="modal-backdrop" hidden>
-    <div class="modal" role="dialog" aria-labelledby="reject-modal-title">
-      <h3 id="reject-modal-title">Reject leave request</h3>
-      <p class="muted" id="reject-modal-subject"></p>
-      <label for="reject-reason">Reason for rejection</label>
-      <textarea id="reject-reason" rows="3" maxlength="500"
-                placeholder="Explain why this request is being rejected."></textarea>
-      <div class="modal-actions">
-        <button class="btn-ghost" onclick="app.closeRejectModal()">Cancel</button>
-        <button class="btn-danger" id="reject-confirm-btn" onclick="app.confirmReject()">
-          Reject request
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Leave details drawer -->
-  <div id="details-drawer" class="drawer" hidden>
-    <div class="drawer-header">
-      <h3 id="details-title">Leave request</h3>
-      <button class="btn-ghost" onclick="app.closeDetails()" aria-label="Close">✕</button>
-    </div>
-    <div id="details-body" class="drawer-body"></div>
-  </div>
-
-  <!-- ─── Markdown rendering + sanitization (pinned, with SRI) ─────────── -->
-  <script
-    src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"
-    integrity="sha384-k8o8HikHweyzW55Wd3wl18ovJj6vHVYNQeQbeSM0fxx+0WiH4TcccOG9uz8Xd2JR"
-    crossorigin="anonymous"
-  ></script>
-  <script
-    src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"
-    integrity="sha384-XQqX/4yiUGu+oyr87jvWzRuqBUK/adrY0DunhL+tID9m/9dwSpV8h9Fk/Sg6ifVQ"
-    crossorigin="anonymous"
-  ></script>
   <script src="/app.js"></script>
 </body>
 </html>

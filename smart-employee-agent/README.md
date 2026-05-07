@@ -86,7 +86,7 @@ smart-employee-agent/
 │   ├── obo_flow.py             # OBO flow handling (PKCE + token exchange)
 │   ├── requirements.txt
 │   └── .env.example
-└── hr-server/                  # HR Server: MCP + REST in one process (port 8000)
+└── hr_server/                  # HR Server: MCP + REST in one process (port 8000)
     ├── main.py                 # Composes MCP + REST and starts uvicorn
     ├── config.py               # Centralized env loading + ALLOWED_ORIGINS
     ├── mcp_server/
@@ -187,7 +187,7 @@ The SPA handles browser PKCE login and dashboard REST access.
 9. Note the **SPA Client ID** → used in:
    - `client/.env` as `CLIENT_ID`
    - `agent/.env` as `TOKEN_AUDIENCE` (for validating user JWTs)
-   - `hr-server/.env` as `SPA_CLIENT_ID`
+   - `hr_server/.env` as `SPA_CLIENT_ID`
 
 ### Step 4: Create an MCP Client Application (for Agent)
 
@@ -217,7 +217,7 @@ The MCP Client handles agent authentication (App Native Auth) and OBO flow.
    - Under the **Access Token Attributes** dropdown, select `given_name` and `family_name`
 10. Note the **MCP Client ID** → used in:
     - `agent/.env` as `ASGARDEO_CLIENT_ID`
-    - `hr-server/.env` as `CLIENT_ID`
+    - `hr_server/.env` as `CLIENT_ID`
 
 ### Step 5: Create Roles
 
@@ -261,7 +261,7 @@ Create any number of users in your Asgardeo organization and assign them the app
 ### 1. HR Server (Terminal 1)
 
 ```bash
-cd hr-server
+cd hr_server
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -313,7 +313,7 @@ cp .env.example .env
 python serve.py   # Runs on port 3001 by default
 ```
 
-> **Changing the UI port?** Set `CLIENT_PORT` in `client/.env`, update `REDIRECT_URI` in the same file, set `ALLOWED_ORIGINS=http://localhost:<port>,http://127.0.0.1:<port>` in **both** `agent/.env` and `hr-server/.env`, and register `http://localhost:<port>/callback` in the Asgardeo SPA application's Authorized redirect URLs.
+> **Changing the UI port?** Set `CLIENT_PORT` in `client/.env`, update `REDIRECT_URI` in the same file, set `ALLOWED_ORIGINS=http://localhost:<port>,http://127.0.0.1:<port>` in **both** `agent/.env` and `hr_server/.env`, and register `http://localhost:<port>/callback` in the Asgardeo SPA application's Authorized redirect URLs.
 
 ### 4. Open the App
 
@@ -389,7 +389,7 @@ If a user tries an action beyond their role, the agent explains politely:
 
 ## REST API (used by the manual UI)
 
-These are the REST endpoints exposed by `hr-server` for the SPA. The browser calls them directly with its PKCE-issued SPA token; no OBO required.
+These are the REST endpoints exposed by `hr_server` for the SPA. The browser calls them directly with its PKCE-issued SPA token; no OBO required.
 
 | Method | Path | Required scope | Purpose |
 |---|---|---|---|
@@ -525,8 +525,8 @@ If the granted scopes are missing what you expect, the issue is on the user's ro
 - Ensure `AUTH_ISSUER` and `JWKS_URL` match across all `.env` files
 - `TOKEN_AUDIENCE` in `agent/.env` must be the **SPA** app's Client ID (not the MCP Client's)
 - `ASGARDEO_CLIENT_ID` in `agent/.env` must be the **MCP Client** app's Client ID
-- `CLIENT_ID` in `hr-server/.env` must be the **MCP Client** app's Client ID
-- `SPA_CLIENT_ID` in `hr-server/.env` must be the **SPA** app's Client ID
+- `CLIENT_ID` in `hr_server/.env` must be the **MCP Client** app's Client ID
+- `SPA_CLIENT_ID` in `hr_server/.env` must be the **SPA** app's Client ID
 - The HR server log will print the actual vs expected audience on mismatch (e.g. `[MCP AUTH FAIL] reason=invalid_token ... | token_aud=<X> expected_aud=<Y>`)
 
 ### Token missing scopes

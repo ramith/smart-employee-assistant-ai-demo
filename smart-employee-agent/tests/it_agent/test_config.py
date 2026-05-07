@@ -1,0 +1,257 @@
+"""Tests for it_agent/config.py — Wave 4, Sprint 1.
+
+Covers:
+1.  Successful construction from a complete env dict
+2.  Default values applied when optional vars are absent
+3.  Frozen instance: mutation raises AttributeError/TypeError
+4.  is_client_config() returns a correctly wired WSO2ISClientConfig
+5.  Issuer/JWKS URL derived from base_url when not explicitly set
+6.  Missing required variables raise ValueError with the var name
+7.  Invalid URLs raise ValueError (is_base_url, it_server_url)
+8.  Frozenset parsing: comma-separated strings → frozenset
+9.  Boolean parsing: various truthy/falsy strings
+10. Port parsing: non-integer raises ValueError
+11. CIBA scope, canonical URL, and redirect URI overrides
+"""
+
+from __future__ import annotations
+
+# ── Bootstrap ─────────────────────────────────────────────────────────────────
+
+import importlib.util
+import pathlib
+import sys
+import types
+
+_ROOT = pathlib.Path(__file__).parent.parent.parent  # smart-employee-agent/
+
+
+def _ensure_pkg(dotted_name: str) -> None:
+    if dotted_name in sys.modules:
+        return
+    stub = types.ModuleType(dotted_name)
+    stub.__package__ = dotted_name
+    stub.__path__ = [str(_ROOT / dotted_name.replace(".", "/"))]  # type: ignore[assignment]
+    sys.modules[dotted_name] = stub
+
+
+def _load_module(dotted_name: str, rel_path: str) -> types.ModuleType:
+    if dotted_name in sys.modules:
+        return sys.modules[dotted_name]
+    file_path = _ROOT / rel_path
+    spec = importlib.util.spec_from_file_location(dotted_name, file_path)
+    assert spec is not None and spec.loader is not None, f"Cannot load {file_path}"
+    mod = importlib.util.module_from_spec(spec)
+    mod.__package__ = dotted_name.rsplit(".", 1)[0] if "." in dotted_name else ""
+    sys.modules[dotted_name] = mod
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+for _pkg in ("common", "common.auth"):
+    _ensure_pkg(_pkg)
+
+_load_module("common.auth.models", "common/auth/models.py")
+_load_module("common.auth.errors", "common/auth/errors.py")
+_load_module("common.auth.wso2_is_client", "common/auth/wso2_is_client.py")
+_load_module("common.auth.actor_token_provider", "common/auth/actor_token_provider.py")
+
+# it_agent directory has a dash in the filesystem; load config.py directly
+_ensure_pkg("it_agent")
+_load_module("it_agent.config", "it_agent/config.py")
+
+# ── Imports ────────────────────────────────────────────────────────────────────
+
+import pytest
+
+from common.auth.wso2_is_client import WSO2ISClientConfig
+from it_agent.config import ITAgentConfig
+
+# ── Shared helpers ─────────────────────────────────────────────────────────────
+
+
+def _base_env() -> dict[str, str]:
+    return {
+        "WSO2_IS_BASE_URL": "https://is.example.com:9443",
+        "IDP_INSECURE_TLS": "1",
+        "IT_AGENT_ID": "it_agent-uuid",
+        "IT_AGENT_SECRET": "it_agent-secret",
+        "IT_AGENT_OAUTH_CLIENT_ID": "it-oauth-client-id",
+        "IT_AGENT_OAUTH_CLIENT_SECRET": "it-oauth-client-secret",
+        "IT_MCP_SERVER_URL": "http://it_server:8004",
+        "IT_EXPECTED_INBOUND_AUD": "orch-mcp-client-id",
+    }
+
+
+# ── Test 1: successful construction ───────────────────────────────────────────
+
+class TestSuccessfulConstruction:
+
+    def test_basic_fields(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        assert cfg.is_base_url == "https://is.example.com:9443"
+        assert cfg.is_insecure_tls is True
+        assert cfg.agent.agent_id == "it_agent-uuid"
+        assert cfg.agent.agent_secret == "it_agent-secret"
+        assert cfg.agent.oauth_client_id == "it-oauth-client-id"
+        assert cfg.agent.oauth_client_secret == "it-oauth-client-secret"
+        assert cfg.it_server_url == "http://it_server:8004"
+        assert cfg.expected_inbound_aud == "orch-mcp-client-id"
+
+    def test_default_values_applied(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        assert cfg.host == "0.0.0.0"
+        assert cfg.port == 8002
+        assert cfg.ciba_scope == "openid it.read"
+        assert cfg.max_poll_seconds == 240
+        assert cfg.canonical_url == "http://it_agent:8002/a2a"
+
+    def test_instance_is_frozen(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        with pytest.raises((AttributeError, TypeError)):
+            cfg.port = 9999  # type: ignore[misc]
+
+    def test_is_client_config_wired(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        isc = cfg.is_client_config()
+        assert isinstance(isc, WSO2ISClientConfig)
+        assert isc.base_url == cfg.is_base_url
+        assert isc.insecure_tls == cfg.is_insecure_tls
+
+    def test_issuer_derived_from_base_url(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        assert cfg.is_issuer == "https://is.example.com:9443/oauth2/token"
+
+    def test_jwks_url_derived_from_base_url(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        assert cfg.is_jwks_url == "https://is.example.com:9443/oauth2/jwks"
+
+    def test_explicit_jwks_url_used_when_set(self) -> None:
+        env = {**_base_env(), "WSO2_IS_JWKS_URL": "https://custom.example.com/jwks"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.is_jwks_url == "https://custom.example.com/jwks"
+
+    def test_custom_port_parsed(self) -> None:
+        env = {**_base_env(), "IT_AGENT_PORT": "8012"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.port == 8012
+
+    def test_ciba_scope_overridable(self) -> None:
+        env = {**_base_env(), "IT_CIBA_SCOPE": "openid it.read it.write"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.ciba_scope == "openid it.read it.write"
+
+    def test_insecure_tls_false_when_not_set(self) -> None:
+        env = {**_base_env(), "IDP_INSECURE_TLS": "false"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.is_insecure_tls is False
+
+    def test_insecure_tls_true_via_yes(self) -> None:
+        env = {**_base_env(), "IDP_INSECURE_TLS": "yes"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.is_insecure_tls is True
+
+    def test_custom_canonical_url(self) -> None:
+        env = {**_base_env(), "IT_AGENT_CANONICAL_URL": "https://it.example.com/a2a"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.canonical_url == "https://it.example.com/a2a"
+
+
+# ── Test 2: missing required variable → ValueError ────────────────────────────
+
+class TestMissingRequiredVars:
+
+    REQUIRED = [
+        "WSO2_IS_BASE_URL",
+        "IT_AGENT_ID",
+        "IT_AGENT_SECRET",
+        "IT_AGENT_OAUTH_CLIENT_ID",
+        "IT_AGENT_OAUTH_CLIENT_SECRET",
+        "IT_MCP_SERVER_URL",
+        "IT_EXPECTED_INBOUND_AUD",
+    ]
+
+    @pytest.mark.parametrize("var", REQUIRED)
+    def test_missing_var_raises_value_error(self, var: str) -> None:
+        env = _base_env()
+        del env[var]
+        with pytest.raises(ValueError, match=var):
+            ITAgentConfig.from_env(env)
+
+
+# ── Test 3: invalid URL → ValueError ──────────────────────────────────────────
+
+class TestURLValidation:
+
+    @pytest.mark.parametrize("bad_url", [
+        "not-a-url",
+        "https://is.example.com/with/path",
+        "https://is.example.com:9443/trailing-slash/",
+        "ftp://is.example.com:9443",
+    ])
+    def test_bad_is_base_url_raises(self, bad_url: str) -> None:
+        env = {**_base_env(), "WSO2_IS_BASE_URL": bad_url}
+        with pytest.raises(ValueError):
+            ITAgentConfig.from_env(env)
+
+    @pytest.mark.parametrize("bad_url", [
+        "http://it_server:8004/mcp",
+        "it_server:8004",
+        "ftp://it_server",
+    ])
+    def test_bad_it_server_url_raises(self, bad_url: str) -> None:
+        env = {**_base_env(), "IT_MCP_SERVER_URL": bad_url}
+        with pytest.raises(ValueError):
+            ITAgentConfig.from_env(env)
+
+
+# ── Test 4: frozenset parsing ─────────────────────────────────────────────────
+
+class TestFrozensetParsing:
+
+    def test_trusted_orchestrator_subs_parsed(self) -> None:
+        env = {
+            **_base_env(),
+            "IT_TRUSTED_PEER_AGENTS": "uuid-orch-1, uuid-orch-2 ,uuid-orch-3",
+        }
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.trusted_orchestrator_subs == frozenset(
+            {"uuid-orch-1", "uuid-orch-2", "uuid-orch-3"}
+        )
+
+    def test_trusted_orchestrator_subs_empty_when_not_set(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        assert cfg.trusted_orchestrator_subs == frozenset()
+
+    def test_single_sub_parsed(self) -> None:
+        env = {**_base_env(), "IT_TRUSTED_PEER_AGENTS": "only-orch-uuid"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.trusted_orchestrator_subs == frozenset({"only-orch-uuid"})
+
+    def test_whitespace_only_entries_ignored(self) -> None:
+        env = {**_base_env(), "IT_TRUSTED_PEER_AGENTS": "uuid-a,  ,uuid-b"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.trusted_orchestrator_subs == frozenset({"uuid-a", "uuid-b"})
+
+    def test_result_type_is_frozenset(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        assert isinstance(cfg.trusted_orchestrator_subs, frozenset)
+
+
+# ── Test 5: port parsing ───────────────────────────────────────────────────────
+
+class TestPortParsing:
+
+    def test_non_integer_port_raises(self) -> None:
+        env = {**_base_env(), "IT_AGENT_PORT": "xyz"}
+        with pytest.raises(ValueError, match="IT_AGENT_PORT"):
+            ITAgentConfig.from_env(env)
+
+    def test_valid_port_accepted(self) -> None:
+        env = {**_base_env(), "IT_AGENT_PORT": "9002"}
+        cfg = ITAgentConfig.from_env(env)
+        assert cfg.port == 9002
+
+    def test_default_port_is_8002(self) -> None:
+        cfg = ITAgentConfig.from_env(_base_env())
+        assert cfg.port == 8002

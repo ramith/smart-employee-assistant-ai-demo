@@ -18,7 +18,7 @@
       "id": "hr.approve_leave",                        // namespaced (<agent>.<verb>); collisions impossible
       "name": "Approve leave request",                 // human-readable
       "description": "Approve or reject a leave request by id.",  // shown to LLM via discover_agents
-      "required_scopes": ["hr_approve_mcp"]            // documentation only; enforcement at JWT validation
+      "required_scopes": ["hr_approve_a2a"]            // _a2a (agent-tier) — validated at hr_agent. Documentation only; enforcement at JWT validation. Hop 4 transforms to hr_approve_mcp at hr_server.
     }
   ],
   "capabilities": {
@@ -67,7 +67,7 @@ When the orchestrator's `discover_agents` tool returns cards to the LLM, the pro
 
 ```jsonc
 {
-  "agent_id": "hr-agent",                              // server-assigned opaque enum
+  "agent_id": "hr_agent",                              // server-assigned opaque enum
   "name": "HR Agent",
   "description": "...",
   "skills": [

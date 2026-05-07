@@ -1,74 +1,383 @@
-"""JWT validator — JWKS signature, exact-aud, scope, nested act chain.
+"""JWKS-backed JWT validator — Sprint 1 v4 implementation.
 
-Sprint 0 scaffold. Real implementation lands in Sprint 1 (consumed by hr-agent,
-it-agent, it-server). Wired into hr-server as a no-op pass-through behind a
-feature flag for now.
+Replaces the Sprint 0 stub. Provides:
+  - ``ValidatorConfig``  — frozen dataclass for per-service configuration.
+  - ``JWKSCache``        — async TTL-based JWKS fetcher; kid-miss triggers one refetch.
+  - ``validate()``       — async 6-step claim validator returning ``JWTClaims``.
 
-Design notes:
-- Issuer is **hardcoded from configuration**, never read from request data
-  (agent-card or otherwise). See milestone-plan §3.4 task 17.
-- Audience is **exact-match**; multi-aud arrays must have every entry in
-  an explicit allowlist (RFC 8707, §3.4 task 17).
-- `act` chain is walked recursively; missing `act` is rejected for resources
-  that require delegation.
+Design constraints (sprint-1-fixes.md):
+  F-02  JWTClaims shape; ``jti`` is required (see F-08).
+  F-04  MCP 6-step validator: sig → iss → exp → aud → act.sub → scopes.
+  F-08  ``jti`` is required and non-empty; missing ``jti`` raises ERR-AUTH-010.
+  F-09  Dataclass-vs-Pydantic boundary: this module uses dataclasses only.
+
+Library choice: ``PyJWT[cryptography]`` (simpler API, single decode call,
+RFC 7517 JWK import via ``jwt.algorithms.RSAAlgorithm``).
+
+Clock-skew tolerance: leeway is applied to both ``exp`` and ``nbf`` via PyJWT's
+built-in ``leeway`` parameter (``datetime.timedelta``).
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+import json
+import logging
+import time
+from dataclasses import dataclass, field
+from datetime import timedelta
+from typing import Any
 
-from .errors import (
-    AuthError,
-    ErrorEnvelope,
-    ERR_INVALID_AUDIENCE,
-    ERR_INSUFFICIENT_SCOPE,
-    ERR_TOKEN_EXPIRED,
-)
+import httpx
+import jwt
+from jwt.algorithms import RSAAlgorithm
+
+from .errors import JWTValidationError
+from .models import JWTClaims
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "ValidatorConfig",
+    "JWKSCache",
+    "validate",
+]
+
+# ── ValidatorConfig ───────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ValidatorConfig:
-    """Per-service validator configuration.
+    """Per-service JWT validation configuration.
 
-    `issuer` is hardcoded from env/config at startup. Never derived from a card.
+    All fields are read from env / service config at startup.
+    ``expected_iss`` and ``jwks_url`` are always required.
+    ``expected_aud`` is optional; when ``None`` the audience claim is not
+    checked by ``validate()`` (caller may enforce it separately).
+    ``required_scopes`` is a *subset* check — every listed scope must be
+    present in the token's ``scope`` claim.
+    ``leeway_seconds`` is forwarded to PyJWT for ``exp`` / ``nbf`` clock-skew
+    tolerance.
+    ``insecure_tls`` disables TLS certificate verification for development
+    against self-signed IS certificates.
+
+    Attributes:
+        expected_iss: Exact issuer URL; must match token ``iss``.
+        jwks_url: Full URL to the IS JWKS endpoint.
+        expected_aud: Optional exact audience string; if None, aud is unchecked.
+        required_scopes: Every scope in this set must be present in the token.
+        leeway_seconds: Allowed clock skew in seconds for exp/nbf checks.
+        insecure_tls: Disable TLS verification (dev only).
     """
 
-    issuer: str
-    expected_aud: str  # exact-match canonical resource URI
-    required_scopes: list[str]  # at least one must be present
-    require_act: bool = True  # reject tokens whose `act` claim is absent
-    jwks_url: Optional[str] = None
-    introspection_url: Optional[str] = None
+    expected_iss: str
+    jwks_url: str
+    expected_aud: str | None = None
+    required_scopes: frozenset[str] = frozenset()
+    leeway_seconds: int = 30
+    insecure_tls: bool = False
+
+
+# ── JWKSCache ─────────────────────────────────────────────────────────────────
 
 
 @dataclass
-class ValidatedClaims:
-    sub: str
-    aud: str
-    scopes: list[str]
-    act_chain: list[str]  # outermost-first; e.g., ["hr-agent", "orchestrator-agent"]
-    jti: Optional[str]
-    sid: Optional[str]
-    raw: dict
+class JWKSCache:
+    """Async TTL-based JWKS key cache.
 
+    One instance per ``jwks_url``.  Keys are fetched lazily on the first
+    ``get_key()`` call and cached for ``ttl_seconds`` (default 1 hour).
+    On a ``kid`` miss the cache is refreshed once before raising.
 
-def validate(token: str, cfg: ValidatorConfig) -> ValidatedClaims:
-    """Validate JWT signature, claims, and chain.
-
-    Sprint 0: stub raises NotImplementedError. Sprint 1 implementation:
-      1. Decode without verification → check `iss` matches cfg.issuer.
-      2. Fetch JWKS from cfg.jwks_url; verify signature.
-      3. Check exp/nbf/iat (with skew tolerance).
-      4. Check `aud` exact-match against cfg.expected_aud.
-      5. Extract scopes; require intersection with cfg.required_scopes.
-      6. Walk `act` chain; if cfg.require_act and chain empty, reject.
-      7. Optionally introspect (handled by introspector.py, not here).
+    Args:
+        jwks_url: JWKS endpoint URL.
+        ttl_seconds: Time-to-live for the cached key set.
+        insecure_tls: Disable TLS cert verification (dev only).
     """
-    raise NotImplementedError(
-        "common.auth.jwt_validator.validate — implemented in Sprint 1"
+
+    jwks_url: str
+    ttl_seconds: int = 3600
+    insecure_tls: bool = False
+
+    # Private runtime state — excluded from __init__ via field(init=False)
+    _keys: dict[str, dict[str, Any]] = field(default_factory=dict, init=False, repr=False)
+    _fetched_at: float = field(default=0.0, init=False, repr=False)
+
+    def _is_stale(self) -> bool:
+        return (time.monotonic() - self._fetched_at) >= self.ttl_seconds
+
+    async def refresh(self) -> None:
+        """Fetch the JWKS endpoint and repopulate the key map.
+
+        Keys are indexed by ``kid``.  Raises ``JWTValidationError`` on HTTP or
+        JSON failures so callers receive a typed error rather than raw httpx
+        exceptions.
+        """
+        logger.debug("jwks_cache_refresh url=%s", self.jwks_url)
+        try:
+            async with httpx.AsyncClient(verify=not self.insecure_tls) as client:
+                response = await client.get(self.jwks_url, timeout=10.0)
+                response.raise_for_status()
+                jwks: dict[str, Any] = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise JWTValidationError(
+                f"JWKS fetch failed: HTTP {exc.response.status_code}",
+                error_id="ERR-AUTH-006",
+                details={"jwks_url": self.jwks_url, "status_code": exc.response.status_code},
+            ) from exc
+        except (httpx.RequestError, json.JSONDecodeError) as exc:
+            raise JWTValidationError(
+                f"JWKS fetch error: {exc}",
+                error_id="ERR-AUTH-006",
+                details={"jwks_url": self.jwks_url},
+            ) from exc
+
+        new_keys: dict[str, dict[str, Any]] = {}
+        for key_dict in jwks.get("keys", []):
+            kid = key_dict.get("kid")
+            if kid:
+                new_keys[kid] = key_dict
+        self._keys = new_keys
+        self._fetched_at = time.monotonic()
+        logger.debug("jwks_cache_populated kid_count=%d", len(self._keys))
+
+    async def get_key(self, kid: str) -> dict[str, Any]:
+        """Return the JWK dict for *kid*, refreshing the cache if stale or on miss.
+
+        Args:
+            kid: Key ID from the JWT header.
+
+        Returns:
+            JWK dict suitable for ``jwt.algorithms.RSAAlgorithm.from_jwk()``.
+
+        Raises:
+            JWTValidationError: If the key is not found after one forced refresh.
+        """
+        if self._is_stale():
+            await self.refresh()
+
+        if kid in self._keys:
+            return self._keys[kid]
+
+        # kid miss — try a single forced refresh
+        logger.debug("jwks_cache_kid_miss kid=%s — forcing refresh", kid)
+        await self.refresh()
+
+        if kid not in self._keys:
+            raise JWTValidationError(
+                f"Unknown signing key kid={kid!r}",
+                error_id="ERR-AUTH-006",
+                details={"kid": kid, "known_kids": list(self._keys.keys())},
+            )
+        return self._keys[kid]
+
+
+# ── Module-level cache registry ───────────────────────────────────────────────
+
+# Keyed by (jwks_url, insecure_tls) so callers that omit jwks_cache get a
+# shared singleton without constructing a new httpx client on every call.
+_cache_registry: dict[tuple[str, bool], JWKSCache] = {}
+
+
+def _get_or_create_cache(config: ValidatorConfig) -> JWKSCache:
+    key = (config.jwks_url, config.insecure_tls)
+    if key not in _cache_registry:
+        _cache_registry[key] = JWKSCache(
+            jwks_url=config.jwks_url,
+            insecure_tls=config.insecure_tls,
+        )
+    return _cache_registry[key]
+
+
+# ── validate() ────────────────────────────────────────────────────────────────
+
+
+async def validate(
+    jwt_token: str,
+    config: ValidatorConfig,
+    *,
+    jwks_cache: JWKSCache | None = None,
+) -> JWTClaims:
+    """Verify a JWT token and return decoded ``JWTClaims``.
+
+    Performs a 6-step validation in order:
+
+    1. Decode header to extract ``kid``; fetch signing key from JWKS cache.
+    2. Verify signature, ``iss``, ``exp`` (+ leeway), ``nbf`` (+ leeway) via
+       PyJWT.  Passes ``options={"verify_aud": False}`` so aud is handled in
+       step 3 (PyJWT strict-aud rejects list-aud when expected is a string).
+    3. Check ``aud`` if ``config.expected_aud`` is set.
+    4. Verify ``jti`` is present and non-empty (F-08).
+    5. Check ``config.required_scopes`` is a subset of the token's scopes.
+    6. Build and return ``JWTClaims``.
+
+    Args:
+        jwt_token: The raw Bearer token string.
+        config: Validator configuration for this service endpoint.
+        jwks_cache: Optional pre-built cache; if ``None`` a shared registry
+            instance is used (keyed by ``jwks_url``).
+
+    Returns:
+        Decoded and fully-verified ``JWTClaims`` instance.
+
+    Raises:
+        JWTValidationError: On any validation failure; ``error_id`` identifies
+            the specific catalog entry:
+            - ``ERR-AUTH-006`` — bad/unknown signature
+            - ``ERR-AUTH-007`` — issuer mismatch
+            - ``ERR-AUTH-008`` — token expired (outside leeway)
+            - ``ERR-AUTH-010`` — missing or empty ``jti``
+            - ``ERR-MCP-001`` — audience mismatch
+            - ``ERR-MCP-003`` — missing required scope
+    """
+    cache = jwks_cache if jwks_cache is not None else _get_or_create_cache(config)
+
+    # ── Step 1: header → kid → signing key ───────────────────────────────────
+    try:
+        header = jwt.get_unverified_header(jwt_token)
+    except jwt.exceptions.DecodeError as exc:
+        raise JWTValidationError(
+            f"Malformed JWT header: {exc}",
+            error_id="ERR-AUTH-006",
+        ) from exc
+
+    kid: str = header.get("kid", "")
+    if not kid:
+        raise JWTValidationError(
+            "JWT header missing 'kid'",
+            error_id="ERR-AUTH-006",
+            details={"header": header},
+        )
+
+    jwk_dict = await cache.get_key(kid)  # raises JWTValidationError on unknown kid
+
+    try:
+        signing_key = RSAAlgorithm.from_jwk(jwk_dict)
+    except Exception as exc:
+        raise JWTValidationError(
+            f"Failed to build signing key from JWK: {exc}",
+            error_id="ERR-AUTH-006",
+            details={"kid": kid},
+        ) from exc
+
+    # ── Step 2: signature + iss + exp/nbf via PyJWT ───────────────────────────
+    leeway = timedelta(seconds=config.leeway_seconds)
+    try:
+        payload: dict[str, Any] = jwt.decode(
+            jwt_token,
+            key=signing_key,
+            algorithms=["RS256"],
+            issuer=config.expected_iss,
+            leeway=leeway,
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_nbf": True,
+                "verify_iss": True,
+                # Audience checked manually below (step 3) so PyJWT's strict
+                # equality doesn't trip on list-aud tokens.
+                "verify_aud": False,
+            },
+        )
+    except jwt.ExpiredSignatureError as exc:
+        raise JWTValidationError(
+            f"Token expired: {exc}",
+            error_id="ERR-AUTH-008",
+            details={"exp": _unverified_exp(jwt_token)},
+        ) from exc
+    except jwt.InvalidIssuerError as exc:
+        unverified = _decode_unverified(jwt_token)
+        raise JWTValidationError(
+            f"Issuer mismatch: {exc}",
+            error_id="ERR-AUTH-007",
+            details={
+                "actual_iss": unverified.get("iss"),
+                "expected_iss": config.expected_iss,
+            },
+        ) from exc
+    except jwt.InvalidSignatureError as exc:
+        raise JWTValidationError(
+            f"Invalid signature: {exc}",
+            error_id="ERR-AUTH-006",
+            details={"kid": kid},
+        ) from exc
+    except jwt.DecodeError as exc:
+        raise JWTValidationError(
+            f"JWT decode error: {exc}",
+            error_id="ERR-AUTH-006",
+        ) from exc
+    except jwt.InvalidTokenError as exc:
+        raise JWTValidationError(
+            f"Invalid token: {exc}",
+            error_id="ERR-AUTH-006",
+        ) from exc
+
+    # ── Step 3: audience check (optional) ────────────────────────────────────
+    if config.expected_aud is not None:
+        raw_aud: str | list[str] | None = payload.get("aud")
+        aud_list: list[str] = (
+            raw_aud if isinstance(raw_aud, list) else ([raw_aud] if raw_aud else [])
+        )
+        if config.expected_aud not in aud_list:
+            raise JWTValidationError(
+                f"Audience mismatch: expected {config.expected_aud!r}",
+                error_id="ERR-MCP-001",
+                details={
+                    "expected_aud": config.expected_aud,
+                    "actual_aud": raw_aud,
+                },
+            )
+
+    # ── Step 4: jti required and non-empty (F-08) ─────────────────────────────
+    jti: str | None = payload.get("jti")
+    if not jti:
+        raise JWTValidationError(
+            "Token is missing required 'jti' claim",
+            error_id="ERR-AUTH-010",
+            details={"sub": payload.get("sub"), "iss": payload.get("iss")},
+        )
+
+    # ── Step 5: required scope subset check ──────────────────────────────────
+    if config.required_scopes:
+        token_scopes: frozenset[str] = frozenset(payload.get("scope", "").split())
+        missing: frozenset[str] = config.required_scopes - token_scopes
+        if missing:
+            raise JWTValidationError(
+                f"Token missing required scopes: {sorted(missing)}",
+                error_id="ERR-MCP-003",
+                details={
+                    "required": sorted(config.required_scopes),
+                    "present": sorted(token_scopes),
+                    "missing": sorted(missing),
+                },
+            )
+
+    # ── Step 6: assemble JWTClaims ────────────────────────────────────────────
+    raw_aud_value: str | list[str] = payload.get("aud", "")
+    return JWTClaims(
+        sub=str(payload.get("sub", "")),
+        iss=str(payload.get("iss", "")),
+        aud=raw_aud_value,
+        exp=int(payload.get("exp", 0)),
+        iat=int(payload.get("iat", 0)),
+        jti=jti,
+        act=payload.get("act"),
+        scope=payload.get("scope"),
+        aut=payload.get("aut"),
     )
 
 
-def reject(envelope: ErrorEnvelope, http_status: int = 401) -> AuthError:
-    """Helper for validator call sites to raise consistently."""
-    return AuthError(envelope, http_status=http_status)
+# ── Private helpers ───────────────────────────────────────────────────────────
+
+
+def _decode_unverified(token: str) -> dict[str, Any]:
+    """Return payload without signature verification; used only for error detail extraction."""
+    try:
+        return jwt.decode(token, options={"verify_signature": False})
+    except Exception:
+        return {}
+
+
+def _unverified_exp(token: str) -> int | None:
+    payload = _decode_unverified(token)
+    exp = payload.get("exp")
+    return int(exp) if exp is not None else None

@@ -6,7 +6,7 @@ Run all three services (HR Server, Agent, Client) using Docker Compose.
 
 - Docker and Docker Compose installed
 - `.env` files configured in each service directory:
-  - `hr-server/.env` (copy from `hr-server/.env.example`)
+  - `hr_server/.env` (copy from `hr_server/.env.example`)
   - `agent/.env` (copy from `agent/.env.example`)
   - `client/.env` (copy from `client/.env.example`)
 
@@ -21,11 +21,11 @@ This starts:
 
 | Service     | Container Port | Host Port             | Description                                                                  |
 |-------------|----------------|-----------------------|------------------------------------------------------------------------------|
-| `hr-server` | 8000           | 8000                  | HR MCP + REST API server                                                     |
+| `hr_server` | 8000           | 8000                  | HR MCP + REST API server                                                     |
 | `agent`     | 5001           | 5001                  | AI Agent server (LangChain)                                                  |
 | `client`    | 3000           | `${CLIENT_PORT:-3001}` | Browser SPA (dev server). Host port follows `CLIENT_PORT`; default is 3001. |
 
-Startup order: **hr-server** → **agent** → **client**
+Startup order: **hr_server** → **agent** → **client**
 
 Open the app at **http://localhost:3001** (or the `CLIENT_PORT` you set).
 
@@ -38,12 +38,12 @@ Each service runs in its own container, so logs are fully separated:
 docker compose logs
 
 # Individual service logs
-docker compose logs hr-server
+docker compose logs hr_server
 docker compose logs agent
 docker compose logs client
 
 # Follow logs in real time (stream)
-docker compose logs -f hr-server
+docker compose logs -f hr_server
 docker compose logs -f agent
 docker compose logs -f client
 
@@ -51,10 +51,10 @@ docker compose logs -f client
 docker compose logs -f
 
 # Show only the last 50 lines
-docker compose logs --tail=50 hr-server
+docker compose logs --tail=50 hr_server
 
 # Combine: last 50 lines then follow
-docker compose logs --tail=50 -f hr-server
+docker compose logs --tail=50 -f hr_server
 ```
 
 ### What to look for in HR Server logs
@@ -86,8 +86,8 @@ docker compose up --build -d
 docker compose down
 
 # Rebuild a single service
-docker compose build hr-server
-docker compose up -d hr-server
+docker compose build hr_server
+docker compose up -d hr_server
 
 # Restart a single service
 docker compose restart agent
@@ -99,7 +99,7 @@ docker compose ps
 ## Networking
 
 Inside Docker Compose, services reference each other by name:
-- The **agent** connects to the HR server at `http://hr-server:8000/mcp`
+- The **agent** connects to the HR server at `http://hr_server:8000/mcp`
 - The **client** serves browser config pointing to `http://localhost:5001` and `http://localhost:8000` (the browser runs on the host, not inside Docker)
 
 These overrides are set in `docker-compose.yml` — your `.env` files don't need to change.
@@ -108,7 +108,7 @@ These overrides are set in `docker-compose.yml` — your `.env` files don't need
 
 | Problem | Solution |
 |---------|----------|
-| Agent can't reach HR server | Check `docker compose logs hr-server` — it must be healthy before the agent starts |
-| Browser gets CORS errors | Ensure `ALLOWED_ORIGINS` includes `http://localhost:3001` (or whatever `CLIENT_PORT` you set) on both `hr-server/.env` and `agent/.env`, or pass `ALLOWED_ORIGINS=...` to `docker compose up` |
+| Agent can't reach HR server | Check `docker compose logs hr_server` — it must be healthy before the agent starts |
+| Browser gets CORS errors | Ensure `ALLOWED_ORIGINS` includes `http://localhost:3001` (or whatever `CLIENT_PORT` you set) on both `hr_server/.env` and `agent/.env`, or pass `ALLOWED_ORIGINS=...` to `docker compose up` |
 | Token validation fails | Verify `JWKS_URL` and `AUTH_ISSUER` are reachable from inside the container |
 | OBO callback fails | Ensure `OBO_REDIRECT_URI` in `agent/.env` is `http://localhost:5001/api/obo/callback` |

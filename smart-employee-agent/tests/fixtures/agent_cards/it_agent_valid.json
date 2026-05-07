@@ -1,0 +1,34 @@
+{
+  "schema_version": "v3-custom",
+  "id": "it-agent",
+  "name": "IT Agent",
+  "description": "Handles IT queries: assets, equipment, devices.",
+  "url": "https://it.smart-employee.local",
+  "oauth_client_id": "it-agent-oauth-client-id-xyz789",
+  "api_version": "1.0.0",
+  "skills": [
+    {
+      "id": "it.list_available_assets",
+      "name": "List available assets",
+      "description": "Return the list of IT assets available for allocation.",
+      "scope": "it_read_a2a",
+      "required_scopes": ["it_read_a2a"]
+    },
+    {
+      "id": "it.request_asset",
+      "name": "Request an asset",
+      "description": "Submit a request to allocate a specific IT asset to the user.",
+      "scope": "it_write_a2a",
+      "required_scopes": ["it_write_a2a"]
+    }
+  ],
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "auth": {
+    "scheme": "oauth2",
+    "issuer": "https://api.asgardeo.io/t/ddademo/oauth2/token",
+    "audience": "https://it.smart-employee.local"
+  }
+}

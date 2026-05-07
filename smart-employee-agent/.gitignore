@@ -1,0 +1,3 @@
+scripts/probes/.test-users.env
+idp_capability_test/.substrate.env
+idp_capability_test/.venv/
