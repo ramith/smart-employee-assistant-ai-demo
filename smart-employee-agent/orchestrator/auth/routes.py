@@ -557,9 +557,14 @@ def _make_exchange_relay_html(
   <script>
     (async function() {{
       try {{
+        // Mid-sprint observability fix: send X-Request-ID so the orchestrator
+        // doesn't WARN on auto-generation. Mint a fresh rid scoped to this
+        // exchange — same shape as `client/app.js::performSignOut`.
+        const exchangeRid = 'exchange-' + Math.random().toString(36).slice(2, 10)
+          + '-' + Date.now().toString(36);
         const resp = await fetch('/auth/exchange', {{
           method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
+          headers: {{ 'Content-Type': 'application/json', 'X-Request-ID': exchangeRid }},
           credentials: 'include',
           body: JSON.stringify({{ code: '{safe_code}', state: '{safe_state}' }})
         }});

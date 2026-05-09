@@ -197,39 +197,50 @@ class LogoutHandler:
             await self._cancel_pending_ciba(pending_list, request_id)
 
             # Step 5: revoke token-A at IS (per session — best-effort).
-            try:
-                await self.revoke_client.revoke_access_token(
-                    token_a_access, request_id=request_id
-                )
-            except RevokeError as exc:
-                logger.warning(
-                    "is_revoke_failed_proceeding | rid=%s session_id=%s err=%s",
-                    request_id,
-                    s.session_id[:8],
-                    exc,
-                )
+            # Steps 5+6 (mid-sprint review optimisation): IS revoke and
+            # internal fan-out are INDEPENDENT per F-21 (revoking token-A at
+            # IS does NOT propagate to OBO tokens — denylist on receivers IS
+            # the security boundary). Run them concurrently to cut the
+            # cascade wall-clock from ~1 s (IS round-trip dominates) to
+            # ~150 ms. Tech-arch §1.1 sequence diagram already shows the
+            # `par` block; this aligns the implementation with the spec.
 
-            # Step 6: fan-out to /internal/events on 4 receivers.
-            if completed_log and self.events_client is not None:
-                for record in completed_log:
-                    await self.events_client.fan_out(
-                        jti=record.jti,
-                        user_sub=session.user_sub,
-                        exp=float(record.exp),
-                        reason=reason,
-                        request_id=request_id,
+            async def _do_revoke() -> None:
+                try:
+                    await self.revoke_client.revoke_access_token(
+                        token_a_access, request_id=request_id
                     )
-            elif completed_log:
-                # Test mode (events_client is None) — still log the audit chain.
-                for record in completed_log:
-                    logger.info(
-                        "logout_fanout_stub | rid=%s session_id=%s agent_id=%s jti=%s reason=%s",
+                except RevokeError as exc:
+                    logger.warning(
+                        "is_revoke_failed_proceeding | rid=%s session_id=%s err=%s",
                         request_id,
                         s.session_id[:8],
-                        record.agent_id,
-                        record.jti[:8],
-                        reason,
+                        exc,
                     )
+
+            async def _do_fanout() -> None:
+                if completed_log and self.events_client is not None:
+                    for record in completed_log:
+                        await self.events_client.fan_out(
+                            jti=record.jti,
+                            user_sub=session.user_sub,
+                            exp=float(record.exp),
+                            reason=reason,
+                            request_id=request_id,
+                        )
+                elif completed_log:
+                    # Test mode (events_client is None) — still log the audit chain.
+                    for record in completed_log:
+                        logger.info(
+                            "logout_fanout_stub | rid=%s session_id=%s agent_id=%s jti=%s reason=%s",
+                            request_id,
+                            s.session_id[:8],
+                            record.agent_id,
+                            record.jti[:8],
+                            reason,
+                        )
+
+            await asyncio.gather(_do_revoke(), _do_fanout())
 
             # Step 7: clear this session (LAST mutation per BLOCK-H).
             await self.session_store.delete(s.session_id)
