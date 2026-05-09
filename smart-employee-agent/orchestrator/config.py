@@ -150,8 +150,10 @@ class OrchestratorConfig:
     # 3A.2.2 (live-walk fix 2026-05-09): explicit post_logout_redirect_uri sent
     # to IS RP-initiated logout. WSO2 IS requires this URL to be EXACTLY
     # registered on orchestrator-mcp-client's Callback URLs (no query string,
-    # no fragment). Operator must add this in IS Console before live-walk.
-    post_logout_redirect_uri: str = "http://localhost:3001/"
+    # no fragment). Default points at the orchestrator's own port 8090 since
+    # the SPA is now served from `orchestrator/main.py` StaticFiles mount;
+    # the legacy `client:3001` container is no longer the SPA host.
+    post_logout_redirect_uri: str = "http://localhost:8090/"
     gemini_api_key: str | None = None
 
     # Cookie (F-06)
@@ -231,8 +233,9 @@ class OrchestratorConfig:
         ).strip()
 
         # 3A.2.2: post_logout_redirect_uri (must be registered in IS Console).
+        # Default = orchestrator's own URL since the SPA is served from there.
         post_logout_redirect_uri = env.get(
-            "POST_LOGOUT_REDIRECT_URI", "http://localhost:3001/"
+            "POST_LOGOUT_REDIRECT_URI", "http://localhost:8090/"
         ).strip()
 
         # F-15: specialist OAuth client IDs

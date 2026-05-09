@@ -104,7 +104,10 @@ services:
       # 3A.2.2: must be EXACTLY registered as a Callback URL on the
       # orchestrator-mcp-client app in IS Console. WSO2 IS rejects with
       # "Post logout URI does not match" otherwise (live-walk 2026-05-09).
-      - POST_LOGOUT_REDIRECT_URI=${POST_LOGOUT_REDIRECT_URI:-http://localhost:3001/}
+      # Default = orchestrator's port 8090 since the SPA is served from
+      # orchestrator/main.py StaticFiles (the legacy `client:3001` container
+      # is no longer the SPA host).
+      - POST_LOGOUT_REDIRECT_URI=${POST_LOGOUT_REDIRECT_URI:-http://localhost:8090/}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]
