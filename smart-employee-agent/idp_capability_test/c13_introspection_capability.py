@@ -200,10 +200,12 @@ def main() -> int:
         fail("ORCHESTRATOR_MCP_CLIENT_ID/SECRET missing — can't call /oauth2/revoke for token-A.")
         info("Check orchestrator/.env for the confidential-client credentials.")
         return 2
-    if not (hr_client_id and hr_client_secret):
-        warn("HR_AGENT_OAUTH_CLIENT_ID/SECRET missing — will use orchestrator client for both.")
-        hr_client_id = orch_client_id
-        hr_client_secret = orch_client_secret
+
+    # WSO2 IS /oauth2/introspect requires admin credentials by default
+    # (not the OAuth client that issued the token). Default IS dev admin
+    # credentials are admin/admin; override via env if hardened.
+    is_admin_user = os.environ.get("IS_ADMIN_USER", "admin")
+    is_admin_pw = os.environ.get("IS_ADMIN_PASSWORD", "admin")
 
     token_a = os.environ.get("TOKEN_A", "").strip()
     token_b = os.environ.get("TOKEN_B", "").strip()
@@ -220,23 +222,24 @@ def main() -> int:
     hr_("C13 — IS introspection of OBO tokens after parent token revoke")
     info(f"  IS base URL                  : {is_base}")
     info(f"  Revoking client (token-A)    : {orch_client_id}")
-    info(f"  Introspecting client (token-B): {hr_client_id}")
+    info(f"  Introspecting as (admin user): {is_admin_user}")
     info(f"  Settle window after revoke   : {settle_s} s")
     info(f"  Token-A length               : {len(token_a)}")
     info(f"  Token-B length               : {len(token_b)}")
 
     # ── Step 1: sanity introspect token-A ─────────────────────────────────────
     hr_("C13.1 — Introspect token-A (sanity, expect active=true)")
-    a_before = _introspect(s, is_base, orch_client_id, orch_client_secret, token_a)
+    a_before = _introspect(s, is_base, is_admin_user, is_admin_pw, token_a)
     _print_introspection("token_a", a_before)
     if a_before.get("active") is not True:
         warn("token-A introspects as inactive ALREADY. Probe cannot proceed cleanly.")
         info("Re-capture a fresh token-A and rerun.")
+        info("(If 401: set IS_ADMIN_USER / IS_ADMIN_PASSWORD env vars; default is admin/admin.)")
         return 1
 
     # ── Step 2: sanity introspect token-B ─────────────────────────────────────
     hr_("C13.2 — Introspect token-B (sanity, expect active=true)")
-    b_before = _introspect(s, is_base, hr_client_id, hr_client_secret, token_b)
+    b_before = _introspect(s, is_base, is_admin_user, is_admin_pw, token_b)
     _print_introspection("token_b", b_before)
     if b_before.get("active") is not True:
         warn("token-B introspects as inactive ALREADY. Probe cannot proceed cleanly.")
@@ -265,7 +268,7 @@ def main() -> int:
     # ── Step 4: confirm token-A introspects inactive (sanity) ────────────────
     hr_(f"C13.4 — Sleep {settle_s}s, then introspect token-A again (expect active=false)")
     time.sleep(settle_s)
-    a_after = _introspect(s, is_base, orch_client_id, orch_client_secret, token_a)
+    a_after = _introspect(s, is_base, is_admin_user, is_admin_pw, token_a)
     _print_introspection("token_a_after", a_after)
     if a_after.get("active") is True:
         warn("token-A still active after revoke. IS-side revoke propagation is slow")
@@ -273,7 +276,7 @@ def main() -> int:
 
     # ── Step 5: the question — does token-B introspect as inactive? ──────────
     hr_("C13.5 — Introspect token-B AFTER revoke of token-A (the question)")
-    b_after = _introspect(s, is_base, hr_client_id, hr_client_secret, token_b)
+    b_after = _introspect(s, is_base, is_admin_user, is_admin_pw, token_b)
     _print_introspection("token_b_after", b_after)
 
     hr_("C13 verdict")

@@ -535,3 +535,125 @@ Full setup walkthrough in `docs/spikes/c12-bcl-spike-setup.md`. Short version:
 cat tools/_bcl_log/bcl_received.log      # empty → IS did not fire BCL
 ./scripts/spike-bcl-down.sh
 ```
+
+---
+
+## F-20 — WSO2 IS 7.2 accepts `/oauth2/revoke` with `auth_req_id` but treats it as a no-op (Sprint 3 spike finding)
+
+**Surfaced:** 2026-05-09 C14 capability probe (`idp_capability_test/c14_authreqid_revoke.py`) as `employee_user` (sub `2048ad8c-16a6-4ec1-bb63-b38300118f28`).
+
+### Question probed
+
+Does IS support revoking a pending CIBA `auth_req_id` before the user has approved at the consent screen? The mitigation for Q-LOGOUT-4 ("ghost approval") in Sprint 3 D3.1 depended on a positive answer.
+
+### Outcome — F-20 FAIL (soft)
+
+WSO2 IS 7.2 returns **HTTP 200** to `/oauth2/revoke` with `token=<auth_req_id>` (and the same for `token_type_hint=auth_req_id` and `=ciba_request`) — but the `auth_req_id` remains valid. Polling `/oauth2/token grant_type=urn:openid:params:grant-type:ciba` after the revoke still returns `authorization_pending`. IS treats the revoke as a silent no-op for `auth_req_id`s.
+
+The non-standard `/oauth2/ciba/revoke` endpoint returns 404.
+
+### Evidence
+
+```
+auth_req_id : 8dc598ca-a57e-41cb-baf8-…
+expires_in  : 300
+interval    : 2
+
+/oauth2/revoke shape A (no token_type_hint)        : HTTP 200 (empty)
+/oauth2/revoke shape B (token_type_hint=auth_req_id): HTTP 200 (empty)
+/oauth2/revoke shape C (token_type_hint=ciba_request): HTTP 200 (empty)
+/oauth2/ciba/revoke (non-standard)                 : HTTP 404 (empty)
+
+Poll /oauth2/token (after 3 s back-off):
+  HTTP 400
+  { "error": "authorization_pending", "error_description": "Authorization pending" }
+```
+
+### Implication for Sprint 3
+
+- **Q-LOGOUT-4 ghost-approval caveat is REAL.** The orchestrator's local `cancel_event.set()` is the only cancellation primitive available; IS continues to honour the `auth_req_id` until natural expiry (`expires_in=300`).
+- **3B.2 will NOT wire `auth_req_id` revoke.** Per Stage 5 §6 OQ-2 fallback, document the caveat in `docs/demo-runbook.md` and accept it.
+- The race is bounded: a "ghost" approval after logout can mint a token-B with no consumer (poll loop is cancelled). If the token-B somehow reaches an MCP server (e.g. captured via observability), the denylist check rejects it — provided the fan-out reached the MCP server. With F-21 (below) also FAIL, the MCP-server backstop becomes the only line of defense, and only if the fan-out succeeded.
+
+### Caveat about the verdict
+
+`HTTP 200` from `/oauth2/revoke` is *technically spec-compliant* per RFC 7009 §2.2 ("The authorization server responds with HTTP status code 200 if the token has been revoked successfully or if the client submitted an invalid token"). IS is following the letter of the spec. The user-visible outcome — that the auth_req_id continues to work — is the failure mode, not the response code.
+
+### Reproducer
+
+```bash
+cd idp_capability_test
+EMPLOYEE_USER_SUB=<uuid> python3 c14_authreqid_revoke.py
+```
+
+---
+
+## F-21 — WSO2 IS 7.2 does not propagate parent-token revocation to CIBA-issued OBO tokens (Sprint 3 spike finding)
+
+**Surfaced:** 2026-05-09 C13 capability probe (`idp_capability_test/c13_introspection_capability.py`) as `employee_user` with admin-credential introspection.
+
+### Question probed
+
+Sprint 3 Stage 4 BLOCK-A: does revoking token-A (Pattern C parent) make CIBA-issued token-B introspect as `active=false`? The §5 error-matrix backstop story for half-fan-out (R-LOGOUT-7) and orchestrator-crash (EX-4) depended on a positive answer.
+
+### Outcome — F-21 FAIL
+
+WSO2 IS 7.2 treats CIBA-issued OBO tokens as **independent grants** with no parent linkage. Revoking token-A via `/oauth2/revoke` succeeds (token-A introspects as `active=false` within ≤5 s) but **token-B remains `active=true`** — even though token-B was minted via a CIBA flow whose actor was the orchestrator-mcp-client (token-A's grant chain).
+
+This is structurally consistent with F-19: IS treats CIBA grants as session-independent. F-19 closed the BCL question; F-21 closes the introspection question. Both point at the same architectural property of WSO2 IS 7.2.
+
+### Evidence
+
+```
+Token-A jti : c4d320ac-08fe-4682-ba59-d05bf4a5cbcf
+              client_id=Ry9Wx_Q7w2FSi27miUpYr3O0xR4a (orchestrator-mcp-client)
+              scope="email openid profile"
+Token-B jti : df428ab7-f7b7-487c-81b3-f214e55ad88c
+              client_id=aNpk7lwTHkw94iwC6f5VCO5ffNIa (HR-AGENT-OAuth-Client)
+              scope="hr_self_rest openid"
+              token JWT carries act.sub=51de717a-... (hr_agent — CIBA actor)
+
+C13.1 introspect token-A : active=true   (sanity)
+C13.2 introspect token-B : active=true   (sanity)
+C13.3 /oauth2/revoke token-A: HTTP 200   (accepted)
+C13.4 introspect token-A : active=false  ✓ (revoke propagates locally)
+C13.5 introspect token-B : active=true   ✗ — F-21 FAIL
+```
+
+### Implication for Sprint 3
+
+Per Stage 5 L-2 lock: **ship with SECURITY-DEGRADED labels** (do not escalate to a Sprint 4 hardening sprint).
+
+Concrete required follow-ups:
+
+1. **Tech-arch §5 error matrix** — relabel rows 1, 2, 3 as **SECURITY-DEGRADED**:
+   - "`/oauth2/revoke` returns 5xx" — backstop claim removed; surviving claim is "token expires naturally within TTL".
+   - "Single fan-out leg returns 5xx" — introspection backstop replaced by "captured token survives until TTL on missed leg; denylist on remaining 3 legs partially defends".
+   - "All fan-out legs fail" — already SECURITY-DEGRADED.
+   - "Orchestrator process restarts mid-cascade" — same.
+2. **Demo runbook** — add operator-action note: on `logout_fanout_partial WARN`, restart affected receivers within demo window OR accept the 1 h replay window for the captured token.
+3. **R-LOGOUT-7b** — the test now asserts the SECURITY_DEGRADED label is emitted on all-legs-failure; no behavioural change to fan-out.
+4. **Demo narrative** — sharpen the story: *"Denylist is the security boundary; introspection is a staleness backstop for tokens IS itself revokes (token-A, admin-terminate). For CIBA OBO tokens, the orchestrator-driven cascade is the only revocation primitive — which is exactly why the gateway pattern matters."*
+
+### Side observation worth noting
+
+The IS introspection response for token-B does **not include the `act` claim** (it strips it from the JWT payload), even though the JWT itself carries `act.sub=51de717a-…`. If any future Sprint 3 code wants to use introspection to check `act.sub`, it must decode the JWT directly rather than rely on the introspection payload.
+
+### Reproducer
+
+```bash
+# 1. Sign in as employee_user, trigger an HR query, approve consent.
+# 2. Capture token-A and token-B (one-shot debug prints in
+#    orchestrator/auth/routes.py + hr_agent/ciba/orchestrator.py;
+#    see git history of this commit for the exact one-liners).
+# 3. Run:
+cd idp_capability_test
+TOKEN_A=<paste> TOKEN_B=<paste> python3 c13_introspection_capability.py
+# Expect: F-21 FAIL — token-B still active.
+```
+
+### F-19 + F-20 + F-21 unified statement
+
+WSO2 IS 7.2 treats CIBA-issued OBO grants as **fully independent of any parent identity context** for revocation purposes. Specifically: (a) CIBA grants are absent from the user-session table, so RP-initiated logout / admin-terminate do not fire BCL to the agent apps (F-19); (b) the `auth_req_id` is non-revocable while pending (F-20); (c) the issued OBO access token is not killed by revoking the actor's parent grant (F-21).
+
+This is the precise empirical reason the **gateway pattern is required, not preferred**, for our architecture: the orchestrator's internal cache-bust fan-out is the only path that propagates revocation to CIBA-issued tokens. Stage 1 §1 demo arc already uses this framing; F-21 simply tightens the technical receipts.
