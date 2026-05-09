@@ -157,6 +157,14 @@ class InternalEventsClient:
 
         async def _call_one(target: FanOutTarget) -> tuple[FanOutTarget, str | None]:
             url = target.url.rstrip("/") + "/internal/events"
+            logger.debug(
+                "fanout_leg_start | rid=%s target=%s url=%s jti=%s reason=%s",
+                request_id,
+                target.label,
+                url,
+                jti[:8],
+                reason,
+            )
             for attempt in (1, 2):
                 try:
                     resp = await client.post(url, json=body, headers=headers)
@@ -166,6 +174,12 @@ class InternalEventsClient:
                 except httpx.HTTPError as exc:
                     err = f"network error: {exc}"
                 if attempt == 1:
+                    logger.debug(
+                        "fanout_leg_retry | rid=%s target=%s attempt=1 err=%s",
+                        request_id,
+                        target.label,
+                        err,
+                    )
                     await asyncio.sleep(self.retry_once_after_ms / 1000.0)
                     continue
                 return target, err

@@ -268,10 +268,19 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
+            logger.warning(
+                "get_leave_balance missing_bearer rid=%s", rid
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
             )
+
+        logger.debug(
+            "get_leave_balance tool_entry rid=%s required_scopes=%s",
+            rid,
+            ["hr_self_rest"],
+        )
 
         try:
             claims = await deps.validator.validate_token(
@@ -280,14 +289,23 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
-                "get_leave_balance token validation failed error_id=%s rid=%s",
+                "get_leave_balance token validation failed error_id=%s rid=%s reason=%r details=%s",
                 exc.error_id,
                 rid,
+                str(exc),
+                getattr(exc, "details", None),
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
+
+        logger.debug(
+            "get_leave_balance validation_ok rid=%s sub=%s jti=%s",
+            rid,
+            claims.sub,
+            claims.jti,
+        )
 
         employee_id = body.employee_id or claims.sub
         row = _CANNED_LEAVE_BALANCES.get(employee_id) or _CANNED_LEAVE_BALANCES["default"]
@@ -313,10 +331,19 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
+            logger.warning(
+                "get_leave_history missing_bearer rid=%s", rid
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
             )
+
+        logger.debug(
+            "get_leave_history tool_entry rid=%s required_scopes=%s",
+            rid,
+            ["hr_self_rest"],
+        )
 
         try:
             claims = await deps.validator.validate_token(
@@ -325,14 +352,23 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
-                "get_leave_history token validation failed error_id=%s rid=%s",
+                "get_leave_history token validation failed error_id=%s rid=%s reason=%r details=%s",
                 exc.error_id,
                 rid,
+                str(exc),
+                getattr(exc, "details", None),
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
+
+        logger.debug(
+            "get_leave_history validation_ok rid=%s sub=%s jti=%s",
+            rid,
+            claims.sub,
+            claims.jti,
+        )
 
         employee_id = body.employee_id or claims.sub
         raw_entries = (
@@ -360,10 +396,20 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
+            logger.warning(
+                "approve_leave missing_bearer rid=%s", rid
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
             )
+
+        logger.debug(
+            "approve_leave tool_entry rid=%s leave_id=%s required_scopes=%s",
+            rid,
+            body.leave_id,
+            ["hr_approve_rest"],
+        )
 
         try:
             claims = await deps.validator.validate_token(
@@ -372,14 +418,23 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
-                "approve_leave token validation failed error_id=%s rid=%s",
+                "approve_leave token validation failed error_id=%s rid=%s reason=%r details=%s",
                 exc.error_id,
                 rid,
+                str(exc),
+                getattr(exc, "details", None),
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
+
+        logger.debug(
+            "approve_leave validation_ok rid=%s sub=%s jti=%s",
+            rid,
+            claims.sub,
+            claims.jti,
+        )
 
         from datetime import datetime, timezone
 

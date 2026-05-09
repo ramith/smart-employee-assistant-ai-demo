@@ -188,11 +188,36 @@ class HRServerTokenValidator:
             PeerTrustError: Step 5 fails (act.sub not trusted).
             ScopeError: Step 6 fails (missing required scope).
         """
+        effective_scopes: frozenset[str] = (
+            required_scopes if required_scopes is not None else self._config.required_scopes
+        )
+
+        # DEBUG: decision-point snapshot before any check runs so that a
+        # LOG_LEVEL=DEBUG rerun shows exactly what the validator expected vs
+        # what arrived, without needing to intercept a live token.
+        logger.debug(
+            "hr_validator_entry expected_aud=%s trusted_act_subs=%s required_scopes=%s",
+            self._config.expected_aud,
+            self._config.trusted_act_subs,
+            sorted(effective_scopes),
+        )
+
         # Steps 1-4: signature + iss + exp + aud via common jwt_validator
         claims: JWTClaims = await validate(
             jwt_token,
             self._validator_config,
             jwks_cache=self._jwks_cache,
+        )
+
+        # DEBUG: show the claims that passed steps 1-4 so scope/act failures
+        # can be correlated against what the token actually contained.
+        logger.debug(
+            "hr_validator_claims_decoded jti=%s iss=%s aud=%r act=%r scope=%r",
+            claims.jti,
+            claims.iss,
+            claims.aud,
+            claims.act,
+            claims.scope,
         )
 
         # Step 5: act.sub must be in trusted_act_subs (max_depth=1, depth-2 denied)
@@ -204,15 +229,18 @@ class HRServerTokenValidator:
         )
 
         # Step 6: scope subset check (raises ScopeError, not JWTValidationError)
-        effective_scopes: frozenset[str] = (
-            required_scopes if required_scopes is not None else self._config.required_scopes
-        )
         if effective_scopes:
             token_scopes: frozenset[str] = frozenset(
                 claims.scope.split() if claims.scope else []
             )
             missing: frozenset[str] = effective_scopes - token_scopes
             if missing:
+                logger.debug(
+                    "hr_validator_scope_fail required=%s present=%s missing=%s",
+                    sorted(effective_scopes),
+                    sorted(token_scopes),
+                    sorted(missing),
+                )
                 raise ScopeError(
                     f"Token missing required scopes: {sorted(missing)}",
                     details={

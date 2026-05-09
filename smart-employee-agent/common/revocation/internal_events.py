@@ -182,13 +182,23 @@ def build_internal_events_router(
                 # the cache drop is best-effort.
 
         logger.info(
-            "internal_event_received | service=%s rid=%s jti=%s user_sub=%s reason=%s already_present=%s",
+            "internal_event_received | service=%s rid=%s jti=%s reason=%s already_present=%s",
             service_label,
             x_request_id,
             jti[:8],
-            user_sub,
             reason,
             already_present,
+        )
+        # DEBUG: structured detail for denylist record — exp epoch and
+        # user_sub only at DEBUG to avoid PII in production INFO output.
+        logger.debug(
+            "internal_event_accepted | service=%s rid=%s jti=%s exp=%s reason=%s user_sub=%s",
+            service_label,
+            x_request_id,
+            jti[:8],
+            exp,
+            reason,
+            user_sub,
         )
         if already_present:
             return _AckResponse(acked=True, note="jti already in denylist")

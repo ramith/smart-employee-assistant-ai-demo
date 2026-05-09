@@ -90,6 +90,11 @@ class RevokeClient:
             RevokeError: When IS returns non-2xx. Caller should log and proceed.
         """
         client = await self._get_client()
+        logger.debug(
+            "is_revoke_call | rid=%s endpoint=%s",
+            request_id,
+            self.revoke_url,
+        )
         try:
             resp = await client.post(
                 self.revoke_url,

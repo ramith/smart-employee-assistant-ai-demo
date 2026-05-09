@@ -278,6 +278,18 @@ async def _run_serial_fan_out(
     for tool_index, tool_call in enumerate(tool_calls):
         agent_id = tool_call.agent_id
 
+        # DEBUG: one line per tool iteration showing what the keyword router decided.
+        _logger.debug(
+            "chat_fan_out | tool_iteration request_id=%s index=%d/%d "
+            "tool_id=%s agent_id=%s args_keys=%s",
+            request_id,
+            tool_index + 1,
+            total_tools,
+            tool_call.tool_id,
+            agent_id,
+            list(tool_call.args.keys()),
+        )
+
         # --- Resolve agent card ---
         card = deps.agent_registry.get(agent_id)
         if card is None:

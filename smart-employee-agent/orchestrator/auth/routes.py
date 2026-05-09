@@ -372,6 +372,13 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             logger.warning("auth_exchange_invalid_state | state=%r", body.state)
             raise HTTPException(status_code=400, detail="invalid_state")
 
+        logger.debug(
+            "auth_exchange_entry | state_prefix=%s code_len=%d pending_logins_remaining=%d",
+            body.state[:8],
+            len(body.code),
+            len(deps.pending_logins),
+        )
+
         try:
             result = await deps.pattern_c.exchange(
                 code=body.code,
@@ -379,7 +386,11 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
                 redirect_uri=deps.config.mcp_redirect_uri,
             )
         except Exception as exc:
-            logger.error("auth_exchange_failed | %s: %s", type(exc).__name__, exc)
+            logger.error(
+                "auth_exchange_failed | exc_type=%s error=%r",
+                type(exc).__name__,
+                exc,
+            )
             raise HTTPException(
                 status_code=502, detail="token_exchange_failed"
             ) from exc

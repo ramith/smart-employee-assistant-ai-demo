@@ -259,6 +259,14 @@ class LogoutHandler:
             return
 
         for pending in pending_list:
+            # DEBUG: show what each pending CIBA entry looks like before
+            # cancellation so the audit trail can verify all in-flight flows.
+            logger.debug(
+                "ciba_cancel_setting_event | rid=%s auth_req_id=%s agent_id=%s",
+                request_id,
+                pending.auth_req_id[:8],
+                pending.agent_id,
+            )
             pending.cancel_event.set()
 
         async def _wait(p):

@@ -316,8 +316,9 @@ class ITDispatcher:
             actor_token_obj = await deps.actor_token_provider.ensure_valid_token()
         except Exception as exc:
             logger.error(
-                "it_dispatcher_actor_token_error request_id=%s error=%s",
+                "it_dispatcher_actor_token_error request_id=%s exc_type=%s error=%r",
                 request_id,
+                type(exc).__name__,
                 exc,
             )
             return ErrorPayload(
@@ -325,7 +326,21 @@ class ITDispatcher:
                 reason=f"Failed to obtain actor token: {exc}",
             )
 
+        # DEBUG: log actor-token len (not the token itself).
+        logger.debug(
+            "it_dispatcher_actor_token_ok request_id=%s actor_token_len=%d",
+            request_id,
+            len(actor_token_obj.access_token),
+        )
+
         # ── 4. Initiate CIBA ──────────────────────────────────────────────────
+        logger.debug(
+            "it_dispatcher_ciba_initiate request_id=%s scope=%r login_hint=%s",
+            request_id,
+            ciba_scope,
+            user_sub,
+        )
+
         try:
             ciba_request = await deps.ciba_client.initiate(
                 oauth_client_id=deps.oauth_client_id,
@@ -337,8 +352,9 @@ class ITDispatcher:
             )
         except Exception as exc:
             logger.error(
-                "it_dispatcher_ciba_initiate_error request_id=%s error=%s",
+                "it_dispatcher_ciba_initiate_error request_id=%s exc_type=%s error=%r",
                 request_id,
+                type(exc).__name__,
                 exc,
             )
             return ErrorPayload(
@@ -437,7 +453,25 @@ class ITDispatcher:
                 cancel_event=state.cancel_event,
             )
 
+            # DEBUG: token-B obtained — log aud/scope so MCP validator failures
+            # can be correlated against what we handed to the resource server.
+            logger.debug(
+                "it_dispatcher_token_b_obtained request_id=%s "
+                "token_b_scope=%r token_b_aud=%r token_b_jti=%s",
+                request_id,
+                getattr(token_b, "scope", None),
+                getattr(token_b, "aud", None),
+                (getattr(token_b, "jti", "") or "")[:8],
+            )
+
             # ── b. Call MCP tool with token-B ─────────────────────────────────
+            logger.debug(
+                "it_dispatcher_mcp_call request_id=%s method=%s kwargs_keys=%s",
+                request_id,
+                mcp_method,
+                list(mcp_kwargs.keys()),
+            )
+
             mcp_callable = getattr(deps.mcp_client, mcp_method)
             tool_result: dict = await mcp_callable(
                 token_b=token_b,
@@ -477,26 +511,35 @@ class ITDispatcher:
             )
 
         # ── d. CIBA denied ────────────────────────────────────────────────────
-        except CIBADeniedError:
-            logger.info("it_dispatcher_ciba_denied request_id=%s", request_id)
+        except CIBADeniedError as exc:
+            logger.info(
+                "it_dispatcher_ciba_denied request_id=%s detail=%r",
+                request_id,
+                str(exc),
+            )
             state.error = ErrorPayload(error_id="ERR-CIBA-005", reason="user_denied")
 
         # ── e. CIBA expired ───────────────────────────────────────────────────
-        except CIBAExpiredError:
-            logger.info("it_dispatcher_ciba_expired request_id=%s", request_id)
+        except CIBAExpiredError as exc:
+            logger.info(
+                "it_dispatcher_ciba_expired request_id=%s detail=%r",
+                request_id,
+                str(exc),
+            )
             state.error = ErrorPayload(
                 error_id="ERR-CIBA-009", reason="auth_req_id_expired"
             )
 
         # ── f. CIBA timeout (includes cancel) ─────────────────────────────────
-        except CIBATimeoutError:
+        except CIBATimeoutError as exc:
             reason = (
                 "cancelled" if state.cancel_event.is_set() else "polling_timeout"
             )
             logger.info(
-                "it_dispatcher_ciba_timeout request_id=%s reason=%s",
+                "it_dispatcher_ciba_timeout request_id=%s reason=%s detail=%r",
                 request_id,
                 reason,
+                str(exc),
             )
             state.error = ErrorPayload(error_id="ERR-CIBA-010", reason=reason)
 
@@ -514,10 +557,11 @@ class ITDispatcher:
                 upstream_id = None
             error_id = upstream_id or "ERR-MCP-005"
             logger.error(
-                "it_dispatcher_mcp_http_error request_id=%s status=%s upstream_id=%s",
+                "it_dispatcher_mcp_http_error request_id=%s status=%s upstream_id=%s reason=%r",
                 request_id,
                 status,
                 upstream_id,
+                str(exc),
             )
             state.error = ErrorPayload(
                 error_id=error_id,

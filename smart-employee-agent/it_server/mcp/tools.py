@@ -263,10 +263,20 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
+            logger.warning(
+                "list_available_assets missing_bearer rid=%s", rid
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
             )
+
+        logger.debug(
+            "list_available_assets tool_entry rid=%s asset_type=%r required_scopes=%s",
+            rid,
+            body.asset_type,
+            ["it_assets_read_rest"],
+        )
 
         try:
             await deps.validator.validate_token(
@@ -275,14 +285,22 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
-                "list_available_assets token validation failed error_id=%s rid=%s",
+                "list_available_assets token validation failed error_id=%s rid=%s reason=%r details=%s",
                 exc.error_id,
                 rid,
+                str(exc),
+                getattr(exc, "details", None),
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
+
+        logger.debug(
+            "list_available_assets validation_ok rid=%s asset_type=%r",
+            rid,
+            body.asset_type,
+        )
 
         catalogue = _CANNED_ASSET_CATALOGUE
         if body.asset_type is not None:
@@ -308,10 +326,19 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
+            logger.warning(
+                "get_my_assets missing_bearer rid=%s", rid
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
             )
+
+        logger.debug(
+            "get_my_assets tool_entry rid=%s required_scopes=%s",
+            rid,
+            ["it_assets_read_rest"],
+        )
 
         try:
             claims = await deps.validator.validate_token(
@@ -320,14 +347,23 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
-                "get_my_assets token validation failed error_id=%s rid=%s",
+                "get_my_assets token validation failed error_id=%s rid=%s reason=%r details=%s",
                 exc.error_id,
                 rid,
+                str(exc),
+                getattr(exc, "details", None),
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
+
+        logger.debug(
+            "get_my_assets validation_ok rid=%s sub=%s jti=%s",
+            rid,
+            claims.sub,
+            claims.jti,
+        )
 
         employee_id = body.employee_id or claims.sub
         raw_assets = (
@@ -354,10 +390,21 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
+            logger.warning(
+                "issue_asset missing_bearer rid=%s", rid
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
             )
+
+        logger.debug(
+            "issue_asset tool_entry rid=%s asset_id=%s employee_id=%s required_scopes=%s",
+            rid,
+            body.asset_id,
+            body.employee_id,
+            ["it_assets_write_rest"],
+        )
 
         try:
             claims = await deps.validator.validate_token(
@@ -366,14 +413,23 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
-                "issue_asset token validation failed error_id=%s rid=%s",
+                "issue_asset token validation failed error_id=%s rid=%s reason=%r details=%s",
                 exc.error_id,
                 rid,
+                str(exc),
+                getattr(exc, "details", None),
             )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
+
+        logger.debug(
+            "issue_asset validation_ok rid=%s sub=%s jti=%s",
+            rid,
+            claims.sub,
+            claims.jti,
+        )
 
         from datetime import datetime, timezone
 
