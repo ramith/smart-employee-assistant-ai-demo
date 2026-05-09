@@ -463,3 +463,75 @@ SPA                   : "You don't have permission to perform this action..."
 ```
 
 N30 / N31 mock-IS fixtures (Sprint 2B.3) should mirror Path C — issue a token without the required scope, then assert MCP returns 401 / `ERR-MCP-003`. Do not mock initiation-time `invalid_scope`; that path doesn't exist on IS 7.2.
+
+---
+
+## F-19 — WSO2 IS 7.2 does not register CIBA grants as user-session participants (Sprint 3 spike finding)
+
+**Surfaced:** 2026-05-09 C12 capability spike (`docs/spikes/c12-bcl-spike-setup.md`) as `hr_admin_user`, end-to-end CIBA flow followed by RP-initiated `/oidc/logout`.
+
+### Outcome
+
+WSO2 IS 7.2 does **NOT** fan out OIDC Back-Channel Logout to agent applications when their CIBA-issued OBO tokens are revoked, because IS does not consider CIBA grants to enroll the agent app into the user's IS-side session. The `backchannel_logout_uri` field on Agent Applications is therefore inert for our architecture.
+
+### Evidence (triple confirmation)
+
+1. **IS Console → User Management → `hr_admin_user` → Active Sessions** shows **"No active sessions"** four minutes after a successful CIBA flow against HR-AGENT (rid `52e0c885-…`, auth_req_id `d27e3ccb-…`). MCP call returned 200; OBO token was minted and used. Yet IS lists no sessions for the user.
+
+2. **BCL listener captured zero POSTs** during a subsequent `https://13.60.190.47:9443/oidc/logout?post_logout_redirect_uri=…` despite both HR-AGENT and IT-AGENT having `backchannel_logout_uri = http://localhost:8123/bcl` registered in their Protocol tab. Listener + reverse-SSH tunnel verified healthy via direct curl from the AWS VM.
+
+3. **IS audit log** (`<is>/repository/logs/audit.log`) shows the Logout event registered successfully, but with the SP fields blank:
+
+   ```
+   [2026-05-09 05:47:13] INFO {AUDIT_LOG} - Action : Logout | Target : null | Data : {
+     LoggedOutUser       : 1**********************************7   (hr_admin_user, redacted)
+     ServiceProviderName : "null"
+     RelyingParty        : "null"
+     AuthenticatedIdPs   : ""
+     RequestType         : "oidc"
+   } | Result : Success
+   ```
+
+   `ServiceProviderName: null` + `RelyingParty: null` mean IS has no list of RPs to fan BCL out to. CIBA grants do not populate the session→SP mapping that BCL fan-out is keyed on.
+
+### Why this happens
+
+CIBA is a **decoupled authentication flow** — the user's authentication device and the requesting client are different. IS treats this as "a token was minted via consent" but does **not establish an OIDC session for the agent app** the way an authorization_code login does. Curity's practitioner literature (cited in `docs/spikes/sprint-3-logout-design-brainstorm.md` §9.4) describes this exact category of behaviour:
+
+> "Service applications (bots, agents) that issue tokens without maintaining UI-level sessions face a fundamental challenge: they have no 'session' to terminate. Back-channel logout becomes moot if the app doesn't track session state."
+
+### Implication for the architecture
+
+- **Drop agent-side BCL receivers from Sprint 3 scope.** IS will never call them. The `backchannel_logout_uri` field on Agent Applications is left blank by default; future-us can ignore it.
+- **The orchestrator IS the gateway** — empirically, not just by design intent. ScaleKit / Okta / AWS-AgentCore patterns converge here. Sprint 3 implements the **orchestrator-driven cache-bust** pattern (Option A in the brainstorm doc):
+  - SPA Sign Out → orchestrator `/api/logout`
+  - orchestrator: clear `orch_sid`, revoke token-A via `/oauth2/revoke`, fan-out cache-bust by `jti` to specialists, set `pending_ciba.cancel_event` for in-flight CIBA flows, return 302 → IS `/oidc/logout` for IS-side session cleanup.
+  - specialists: drop `_CachedToken` for the user, add `jti` to in-memory denylist, MCP server enforces via denylist + 60 s introspection cache.
+- **The "CAEP migration" framing still holds** — the orchestrator's internal cache-bust RPC is morally equivalent to a CAEP `session-revoked` event over Shared Signals Framework. We document CAEP as the production roadmap target.
+
+### What changed in code
+
+Nothing yet — this is a spike outcome that *unscopes* a chunk of Sprint 3B (agent-side BCL receivers). The implementation work for Sprint 3 is unchanged from the brainstorm doc's Option A.
+
+### Files added by this spike (commit-worthy)
+
+- `docs/spikes/c12-bcl-spike-setup.md` — operator runbook for the spike rig.
+- `docs/spikes/sprint-3-logout-design-brainstorm.md` §-1 — verdict-locked summary.
+- `idp_capability_test/c12_logout_capability.py` — auto-probe + manual recipe.
+- `tools/bcl_listener.py` — Python BCL receiver used during the spike.
+- `tools/_bcl_log/bcl_received.log` — captured zero entries during the run; **the empty file is itself the verdict.**
+- `scripts/spike-bcl-prep-mac.sh` / `spike-bcl-up.sh` / `spike-bcl-down.sh` — operator helpers.
+- `docker-compose.yml` `bcl-listener` service under profile `spike-bcl`.
+
+### Reproducer
+
+Full setup walkthrough in `docs/spikes/c12-bcl-spike-setup.md`. Short version:
+
+```bash
+./scripts/spike-bcl-prep-mac.sh         # one-time
+./scripts/spike-bcl-up.sh                # start listener + reverse-SSH tunnel
+# register http://localhost:8123/bcl on each agent app in IS Console
+# sign in, mint a CIBA token, then drive /oidc/logout
+cat tools/_bcl_log/bcl_received.log      # empty → IS did not fire BCL
+./scripts/spike-bcl-down.sh
+```

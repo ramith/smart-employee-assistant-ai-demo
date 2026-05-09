@@ -1,3 +1,7 @@
-scripts/probes/.test-users.env
+/.env
+/.spike-bcl-autossh.log
+/.spike-bcl-autossh.pid
+/tools/_bcl_log/*.log
 idp_capability_test/.substrate.env
 idp_capability_test/.venv/
+scripts/probes/.test-users.env

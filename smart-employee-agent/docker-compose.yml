@@ -181,3 +181,29 @@ services:
       start_period: 10s
     networks:
       - demo-net
+
+  # ─── Sprint 3 spike: BCL capture rig (profile: spike-bcl) ─────────────────
+  # Runs ONLY for the C12 logout capability spike (D3 design input). Gated by
+  # the `spike-bcl` compose profile so `make demo-up` does NOT start it.
+  # Bring up via:  ./scripts/spike-bcl-up.sh
+  #
+  # The listener is reached from the AWS VM (where WSO2 IS lives) via a
+  # reverse SSH tunnel — the laptop runs `autossh -R 8123:localhost:8123 …`
+  # so that `localhost:8123` on the AWS VM forwards back to this container's
+  # published host port (127.0.0.1:8123 on the laptop). See
+  # docs/spikes/c12-bcl-spike-setup.md for first-time setup.
+  bcl-listener:
+    image: python:3.11-slim
+    profiles: ["spike-bcl"]
+    command: ["python", "-u", "/app/bcl_listener.py"]
+    volumes:
+      - ./tools/bcl_listener.py:/app/bcl_listener.py:ro
+      - ./tools/_bcl_log:/data
+    environment:
+      - BCL_LISTEN_PORT=8123
+    # Bind to loopback only so SSH-R reaches it but the laptop's LAN does
+    # not expose the listener.
+    ports:
+      - "127.0.0.1:8123:8123"
+    networks:
+      - demo-net
