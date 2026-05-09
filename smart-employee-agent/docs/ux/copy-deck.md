@@ -55,6 +55,7 @@ When in doubt, prefer fewer words.
 | 1.10 | Retry sign-in button | UC-01 EX-1 / EX-2 | `Try again` | Returns user to step 1.3. Max 12 chars. |
 | 1.11 | Configuration error (UC-01 EX-3) | UC-01 EX-3 | `Sign-in is temporarily unavailable. Please contact your administrator.` | Shown for `unauthorized_client` and other 5xx classes. No retry button — escalation only. |
 | 1.12 | Identity server unreachable | user-experience.md §7.2 | `The identity server is not responding. Please try again in a moment.` | Shown when `<IS>/oauth2/authorize` cannot be reached. Includes `Try again` button. |
+| 1.13 | Partial sign-out banner (UC-09 EX-5 — user cancelled at IS consent) | UC-09 EX-5 | `You have been signed out of this application. Note: your sign-in at the identity provider may still be active. To fully sign out everywhere, visit your organization's sign-out page or close your browser.` | Shown when SPA arrives at `/login?reason=signed_out_partial`. Distinct from 1.7. Informational styling (not error). Stage 4 BLOCK-E rewrite. |
 
 ---
 
@@ -246,10 +247,13 @@ These are **dynamic templates** the orchestrator's LLM is prompted to produce. T
 | 8.2 | Sign-out confirmation dialog body | Scenario C | `You will be signed out of the assistant and any agents that acted on your behalf will lose their access.` | Sets the right mental model for revocation. Max 160 chars. |
 | 8.3 | Sign-out confirmation — primary | Scenario C | `Sign out` | Primary destructive button. Max 12 chars. |
 | 8.4 | Sign-out confirmation — secondary | Scenario C | `Stay signed in` | Cancels the sign-out. Max 16 chars. |
-| 8.5 | Sign-out in-progress notice | Scenario C step 2 | `Signing you out…` | Briefly shown; replaced by the sign-in page. |
-| 8.6 | Sign-out completed banner (on sign-in page) | Scenario C step 2 | `You have been signed out.` | Same as 1.7. |
+| 8.5 | Sign-out in-progress notice (phase 1, during cascade) | UC-09 step 1 | `Revoking access for all agents…` | Action-grounded; mirrors the multi-step nature. Stage 4 FIX-14. Replaces earlier "Signing you out…". Spinner duration ≤2 s. |
+| 8.6 | Sign-out completed banner (on sign-in page) | UC-09 step 14 | `You have been signed out.` | Same as 1.7. |
 | 8.7 | Sign-out — pending CIBA warning | Scenario C "in flight" | `An approval is in progress. Sign out anyway?` | Replaces 8.2 when there is a live consent widget. |
 | 8.8 | Sign-out — pending CIBA primary | Scenario C "in flight" | `Sign out and cancel approval` | Max 32 chars. |
+| 8.9 | Sign-out in-progress notice (phase 2, before IS redirect) | UC-09 step 10 | `Redirecting to complete sign-out at your identity provider…` | Sets context for the IS consent screen transition (Q3 spec-pure path). Mirrors the established 1.4 redirect pattern. Stage 4 BLOCK-E + FIX-14. Spinner duration ~200 ms. |
+| 8.10 | Sign-out error banner | UC-09 EX-6 | `Sign-out could not be completed right now. Close your browser to end your session, or try again.` | Shown when `POST /auth/logout` times out (10 s) or returns 5xx. Amber/warning styling. Stage 4 FIX-16. |
+| 8.11 | Admin-terminate banner (online user) | UC-10 step 6 | `Your session has ended. Sign in again to continue.` | Shown when SPA arrives at `/login?reason=admin_terminated`. Amber styling but neutral copy (no attribution of intent — cause lives in admin audit log). Stage 4 FIX-15. |
 
 ---
 
@@ -288,6 +292,8 @@ These are not visible but are spoken or announced by assistive tech. They follow
 | 10.11 | Connection indicator — `aria-label` lost | — | `Disconnected from the assistant.` | |
 | 10.12 | Composer — `aria-label` | — | `Message the assistant.` | |
 | 10.13 | Send button — `aria-label` | — | `Send message.` | |
+| 10.14 | Live region — sign-out in progress | UC-09 step 1 | `Signing out. Please wait.` | `aria-live=polite`. Stage 4 NIT-9. |
+| 10.15 | Live region — sign-out / admin-terminate completed (login banner on arrival) | UC-09 step 14 / UC-10 step 6 | `You have been signed out.` (signed_out) / `You have been signed out of this application.` (signed_out_partial) / `Your session has ended.` (admin_terminated) | `aria-live=assertive`. Banner replaces page heading on `?reason=…` arrival; `assertive` is less disruptive than programmatic focus-stealing. Stage 4 NIT-9. |
 
 ---
 

@@ -58,4 +58,9 @@ Sprint 1 = orchestrator + 2 specialist agents + per-agent CIBA + serial fan-out 
 | [UC-07](UC-07-hr-admin-issues-asset.md) | HR Admin issues IT asset (write-scope demo) | High | Scenario B (HR Admin variant) | written; **Sprint 2 build** |
 | [UC-08](UC-08-employee-denied-scope.md) | Employee requests denied scope (role-based denial) | High | §7.4 | written; **Sprint 2 build**; demonstrable verbally in Sprint 1 Act II |
 
-Sprint 2 UCs (denial polish, correlation-ID, audit) and Sprint 3 UCs (revocation) will be added when those sprints kick off.
+## Sprint 3 UCs (revocation)
+
+| ID | Name | Priority | UX scenario | Status |
+|---|---|---|---|---|
+| [UC-09](UC-09-logout-cascade.md) | User signs out (logout cascade) | Critical | Sprint 3 Act II | written; **Sprint 3 build** |
+| [UC-10](UC-10-admin-terminate.md) | Admin terminates user session via IS Console | High | Sprint 3 Act III | written; **Sprint 3B build**; gated on F-20 verification |
