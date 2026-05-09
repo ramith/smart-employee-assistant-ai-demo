@@ -581,7 +581,7 @@ assert WORKERS == 1, (
 | `/oauth2/revoke` returns 5xx | log WARN, proceed with fan-out | F-21 / C13 will determine: if PASS, IS introspection of OBO tokens reflects parent revocation within ≤60 s; if FAIL, denylist is the only line of defense and this row must be re-classified as **SECURITY-DEGRADED**. |
 | Single fan-out leg returns 5xx | **Inline retry** once @ 200 ms within the same coroutine (FIX-22); `asyncio.gather` over per-leg coroutines with `return_exceptions=True`. On second failure, log WARN `logout_fanout_partial target=…`. | F-21 PASS: introspection cache on the missed receiver detects `active=false` within ≤60 s (R-LOGOUT-7 acceptance). F-21 FAIL: SECURITY-DEGRADED — captured token from the missed receiver remains valid up to its TTL (1 h). |
 | **All** fan-out legs fail | log ERROR `logout_fanout_total_failure SECURITY_DEGRADED jti=…` (FIX-6 — explicit label); orch session still cleared; user is signed out at SPA. | R-LOGOUT-7b asserts the ERROR label is emitted. Demo runbook surfaces this as a 1-hour replay window — operator action: restart the affected receivers to clear stale caches and force re-introspect. |
-| `pending_ciba.cancel_event.set()` raises | log WARN; the poll task will hit its own timeout within 300 s | "Ghost approval" caveat (Q-LOGOUT-4). C10 capability test on 3B Day 1 determines whether to escalate. |
+| `pending_ciba.cancel_event.set()` raises | log WARN; the poll task will hit its own timeout within 300 s | "Ghost approval" caveat (Q-LOGOUT-4). C14 capability test on 3B Day 1 determines whether to escalate. |
 | `cancelled_ack` barrier times out (≥100 ms) (BLOCK-F) | log WARN `cancel_barrier_timeout pending=N`; proceed to fan-out anyway | Worst case: a pending CIBA mints a token after fan-out begins; the next MCP call hits introspection (the new jti isn't in the denylist) and gets `active=true` — exposed only if F-21 FAIL. With F-21 PASS, the new jti's grant chain is dead at IS. |
 | BCL `logout_token` validation fails (any of the 9 §3.3 checks) | 400 to IS; log WARN with reason; **do NOT** run cascade | Defense against forged BCL POSTs — see BLOCK-C / §3.3. Tested by R-LOGOUT-EX-3 (negative test). |
 | BCL receiver returns 5xx (internal error) | 500 to IS; IS may retry per spec | Manual recovery: admin re-clicks Terminate. |
@@ -613,7 +613,7 @@ assert WORKERS == 1, (
 - **CAEP wire format on `/internal/revoke`.** Use simple JSON. CAEP migration in production-roadmap doc.
 - **Agent-side BCL receivers.** F-19 — IS will not call them.
 - **Sub-second SLA on the cascade.** Industry bar; we target ≤2 s for 3A demo, ≤5 s for D3.2 admin-terminate. Sub-second is a Sprint 4+ optimization (parallel + batched fan-out).
-- **`auth_req_id` revocation at IS (C10 capability).** Probed Day 1 of 3B; if PASS, wire in 3B.1; if FAIL, document the "ghost approval" caveat.
+- **`auth_req_id` revocation at IS (C14 capability).** Probed Day 1 of 3B; if PASS, wire in 3B.1; if FAIL, document the "ghost approval" caveat.
 - **Cross-tenant / multi-user concurrent logout.** Single-tenant demo; correctness on concurrent logout for the same user is covered (idempotent denylist), but performance under N concurrent users is not measured.
 
 ---

@@ -31,7 +31,7 @@ The reviewers agree on the design's overall coherence: Option A is the right sha
 ### BLOCK-A. Capability gap: does IS introspection return `active=false` for CIBA-issued OBO tokens after token-A revoke?
 **Raised by:** architect (BLOCK-7), security (FIX-4 — escalated to BLOCK due to load-bearing nature).
 **Risk:** the entire backstop story for EX-2 (half fan-out) and EX-4 (orchestrator crash mid-flow) depends on the assumption that revoking token-A at IS makes child OBO tokens (token-B/C) introspect as inactive. F-19 specifically established that IS does NOT treat CIBA tokens as session-bound. If introspection of OBO tokens is *also* unaffected by token-A revoke, then the denylist becomes the only line of defense for D3.2 and the captured-token-replay window in EX-3/EX-4 is **the full token TTL (1 h)**, not 60 s.
-**Mitigation:** add a **C13 capability spike** to 3A Day 1, parallel with C10 (`auth_req_id` revoke). Probe: complete a CIBA flow, capture token-B + jti, revoke token-A via `/oauth2/revoke`, then introspect token-B. PASS = `active=false`; FAIL = `active=true`. Document as F-21 in `sprint-1-fixes.md`. If FAIL, the §5 error matrix in tech-arch must be rewritten to remove the introspection backstop claim, and the demo runbook must surface the 1-hour replay window as a **SECURITY-DEGRADED** state.
+**Mitigation:** add a **C13 capability spike** to 3A Day 1, parallel with C14 (`auth_req_id` revoke). Probe: complete a CIBA flow, capture token-B + jti, revoke token-A via `/oauth2/revoke`, then introspect token-B. PASS = `active=false`; FAIL = `active=true`. Document as F-21 in `sprint-1-fixes.md`. If FAIL, the §5 error matrix in tech-arch must be rewritten to remove the introspection backstop claim, and the demo runbook must surface the 1-hour replay window as a **SECURITY-DEGRADED** state.
 
 ### BLOCK-B. `/internal/revoke` shared-secret design: no rotation, no scope, single point of cross-tenant revocation.
 **Raised by:** security (BLOCK-1).
@@ -151,7 +151,7 @@ The reviewers agree on the design's overall coherence: Option A is the right sha
 - All NIT items.
 - BLOCK-C, BLOCK-F, BLOCK-G, BLOCK-H, BLOCK-I — concrete code/spec changes.
 - BLOCK-E — UX copy is a clear improvement; apply.
-- Add C13 capability test to spike list (BLOCK-A mitigation) — schedule for 3A Day 1 alongside C10.
+- Add C13 capability test to spike list (BLOCK-A mitigation) — schedule for 3A Day 1 alongside C14.
 
 **Patches that need your call before I apply:**
 
@@ -161,7 +161,7 @@ The reviewers agree on the design's overall coherence: Option A is the right sha
 | D-2 | **BLOCK-D** — tunnel hardening level. Two options: (a) per-IP rate limit only + document trust boundary (lightest); (b) bind tunnel to unix socket on AWS VM + IS-side config change. | **(a) recommended for POC.** You own the VM; trust boundary is yourself. (b) is fastidious for the demo. |
 | D-3 | **FIX-7** route rename `/internal/revoke` → `/internal/events`. CAEP-friendly but adds change surface. | **Apply.** Saves a future migration; trivial today. |
 | D-4 | **FIX-9** CSRF mechanism. Two options: (a) require `X-Request-ID` header server-side + `SameSite=Strict` (lighter); (b) full CSRF token round-trip. | **(a) recommended.** SPA already sends the header; no SPA work. |
-| D-5 | **C13 capability test** — adds ~30 min to 3A Day 1. PASS/FAIL determines whether the introspection backstop story holds for half-fan-out + orchestrator-crash scenarios. | **Run it.** The Stage 1 doc already locked C10 for Day 1; C13 is the same shape and sits next to it. |
+| D-5 | **C13 capability test** — adds ~30 min to 3A Day 1. PASS/FAIL determines whether the introspection backstop story holds for half-fan-out + orchestrator-crash scenarios. | **Run it.** The Stage 1 doc already locked C14 for Day 1; C13 is the same shape and sits next to it. |
 
 ---
 
@@ -180,7 +180,7 @@ The reviewers agree on the design's overall coherence: Option A is the right sha
 
 - The **locked design (Option A)** remains correct; F-19 stands.
 - Q1–Q6 from Stage 1 are **not invalidated**. Q3 (IS consent screen) is reinforced by BLOCK-E's UX patches.
-- The **3A/3B slice shape** is unchanged. C13 just slots in alongside C10 on 3A Day 1.
+- The **3A/3B slice shape** is unchanged. C13 just slots in alongside C14 on 3A Day 1.
 - `sprint-3-build` branch tracking is unchanged.
 
 ---

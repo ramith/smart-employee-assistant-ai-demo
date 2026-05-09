@@ -67,7 +67,7 @@ User clicks the **Sign Out** button in the SPA top bar.
 1. User has IT consent widget visible when they click Sign Out.
 2. Step 6 of main flow: `cancel_event.set()` on the IT poll task.
 3. The polling loop returns `CIBATimeoutError(reason="cancelled")`; no `ResultPayload` is written to state.
-4. **Race sub-case (Q-LOGOUT-4 "ghost approval"):** if the user manages to click **Approve** at IS *after* logout begins but *before* IS revokes the auth_req_id (assuming C10 capability test PASS — see 3B.1), IS still completes the grant and emits a token. The orchestrator session is gone, the polling task is cancelled, the token has no consumer. If C10 PASS, orchestrator also calls IS to invalidate the `auth_req_id` on logout, eliminating this case. If C10 FAIL, the "ghost token" can be presented directly to the MCP server — denylist (added in step 5 of main flow) returns 401 `ERR-MCP-002`.
+4. **Race sub-case (Q-LOGOUT-4 "ghost approval"):** if the user manages to click **Approve** at IS *after* logout begins but *before* IS revokes the auth_req_id (assuming C14 capability test PASS — see 3B.1), IS still completes the grant and emits a token. The orchestrator session is gone, the polling task is cancelled, the token has no consumer. If C14 PASS, orchestrator also calls IS to invalidate the `auth_req_id` on logout, eliminating this case. If C14 FAIL, the "ghost token" can be presented directly to the MCP server — denylist (added in step 5 of main flow) returns 401 `ERR-MCP-002`.
 5. Postcondition: no successful tool call after logout.
 
 ### EX-2 — Half fan-out failure (R15 / R-LOGOUT-7)
