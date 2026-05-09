@@ -657,3 +657,51 @@ TOKEN_A=<paste> TOKEN_B=<paste> python3 c13_introspection_capability.py
 WSO2 IS 7.2 treats CIBA-issued OBO grants as **fully independent of any parent identity context** for revocation purposes. Specifically: (a) CIBA grants are absent from the user-session table, so RP-initiated logout / admin-terminate do not fire BCL to the agent apps (F-19); (b) the `auth_req_id` is non-revocable while pending (F-20); (c) the issued OBO access token is not killed by revoking the actor's parent grant (F-21).
 
 This is the precise empirical reason the **gateway pattern is required, not preferred**, for our architecture: the orchestrator's internal cache-bust fan-out is the only path that propagates revocation to CIBA-issued tokens. Stage 1 §1 demo arc already uses this framing; F-21 simply tightens the technical receipts.
+
+---
+
+## F-19 addendum / F-20 / F-21 — source-code confirmation (2026-05-09)
+
+After the empirical probes (C12 / C13 / C14) and the IS audit-log analysis, the assistant performed a source-code dive against `/Users/ramith/code/identity-inbound-auth-oauth/components` (head of `main`). Full analysis: [`docs/spikes/sprint-3-is-source-analysis.md`](../spikes/sprint-3-is-source-analysis.md). Bottom-line updates to F-19/20/21:
+
+### F-19 addendum — was a probe artifact
+
+`OIDCLogoutServlet.java:272–291` has two distinct branches in `/oidc/logout` handling:
+
+```java
+if (StringUtils.isNotBlank(clientId) || StringUtils.isNotBlank(idTokenHint)) {
+    redirectURL = processLogoutRequest(request, response);   // ← BCL fan-out path
+    ...
+} else {
+    OIDCSessionDataCacheEntry cacheEntry = new OIDCSessionDataCacheEntry();
+    setStateParameterInCache(request, cacheEntry);
+    addSessionDataToCache(opBrowserState, cacheEntry);       // ← no clientId, no BCL
+}
+sendToFrameworkForLogout(request, response, logoutContext);
+```
+
+`DefaultLogoutTokenBuilder.buildLogoutToken()` iterates EVERY participant in `sessionParticipants` — no CIBA exclusion. The C12 spike URL was `https://13.60.190.47:9443/oidc/logout?post_logout_redirect_uri=…` — no `id_token_hint`, no `client_id`. That hit the second branch, which never fires BCL by design. The empty BCL listener log was expected behaviour for a malformed logout request, NOT evidence that CIBA grants aren't session participants.
+
+**Corrected statement:** WSO2 IS DOES walk session participants and fire BCL when `/oidc/logout` receives a valid `id_token_hint` (or `client_id`). CIBA flows enrol the agent app as a session participant on the same `sessionContextId` as the user's Pattern C login (audit-log evidence corroborates).
+
+**Sprint 3 implication:** Option C (hybrid with agent-side BCL receivers) is viable for D3.2 admin-terminate. The locked Sprint 3 Q3 design already uses `id_token_hint` on the `/oidc/logout` redirect, so the BCL fan-out path will fire as intended.
+
+### F-20 confirmation — design-level, not bug
+
+`OAuth2Service.revoke*()` and `AuthReqStatus` enum show:
+- `/oauth2/revoke` only handles `access_token` and `refresh_token`. No code path for `auth_req_id`.
+- `AuthReqStatus` enum: `REQUESTED, AUTHENTICATED, TOKEN_ISSUED, EXPIRED, FAILED, CONSENT_DENIED`. No `REVOKED`.
+
+The 200-on-`auth_req_id` is RFC 7009-compliant ("server may return 200 for unknown tokens") — but at the DB level, the auth_req_id is unchanged. CIBA does not currently support pre-approval revocation. Q-LOGOUT-4 ghost-approval caveat is permanent.
+
+### F-21 confirmation — architectural, not bug
+
+`DefaultOAuth2RevocationProcessor.revokeAccessToken()` is a single-row UPDATE:
+```java
+…getAccessTokenDAOImpl(accessTokenDO.getConsumerKey())
+    .revokeAccessTokens(new String[]{accessTokenDO.getAccessToken()});
+```
+
+The `IDN_OAUTH2_ACCESS_TOKEN` schema (per `AccessTokenDAOImpl` INSERT path) has no `actor_token`, no `parent_grant_id`, no `request_id` column. The `act` JWT claim is JWT-body only — no DB back-reference. There is no graph traversal, no cascade, no event hook that any extension uses to propagate revocation.
+
+**Sprint 3 implication:** Token-A revoke will never invalidate OBO tokens. **Denylist on receivers is the only revocation primitive for OBO tokens.** Gateway pattern is *required*, not preferred — the demo narrative now has source-code receipts.

@@ -576,7 +576,12 @@ assert WORKERS == 1, (
 
 **Stage 4 changes:** retry semantics specified inline (FIX-22); SECURITY-DEGRADED label introduced (FIX-6).
 
-**Sprint 3 3A.0 spike outcome (2026-05-09):** F-20 FAIL (no `auth_req_id` revoke), F-21 FAIL (no introspection-backstop for OBO tokens). Per Stage 5 L-2: ship with SECURITY-DEGRADED labels. The introspection backstop story is now **only valid for token-A** and admin-terminate paths; for CIBA OBO tokens (token-B / token-C) the **denylist fan-out is the only revocation primitive**.
+**Sprint 3 3A.0 spike outcome + source confirmation (2026-05-09):**
+- F-20 (auth_req_id revoke is no-op) — confirmed at source. Architectural; document the ghost-approval caveat.
+- F-21 (token-A revoke does NOT propagate to OBO tokens) — confirmed at source. `revokeAccessTokens(String[])` is single-row UPDATE; no parent→child linkage in schema. **For CIBA OBO tokens (token-B / token-C) the denylist fan-out is the only revocation primitive.**
+- F-19 addendum (BCL CAN fan out for CIBA participants) — corrected at source. The original spike's `/oidc/logout` URL lacked `id_token_hint`, falling into the empty-cache branch. With `id_token_hint` (which our locked Q3 design includes), `DefaultLogoutTokenBuilder` iterates ALL session participants without CIBA exclusion. **D3.2 admin-terminate path can lean on IS BCL fan-out as a defense-in-depth signal.**
+
+Per Stage 5 L-2: ship with SECURITY-DEGRADED labels for the user-driven `/oauth2/revoke` paths only (those are the F-21-bound paths). For admin-terminate (D3.2), the BCL fan-out reaches all participants — those rows do NOT need SECURITY-DEGRADED labels.
 
 | Failure point | Behaviour | Backstop (per F-21 FAIL) |
 |---|---|---|
