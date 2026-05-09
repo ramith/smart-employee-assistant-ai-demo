@@ -36,6 +36,7 @@ services:
       # Operator MUST set this in shell or .env (not committed) before `make demo-up`.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
       - UVICORN_WORKERS=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
@@ -97,6 +98,7 @@ services:
       - AGENT_CARDS_DIR=/app/agent_cards
       # Sprint 3 3A.2: shared secret + fan-out target URLs.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - HR_AGENT_URL=http://hr_agent:8001
       - IT_AGENT_URL=http://it_agent:8002
       - HR_SERVER_URL=http://hr_server:8000
@@ -142,6 +144,7 @@ services:
       # Sprint 3 3A.2.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
       - UVICORN_WORKERS=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz', timeout=3)"]
@@ -170,6 +173,7 @@ services:
       # Sprint 3 3A.2.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
       - UVICORN_WORKERS=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8002/healthz', timeout=3)"]
@@ -198,6 +202,7 @@ services:
       # Sprint 3 3A.2.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
       - UVICORN_WORKERS=1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8004/healthz', timeout=3)"]

@@ -217,12 +217,21 @@ def install_logging(level: str = "INFO") -> None:
 
     Args:
         level: Root logging level string (e.g. ``"INFO"``, ``"DEBUG"``).
-               Passed to ``logging.basicConfig`` only on the first call.
+               Used as the default; the ``LOG_LEVEL`` env var (case-insensitive)
+               overrides it when set so an operator can flip to DEBUG without
+               code changes (`docker compose up` with `LOG_LEVEL=DEBUG`).
     """
     global _LOGGING_INSTALLED  # noqa: PLW0603
 
     if _LOGGING_INSTALLED:
         return
+
+    # Env override (added during the observability pass): ``LOG_LEVEL`` env wins
+    # over the call-site default so an operator can ``LOG_LEVEL=DEBUG docker
+    # compose up`` and immediately surface the new DEBUG diagnostics on every
+    # service without rebuilding.
+    import os as _os
+    effective = _os.getenv("LOG_LEVEL", level).strip().upper() or level
 
     root = logging.getLogger()
     # Remove any existing handlers to avoid duplicate output when basicConfig
@@ -235,6 +244,6 @@ def install_logging(level: str = "INFO") -> None:
     handler.setFormatter(logging.Formatter(_LOG_FORMAT))
 
     root.addHandler(handler)
-    root.setLevel(getattr(logging, level.upper(), logging.INFO))
+    root.setLevel(getattr(logging, effective, logging.INFO))
 
     _LOGGING_INSTALLED = True
