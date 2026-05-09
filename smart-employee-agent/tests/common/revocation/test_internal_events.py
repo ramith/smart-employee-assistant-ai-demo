@@ -141,3 +141,50 @@ def test_empty_secret_factory_rejects() -> None:
     state = RevocationState()
     with pytest.raises(ValueError):
         build_internal_events_router(state=state, shared_secret="")
+
+
+def test_rate_limit_returns_429_after_threshold(monkeypatch) -> None:
+    """BLOCK-E (mid-sprint review): per-source IP token-bucket; >100/min → 429."""
+    # Lower the threshold for the test so we don't have to spam 100 requests.
+    monkeypatch.setattr(_events_mod, "_RATE_LIMIT_MAX_PER_WINDOW", 3)
+
+    client, _ = _make_client()
+    headers = {"X-Internal-Auth": "shared-test-secret"}
+
+    for i in range(3):
+        r = client.post("/internal/events", json=_body(f"jti-{i}"), headers=headers)
+        assert r.status_code == 200, f"attempt {i}: {r.status_code}"
+    r4 = client.post("/internal/events", json=_body("jti-3"), headers=headers)
+    assert r4.status_code == 429
+    assert r4.json()["detail"] == "rate_limited"
+
+
+def test_rate_limit_independent_per_router(monkeypatch) -> None:
+    """Each router instance has its own rate-limit state — no cross-contamination."""
+    monkeypatch.setattr(_events_mod, "_RATE_LIMIT_MAX_PER_WINDOW", 2)
+
+    client_a, _ = _make_client()
+    client_b, _ = _make_client()
+    headers = {"X-Internal-Auth": "shared-test-secret"}
+
+    # Burn through router A's bucket.
+    client_a.post("/internal/events", json=_body("a-1"), headers=headers)
+    client_a.post("/internal/events", json=_body("a-2"), headers=headers)
+    ra = client_a.post("/internal/events", json=_body("a-3"), headers=headers)
+    assert ra.status_code == 429
+
+    # Router B has a fresh bucket.
+    rb = client_b.post("/internal/events", json=_body("b-1"), headers=headers)
+    assert rb.status_code == 200
+
+
+def test_constant_time_secret_comparison_still_rejects_close_secret() -> None:
+    """FIX-6 (mid-sprint review): hmac.compare_digest is used; should still 401 for any wrong value."""
+    client, _ = _make_client(secret="aaaaa-bbbbb")
+    # Off by one char.
+    r = client.post(
+        "/internal/events",
+        json=_body(),
+        headers={"X-Internal-Auth": "aaaaa-bbbbc"},
+    )
+    assert r.status_code == 401

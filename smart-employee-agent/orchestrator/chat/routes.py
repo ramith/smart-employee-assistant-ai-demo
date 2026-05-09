@@ -408,32 +408,43 @@ async def _run_serial_fan_out(
         # widget stays in AWAITING_APPROVAL until await_completion resolves.)
 
         # 6d. Phase 2: await_completion (long-poll until user approves or flow expires).
+        # BLOCK-A (mid-sprint review): set pending.cancelled_ack in finally so a
+        # concurrent UC-09 logout cascade's cancel barrier (logout_handler.py
+        # _cancel_pending_ciba) can confirm the poll task has exited and will
+        # not mint a new token-B between cancel_event.set() and fan-out.
         second: Any
         try:
-            second = await client.await_completion(
-                session.token_a.access_token,
-                consent.auth_req_id,
-                request_id=request_id,
-            )
-        except (A2AError, Exception) as exc:  # noqa: BLE001
-            _logger.error(
-                "chat_fan_out | await_completion_failed agent_id=%s auth_req_id=%s error=%r",
-                agent_id,
-                consent.auth_req_id,
-                exc,
-            )
-            await channel.publish(
-                CibaStateChangeEvent(
+            try:
+                second = await client.await_completion(
+                    session.token_a.access_token,
+                    consent.auth_req_id,
                     request_id=request_id,
-                    state="ERROR",
-                    message=str(exc),
                 )
-            )
-            fragment = f"There was a problem completing consent for {agent_label}. Please try again."
-            per_tool_outputs.append(fragment)
-            # Clean up pending entry.
-            session.pending_ciba.pop(consent.auth_req_id, None)
-            continue
+            except (A2AError, Exception) as exc:  # noqa: BLE001
+                _logger.error(
+                    "chat_fan_out | await_completion_failed agent_id=%s auth_req_id=%s error=%r",
+                    agent_id,
+                    consent.auth_req_id,
+                    exc,
+                )
+                await channel.publish(
+                    CibaStateChangeEvent(
+                        request_id=request_id,
+                        state="ERROR",
+                        message=str(exc),
+                    )
+                )
+                fragment = f"There was a problem completing consent for {agent_label}. Please try again."
+                per_tool_outputs.append(fragment)
+                # Clean up pending entry.
+                session.pending_ciba.pop(consent.auth_req_id, None)
+                # BLOCK-A: signal the cancel barrier even on error.
+                pending.cancelled_ack.set()
+                continue
+        finally:
+            # BLOCK-A: ack regardless of branch — the poll has exited so any
+            # concurrent logout cascade can stop waiting.
+            pending.cancelled_ack.set()
 
         # 6e. Push terminal CIBA state.
         if isinstance(second, ResultPayload):
@@ -696,7 +707,7 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
     @router.post("/api/ciba/cancel", response_model=CibaCancelResponse)
     async def post_ciba_cancel(
         body: CibaCancelRequest, request: Request
-    ) -> CibaCancelResponse:
+    ) -> CibaCancelResponse:  # noqa: D401
         """Cancel a specific in-flight CIBA flow by auth_req_id.
 
         Flow:
@@ -726,6 +737,12 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
             session: Session = await deps.session_store.get_or_404(session_id)
         except KeyError:
             raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+        # FIX-1 (mid-sprint review): mirror the BLOCK-G fence on this entry
+        # point so a UC-09 cascade in flight rejects new ciba/cancel calls
+        # cleanly (otherwise we race the cascade's own cancel_event.set()).
+        if session.terminating:
+            raise HTTPException(status_code=401, detail="Session terminating")
 
         pending = session.pending_ciba.get(body.auth_req_id)
         if pending is None:

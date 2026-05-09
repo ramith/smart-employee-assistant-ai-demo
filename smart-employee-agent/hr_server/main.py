@@ -103,14 +103,20 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
 
     # 3A.2: /internal/events receiver. Servers don't need a per-jti cache
     # eviction callback (no _CachedToken on the server), so on_revoke=None.
-    if getattr(cfg, "internal_revoke_shared_secret", ""):
+    # FIX-2 (mid-sprint review): WARN on empty secret.
+    secret = getattr(cfg, "internal_revoke_shared_secret", "")
+    if secret:
         app.include_router(
             build_internal_events_router(
                 state=revocation,
-                shared_secret=cfg.internal_revoke_shared_secret,
+                shared_secret=secret,
                 on_revoke=None,
                 service_label="hr-server",
             )
+        )
+    else:
+        logging.getLogger(__name__).warning(
+            "internal_events_receiver_disabled | service=hr-server reason=no_shared_secret"
         )
 
     @app.get("/healthz", tags=["ops"])

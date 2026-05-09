@@ -197,11 +197,13 @@ class HRDispatcher:
         # 3A.2: revocation state (denylist). Set by hr_agent/main.py at
         # startup via attach_revocation(). Optional in tests; None means
         # the denylist check is a no-op.
-        self._revocation = None  # type: ignore[var-annotated]
+        # FIX-4 (mid-sprint review): proper Optional annotation, no ignore.
+        from common.revocation import RevocationState as _RS  # local import to avoid cycle
+        self._revocation: _RS | None = None
 
     # ── 3A.2: revocation hooks ────────────────────────────────────────────────
 
-    def attach_revocation(self, state) -> None:  # type: ignore[no-untyped-def]
+    def attach_revocation(self, state) -> None:
         """Wire a ``common.revocation.RevocationState`` into the dispatcher.
 
         Called once at startup from ``hr_agent/main.py``. After this, the

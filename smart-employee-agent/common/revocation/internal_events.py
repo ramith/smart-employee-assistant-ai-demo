@@ -32,7 +32,10 @@ jti after adding it to the denylist. Some services drop a cached token
 
 from __future__ import annotations
 
+import hmac
 import logging
+import time
+from collections import deque
 from typing import Awaitable, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -62,6 +65,10 @@ class InternalEventBody(BaseModel):
 class _AckResponse(BaseModel):
     acked: bool = True
     note: str | None = None
+
+
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_RATE_LIMIT_MAX_PER_WINDOW = 100  # BLOCK-E: per-source IP cap (sliding window)
 
 
 def build_internal_events_router(
@@ -94,6 +101,21 @@ def build_internal_events_router(
 
     router = APIRouter()
 
+    # BLOCK-E rate limit: per-source-IP sliding window, in-process. Single-
+    # event-loop assumption (Q5 / BLOCK-I) makes the dict safe without a lock.
+    _rate_buckets: dict[str, deque[float]] = {}
+
+    def _rate_limit_check(client_host: str) -> bool:
+        now = time.time()
+        bucket = _rate_buckets.setdefault(client_host, deque())
+        # Drop entries outside the window.
+        while bucket and bucket[0] < now - _RATE_LIMIT_WINDOW_SECONDS:
+            bucket.popleft()
+        if len(bucket) >= _RATE_LIMIT_MAX_PER_WINDOW:
+            return False
+        bucket.append(now)
+        return True
+
     @router.post("/internal/events", response_model=_AckResponse)
     async def receive_event(
         body: InternalEventBody,
@@ -101,12 +123,27 @@ def build_internal_events_router(
         x_internal_auth: str | None = Header(default=None, alias="X-Internal-Auth"),
         x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
     ) -> _AckResponse:
-        if x_internal_auth != shared_secret:
+        client_host = request.client.host if request.client else "?"
+
+        # BLOCK-E rate limit (per-source IP, 100 req/min sliding window).
+        if not _rate_limit_check(client_host):
+            logger.warning(
+                "internal_event_rate_limited | service=%s rid=%s remote=%s",
+                service_label,
+                x_request_id,
+                client_host,
+            )
+            raise HTTPException(status_code=429, detail="rate_limited")
+
+        # FIX-6: constant-time secret comparison.
+        provided = (x_internal_auth or "").encode()
+        expected = shared_secret.encode()
+        if not hmac.compare_digest(provided, expected):
             logger.warning(
                 "internal_event_auth_failed | service=%s rid=%s remote=%s",
                 service_label,
                 x_request_id,
-                request.client.host if request.client else "?",
+                client_host,
             )
             raise HTTPException(status_code=401, detail="invalid_secret")
 

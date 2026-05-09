@@ -37,7 +37,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-import time
 import urllib.parse
 from dataclasses import dataclass, field
 
@@ -51,37 +50,12 @@ logger = logging.getLogger(__name__)
 __all__ = ["LogoutHandler", "LogoutResult"]
 
 
-# 3A.1 FIX-9 / NIT-5: short-lived map of state nonces issued on logout
-# redirect. Validated when the user returns to /?reason=signed_out so a
-# malicious page can't construct its own ?state=anything.
-# 60-second TTL; pruned on access. Single-process per Q5.
-_logout_state_ttl_seconds = 60
-_logout_state_nonces: dict[str, float] = {}
-
-
-def _issue_logout_state() -> str:
-    """Mint a fresh state nonce; record its issue time. NIT-5."""
-    nonce = secrets.token_urlsafe(16)
-    _logout_state_nonces[nonce] = time.time()
-    return nonce
-
-
-def _validate_logout_state(nonce: str) -> bool:
-    """Return True iff *nonce* was issued within the TTL and hasn't been used. NIT-5."""
-    issued_at = _logout_state_nonces.pop(nonce, None)
-    if issued_at is None:
-        return False
-    if time.time() - issued_at > _logout_state_ttl_seconds:
-        return False
-    return True
-
-
-def _prune_logout_state() -> None:
-    """Drop expired logout-state nonces. Called on each cascade entry."""
-    cutoff = time.time() - _logout_state_ttl_seconds
-    expired = [n for n, t in _logout_state_nonces.items() if t < cutoff]
-    for n in expired:
-        _logout_state_nonces.pop(n, None)
+# FIX-3 (mid-sprint review): NIT-5 state-nonce was issued but never validated
+# (no caller of `_validate_logout_state` existed; the SPA didn't echo `state`
+# back). Removing the dead issue/validate pair. If we wire IS-side state-
+# round-trip later we'll re-add WITH a caller. The IS RP-initiated logout
+# URL still includes a fresh `state` per spec, sourced from `secrets.token_urlsafe`
+# at call time (see `_build_is_logout_url`).
 
 
 @dataclass
@@ -137,15 +111,18 @@ class LogoutHandler:
         request_id: str,
         reason: str = "user_signed_out",
     ) -> LogoutResult:
-        """Run the logout cascade for *session*.
+        """Run the logout cascade for *session* AND every other session of the same user.
 
-        Caller (route handler) is responsible for:
-          - reading the orch_sid cookie and resolving Session (or returning early),
-          - setting the response cookie deletion header,
-          - returning the JSON {redirect_url} body.
+        BLOCK-B (mid-sprint review): the cascade now iterates all sessions
+        owned by ``session.user_sub`` (multi-browser case). FIX-20 wiring.
+        Same per-`user_sub` Lock serialises against concurrent UC-10 admin-
+        terminate. Each session has its own token-A (each underwent its own
+        Pattern C login), so revoke-at-IS runs once per session.
 
         Args:
-            session: The Session to terminate.
+            session: The Session that initiated logout (the one whose cookie
+                was on the request). Used for redirect-URL construction
+                (its ``token_a.id_token`` becomes ``id_token_hint``).
             request_id: rid for log correlation.
             reason: ``"user_signed_out"`` (UC-09) or ``"admin_terminated"``
                 (UC-10, future). Surfaces in the audit chain and (3B.2)
@@ -154,8 +131,6 @@ class LogoutHandler:
         Returns:
             ``LogoutResult`` describing what to send back to the SPA.
         """
-        _prune_logout_state()
-
         # Step 1: acquire per-user_sub lock (FIX-12).
         user_lock = self.session_store.get_user_lock(session.user_sub)
         async with user_lock:
@@ -172,10 +147,14 @@ class LogoutHandler:
         request_id: str,
         reason: str,
     ) -> LogoutResult:
-        # If a concurrent UC-10 cascade ran while we waited for the lock,
-        # the Session has already been removed. Idempotency: short-circuit
-        # but still log the reason for the audit chain (FIX-12).
-        if session.session_id not in self.session_store._sessions:  # noqa: SLF001
+        # BLOCK-B (mid-sprint review): cascade across ALL sessions for this
+        # user, not just the cookie's session. find_sessions_for_user is now
+        # called instead of leaving the multi-browser case open.
+        sessions_to_drop: list[Session] = self.session_store.find_sessions_for_user(
+            session.user_sub
+        )
+        if not sessions_to_drop:
+            # Concurrent UC-10 ran while we waited; idempotent short-circuit.
             logger.warning(
                 "logout_cascade_already_run | rid=%s reason=%s user_sub=%s",
                 request_id,
@@ -189,75 +168,75 @@ class LogoutHandler:
                 reason_label=reason,
             )
 
-        # Step 2: BLOCK-G — Session.terminating is the first state mutation.
-        # Chat/CIBA paths see this and 401 (orchestrator/chat/routes.py + ciba/cancel).
-        session.terminating = True
+        # Capture id_token for IS redirect from the *initiating* session
+        # (the one whose cookie was on the request). Other sessions don't
+        # need their id_token — IS will sweep them on its side too.
+        initiator_id_token = getattr(session.token_a, "id_token", None)
+
+        # Step 2: BLOCK-G — Session.terminating is the FIRST state mutation
+        # on every session before snapshot/revoke/fan-out begins.
+        for s in sessions_to_drop:
+            s.terminating = True
         logger.info(
-            "logout_cascade_start | rid=%s reason=%s session_id=%s user_sub=%s",
+            "logout_cascade_start | rid=%s reason=%s user_sub=%s session_count=%d",
             request_id,
             reason,
-            session.session_id[:8],
             session.user_sub,
+            len(sessions_to_drop),
         )
 
-        # Step 3: snapshot state.
-        token_a_access = session.token_a.access_token
-        token_a_id_token = getattr(session.token_a, "id_token", None)
-        pending_list = list(session.pending_ciba.values())
-        completed_log: list[IssuedTokenRecord] = list(session.completed_ciba_log)
+        # Iterate per-session: cancel pending, revoke token-A, fan-out
+        # completed_ciba_log. Token-A differs per session (each session
+        # underwent its own Pattern C login).
+        for s in sessions_to_drop:
+            pending_list = list(s.pending_ciba.values())
+            completed_log: list[IssuedTokenRecord] = list(s.completed_ciba_log)
+            token_a_access = s.token_a.access_token
 
-        # Step 4: BLOCK-F — cancel pending CIBAs FIRST, await ack barrier.
-        await self._cancel_pending_ciba(pending_list, request_id)
+            # Step 4: BLOCK-F cancel barrier.
+            await self._cancel_pending_ciba(pending_list, request_id)
 
-        # Step 5: revoke token-A at IS (best-effort).
-        try:
-            await self.revoke_client.revoke_access_token(
-                token_a_access, request_id=request_id
-            )
-        except RevokeError as exc:
-            # F-21: revoke failure does not change the cascade outcome — denylist
-            # at receivers (3A.2) is the security boundary. Log and proceed.
-            logger.warning(
-                "is_revoke_failed_proceeding | rid=%s err=%s",
-                request_id,
-                exc,
-            )
-
-        # Step 6: fan-out to internal /internal/events on 4 receivers.
-        # 3A.2: real RPC client wired. Each completed CIBA contributes its
-        # jti to the fan-out; the receivers (HR-AGENT, IT-AGENT, hr_server,
-        # it_server) all get told about it.
-        if completed_log and self.events_client is not None:
-            for record in completed_log:
-                # Each fan_out call is per-jti; if the user has multiple OBO
-                # tokens (multi-CIBA, multi-agent) we issue one fan-out per
-                # token. FanOutReport return is logged inside fan_out() —
-                # we capture the structure here for future SSE event emission.
-                await self.events_client.fan_out(
-                    jti=record.jti,
-                    user_sub=session.user_sub,
-                    exp=float(record.exp),
-                    reason=reason,
-                    request_id=request_id,
+            # Step 5: revoke token-A at IS (per session — best-effort).
+            try:
+                await self.revoke_client.revoke_access_token(
+                    token_a_access, request_id=request_id
                 )
-        elif completed_log:
-            # Test mode: events_client is None. Still emit the per-record log
-            # line so the audit chain is unbroken.
-            for record in completed_log:
-                logger.info(
-                    "logout_fanout_stub | rid=%s agent_id=%s jti=%s exp=%s reason=%s",
+            except RevokeError as exc:
+                logger.warning(
+                    "is_revoke_failed_proceeding | rid=%s session_id=%s err=%s",
                     request_id,
-                    record.agent_id,
-                    record.jti[:8],
-                    record.exp,
-                    reason,
+                    s.session_id[:8],
+                    exc,
                 )
 
-        # Step 7: clear cookie + Session (LAST mutation per BLOCK-H).
-        await self.session_store.delete(session.session_id)
+            # Step 6: fan-out to /internal/events on 4 receivers.
+            if completed_log and self.events_client is not None:
+                for record in completed_log:
+                    await self.events_client.fan_out(
+                        jti=record.jti,
+                        user_sub=session.user_sub,
+                        exp=float(record.exp),
+                        reason=reason,
+                        request_id=request_id,
+                    )
+            elif completed_log:
+                # Test mode (events_client is None) — still log the audit chain.
+                for record in completed_log:
+                    logger.info(
+                        "logout_fanout_stub | rid=%s session_id=%s agent_id=%s jti=%s reason=%s",
+                        request_id,
+                        s.session_id[:8],
+                        record.agent_id,
+                        record.jti[:8],
+                        reason,
+                    )
 
-        # Step 9: build the IS RP-initiated logout URL.
-        redirect_url = self._build_is_logout_url(token_a_id_token)
+            # Step 7: clear this session (LAST mutation per BLOCK-H).
+            await self.session_store.delete(s.session_id)
+
+        # Step 9: build the IS RP-initiated logout URL using the initiating
+        # session's id_token (only one redirect happens).
+        redirect_url = self._build_is_logout_url(initiator_id_token)
         return LogoutResult(
             had_session=True,
             redirect_url=redirect_url,
@@ -327,7 +306,13 @@ class LogoutHandler:
             Full URL string for SPA window.location.href.
         """
         post_logout = f"{_spa_base_url(self.config)}/?reason=signed_out"
-        state = _issue_logout_state()
+        # FIX-3 (mid-sprint review): NIT-5 nonce dictionary removed. We still
+        # send a per-call `state` to IS as required by the OIDC spec (IS uses
+        # it for CSRF on the redirect back). It is not validated server-side
+        # because the SPA does not propagate it; the cookie is already cleared
+        # before the redirect and SameSite=Strict closes the form-POST CSRF
+        # vector. This trade-off matches the documented POC posture.
+        state = secrets.token_urlsafe(16)
         params: list[tuple[str, str]] = [
             ("client_id", self.config.mcp_client_id),
             ("post_logout_redirect_uri", post_logout),

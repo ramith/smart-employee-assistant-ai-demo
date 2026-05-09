@@ -23,7 +23,7 @@ services:
       context: .
       dockerfile: hr_server/Dockerfile
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"  # BLOCK-D: bind loopback only
     env_file:
       - ./hr_server/.env
     environment:
@@ -125,7 +125,7 @@ services:
       context: .
       dockerfile: hr_agent/Dockerfile
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"  # BLOCK-D: bind loopback only; receiver not on host LAN
     env_file:
       - ./hr_agent/.env
     environment:
@@ -153,7 +153,7 @@ services:
       context: .
       dockerfile: it_agent/Dockerfile
     ports:
-      - "8002:8002"
+      - "127.0.0.1:8002:8002"  # BLOCK-D: bind loopback only
     env_file:
       - ./it_agent/.env
     environment:
@@ -181,7 +181,7 @@ services:
       context: .
       dockerfile: it_server/Dockerfile
     ports:
-      - "8004:8004"
+      - "127.0.0.1:8004:8004"  # BLOCK-D: bind loopback only
     env_file:
       - ./it_server/.env
     environment:

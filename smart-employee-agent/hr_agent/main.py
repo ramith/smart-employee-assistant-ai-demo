@@ -171,6 +171,11 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
         app.state.mcp_client = mcp_client
         app.state.dispatcher = dispatcher
 
+        # BLOCK-F (mid-sprint review): both dispatchers share the same
+        # RevocationState so denylist + cache eviction are consistent.
+        if hasattr(dispatcher, "attach_revocation"):
+            dispatcher.attach_revocation(revocation)
+
         # 3A.2 FIX-21: lifespan-wired sweeper.
         sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
         revocation.sweep_task = sweep_task
@@ -239,6 +244,11 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
 
     # 3A.2: revocation state shared between /internal/events receiver and the
     # dispatcher's cache. Lifespan owns the sweeper task.
+    # BLOCK-F (mid-sprint review): attach to BOTH dispatchers (router + lifespan)
+    # so any future code path that uses app.state.dispatcher consults the
+    # denylist consistently. Both dispatchers share the same `revocation`
+    # reference; revoke_jti updates run on whichever dispatcher's cache holds
+    # the matching jti.
     revocation = RevocationState()
     if hasattr(_dispatcher_for_router, "attach_revocation"):
         _dispatcher_for_router.attach_revocation(revocation)
@@ -253,16 +263,25 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
         )
     )
 
-    # 3A.2: /internal/events receiver. Disabled if INTERNAL_REVOKE_SHARED_SECRET
-    # is unset (test mode) or if the config object lacks the field (legacy fakes).
-    if getattr(cfg, "internal_revoke_shared_secret", ""):
+    # 3A.2: /internal/events receiver. FIX-2 (mid-sprint review): warn loudly
+    # when disabled in production-shaped deployments so a missed env var doesn't
+    # silently degrade revocation. Test fakes that lack the config field also
+    # disable the receiver — matching behaviour, but the WARN line lets
+    # production-shaped misconfigs be grep'd in operator logs.
+    secret = getattr(cfg, "internal_revoke_shared_secret", "")
+    if secret:
         app.include_router(
             build_internal_events_router(
                 state=revocation,
-                shared_secret=cfg.internal_revoke_shared_secret,
+                shared_secret=secret,
                 on_revoke=_dispatcher_for_router.revoke_jti,
                 service_label="hr-agent",
             )
+        )
+    else:
+        logger.warning(
+            "internal_events_receiver_disabled | service=hr-agent reason=no_shared_secret "
+            "(set INTERNAL_REVOKE_SHARED_SECRET to enable; cascade revocation will not propagate to this agent)"
         )
 
     # ── Liveness probe ─────────────────────────────────────────────────────────

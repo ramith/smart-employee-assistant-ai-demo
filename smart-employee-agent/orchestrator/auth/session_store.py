@@ -328,17 +328,18 @@ class SessionStore:
         ``bcl_receiver`` (UC-10, Sprint 3B) to serialise cascades for the
         same user — see Stage 4 FIX-12.
 
+        BLOCK-C (mid-sprint review): use ``setdefault`` so two coroutines
+        racing on the same ``user_sub`` cannot both create a Lock and end up
+        with one of them holding an orphan. ``setdefault`` is a single
+        atomic dict op under CPython's GIL — safe on a single event loop.
+
         Args:
             user_sub: User UUID (claims.sub) to acquire a lock for.
 
         Returns:
             The asyncio.Lock for *user_sub*.
         """
-        lock = self._user_locks.get(user_sub)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._user_locks[user_sub] = lock
-        return lock
+        return self._user_locks.setdefault(user_sub, asyncio.Lock())
 
     def find_sessions_for_user(self, user_sub: str) -> list[Session]:
         """Return all sessions owned by *user_sub* (multi-browser case).

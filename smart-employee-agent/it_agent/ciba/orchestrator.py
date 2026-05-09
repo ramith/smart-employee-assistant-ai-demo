@@ -156,11 +156,13 @@ class ITDispatcher:
         # 3A.2 FIX-19: secondary jti -> cache_key index for O(1) revoke lookup.
         self._jti_to_cache_key: dict[str, tuple[str, str]] = {}
         # 3A.2: revocation state attached at startup by it_agent/main.py.
-        self._revocation = None  # type: ignore[var-annotated]
+        # FIX-4 (mid-sprint review): proper Optional annotation.
+        from common.revocation import RevocationState as _RS
+        self._revocation: _RS | None = None
 
     # ── 3A.2: revocation hooks ────────────────────────────────────────────────
 
-    def attach_revocation(self, state) -> None:  # type: ignore[no-untyped-def]
+    def attach_revocation(self, state) -> None:
         """Wire ``common.revocation.RevocationState`` into the dispatcher."""
         self._revocation = state
 

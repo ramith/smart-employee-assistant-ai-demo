@@ -488,7 +488,8 @@ def test_exchange_cookie_has_correct_flags() -> None:
     # Case-insensitive flag checks.
     lower_cookie = set_cookie.lower()
     assert "httponly" in lower_cookie, f"HttpOnly missing from: {set_cookie}"
-    # 3A.1 FIX-9: cookie tightened from SameSite=Lax to SameSite=Strict.
+    # FIX-8 (mid-sprint review): docstring drifted; the real assertion is Strict.
+    # 3A.1 FIX-9 tightened the cookie from SameSite=Lax to SameSite=Strict.
     assert "samesite=strict" in lower_cookie, f"SameSite=Strict missing from: {set_cookie}"
 
 

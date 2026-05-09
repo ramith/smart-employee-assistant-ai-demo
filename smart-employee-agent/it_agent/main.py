@@ -174,16 +174,21 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
     )
     app.include_router(a2a_router)
 
-    # 3A.2: /internal/events receiver (disabled if shared secret unset, or
-    # if the config object lacks the field — legacy test fakes).
-    if getattr(cfg, "internal_revoke_shared_secret", ""):
+    # 3A.2 + FIX-2 (mid-sprint review): WARN on empty secret so misconfigs
+    # are observable in operator logs.
+    secret = getattr(cfg, "internal_revoke_shared_secret", "")
+    if secret:
         app.include_router(
             build_internal_events_router(
                 state=revocation,
-                shared_secret=cfg.internal_revoke_shared_secret,
+                shared_secret=secret,
                 on_revoke=dispatcher.revoke_jti,
                 service_label="it-agent",
             )
+        )
+    else:
+        logger.warning(
+            "internal_events_receiver_disabled | service=it-agent reason=no_shared_secret"
         )
 
     # ── /healthz ───────────────────────────────────────────────────────────────
