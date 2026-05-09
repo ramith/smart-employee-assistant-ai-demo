@@ -102,7 +102,10 @@ const COPY = {
   signoutDialogBodyCiba: "An approval is in progress. Sign out anyway?",
   signoutPrimary: "Sign out",
   signoutPrimaryCiba: "Sign out and cancel approval",
-  signoutProgress: "Signing you out…",
+  signoutProgress: "Revoking access for all agents…",                       // copy-deck 8.5 (Stage 4 FIX-14)
+  signoutRedirecting: "Redirecting to complete sign-out at your identity provider…",  // copy-deck 8.9 (BLOCK-E)
+  signoutError: "Sign-out could not be completed right now. Close your browser to end your session, or try again.",  // copy-deck 8.10 (FIX-16)
+  signedOutPartial: "You have been signed out of this application. Note: your sign-in at the identity provider may still be active. To fully sign out everywhere, visit your organization's sign-out page or close your browser.",  // copy-deck 1.13 (BLOCK-E)
 
   // §9 Toasts and banners
   toastConnLost: "Connection lost. Trying to reconnect…",
@@ -259,6 +262,10 @@ async function init() {
       showSigninNotice(COPY.sessionExpired);
     } else if (reason === "signed_out") {
       showSigninNotice(COPY.signedOut, true);
+    } else if (reason === "signed_out_partial") {
+      // 3A.1 BLOCK-E: user cancelled at IS consent screen. Orchestrator state
+      // is already cleaned but IS SSO may still be active.
+      showSigninNotice(COPY.signedOutPartial, false);
     }
   }
 
@@ -401,28 +408,66 @@ async function completeLogin(code, state) {
 
 async function performSignOut() {
   $("signout-dialog").hidden = true;
-  $("signout-progress").hidden = false;
+  const progressEl = $("signout-progress");
+  progressEl.querySelector("span").textContent = COPY.signoutProgress;  // phase 1 (FIX-14)
+  progressEl.hidden = false;
 
-  // Teardown SSE
+  // Teardown SSE early so the cascade doesn't have to drain it.
   if (sseSource) {
     sseSource.close();
     sseSource = null;
   }
 
-  // Clear local state
+  // Clear local state.
   clearWidgetState();
   localStorage.removeItem("orch_session_id");
   localStorage.removeItem("orch_user_name");
   sessionId = null;
 
+  // 3A.1 FIX-9: server requires X-Request-ID. SPA mints a fresh rid.
+  const logoutRid = "logout-" + Math.random().toString(36).slice(2, 10) + "-"
+    + Date.now().toString(36);
+
+  // 3A.1 FIX-16: 10-second client-side timeout; on timeout/5xx, show error
+  // banner instead of spinning forever.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  let redirectUrl = null;
   try {
-    await fetch("/auth/logout", { method: "POST", credentials: "include" });
-  } catch (_) {
-    // Best-effort
+    const resp = await fetch("/auth/logout", {
+      method: "POST",
+      credentials: "include",
+      headers: { "X-Request-ID": logoutRid },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      redirectUrl = body.redirect_url || null;
+    } else {
+      console.warn("logout server error", resp.status);
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    console.warn("logout request failed", err);
   }
 
-  // Return to sign-in page with signed-out notice
-  window.location.href = "/?reason=signed_out";
+  if (!redirectUrl) {
+    // 3A.1 FIX-16 / EX-6: orchestrator unreachable or 5xx. Show error banner;
+    // the local cookie is already cleared client-side via teardown above.
+    progressEl.hidden = true;
+    showSigninPage();
+    showSigninError(COPY.signoutError, true);
+    return;
+  }
+
+  // 3A.1 BLOCK-E: phase 2 spinner before IS redirect.
+  progressEl.querySelector("span").textContent = COPY.signoutRedirecting;
+  // Brief delay so the user sees the phase-2 copy.
+  await new Promise((r) => setTimeout(r, 200));
+
+  window.location.href = redirectUrl;
 }
 
 // ─── Page visibility ─────────────────────────────────────────────────────────

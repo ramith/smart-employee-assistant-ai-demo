@@ -147,6 +147,8 @@ for _jwt_name in ("JWKSCache", "ValidatorConfig", "validate"):
 
 _config_mod = _load_module("orchestrator.config", "orchestrator/config.py")
 _pattern_c_mod = _load_module("orchestrator.auth.pattern_c", "orchestrator/auth/pattern_c.py")
+_is_revoke_mod = _load_module("orchestrator.auth.is_revoke", "orchestrator/auth/is_revoke.py")
+_logout_handler_mod = _load_module("orchestrator.auth.logout_handler", "orchestrator/auth/logout_handler.py")
 _routes_mod = _load_module("orchestrator.auth.routes", "orchestrator/auth/routes.py")
 
 # Bind public names.
@@ -259,10 +261,22 @@ def _make_deps(
         result = pattern_c_result or _make_pattern_c_result()
         mock_exchanger.exchange = AsyncMock(return_value=result)
 
+    # 3A.1: build a LogoutHandler with a mocked RevokeClient. revoke_access_token
+    # is a no-op AsyncMock — covers the happy path; tests that assert revoke
+    # behaviour can override.
+    mock_revoke = MagicMock(spec=_is_revoke_mod.RevokeClient)
+    mock_revoke.revoke_access_token = AsyncMock(return_value=None)
+    logout_handler = _logout_handler_mod.LogoutHandler(
+        config=config,
+        session_store=session_store,
+        revoke_client=mock_revoke,
+    )
+
     return AuthRouterDeps(
         config=config,
         pattern_c=mock_exchanger,
         session_store=session_store,
+        logout_handler=logout_handler,
         pending_logins={},
     )
 
@@ -474,7 +488,8 @@ def test_exchange_cookie_has_correct_flags() -> None:
     # Case-insensitive flag checks.
     lower_cookie = set_cookie.lower()
     assert "httponly" in lower_cookie, f"HttpOnly missing from: {set_cookie}"
-    assert "samesite=lax" in lower_cookie, f"SameSite=Lax missing from: {set_cookie}"
+    # 3A.1 FIX-9: cookie tightened from SameSite=Lax to SameSite=Strict.
+    assert "samesite=strict" in lower_cookie, f"SameSite=Strict missing from: {set_cookie}"
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +537,7 @@ def test_exchange_pops_pending_login_on_success() -> None:
 
 
 def test_logout_with_cookie_deletes_session_and_clears_cookie() -> None:
-    """POST /auth/logout must delete the session and clear the orch_sid cookie."""
+    """POST /auth/logout (3A.1): runs cascade, deletes session, clears cookie, returns redirect_url."""
     client, deps = _make_client()
     state, _ = _seed_pending(deps)
 
@@ -534,21 +549,23 @@ def test_logout_with_cookie_deletes_session_and_clears_cookie() -> None:
     session_id = exchange_resp.cookies["orch_sid"]
     assert deps.session_store.get(session_id) is not None
 
-    # Now logout using the session cookie.
-    # Set the cookie on the client directly (avoids Starlette per-request cookies deprecation).
+    # 3A.1 FIX-9: X-Request-ID is required.
     client.cookies.set("orch_sid", session_id)
-    logout_resp = client.post("/auth/logout")
+    logout_resp = client.post("/auth/logout", headers={"X-Request-ID": "test-rid-1"})
 
     assert logout_resp.status_code == 200
-    assert logout_resp.json()["ok"] is True
+    body = logout_resp.json()
+    assert body["ok"] is True
+    # 3A.1 G-9: redirect_url goes to the IS /oidc/logout endpoint with id_token_hint + client_id.
+    assert "redirect_url" in body
+    assert "/oidc/logout" in body["redirect_url"]
+    assert "client_id=" in body["redirect_url"]
 
     # Session must be gone from the store.
     assert deps.session_store.get(session_id) is None
 
-    # The Set-Cookie header must signal cookie deletion (max_age=0 or empty value).
     set_cookie = logout_resp.headers.get("set-cookie", "")
     assert set_cookie != "", "No Set-Cookie header on logout response"
-    # Either max-age=0 or the cookie value is empty indicates deletion.
     lower_cookie = set_cookie.lower()
     assert "max-age=0" in lower_cookie or 'orch_sid=""' in lower_cookie or "orch_sid=;" in lower_cookie, (
         f"Cookie was not cleared: {set_cookie}"
@@ -561,10 +578,34 @@ def test_logout_with_cookie_deletes_session_and_clears_cookie() -> None:
 
 
 def test_logout_without_cookie_returns_200() -> None:
-    """POST /auth/logout with no cookie must succeed idempotently (200, ok=true)."""
+    """POST /auth/logout (3A.1): no cookie → 200, ok=true, redirect_url='/'."""
     client, _ = _make_client()
 
-    resp = client.post("/auth/logout")
+    resp = client.post("/auth/logout", headers={"X-Request-ID": "test-rid-no-cookie"})
 
     assert resp.status_code == 200
-    assert resp.json()["ok"] is True
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["redirect_url"] == "/"
+
+
+# ---------------------------------------------------------------------------
+# Tests 13/14 — 3A.1 FIX-9: CSRF defense via required X-Request-ID
+# ---------------------------------------------------------------------------
+
+
+def test_logout_without_x_request_id_returns_400() -> None:
+    """POST /auth/logout without X-Request-ID must 400 (FIX-9 CSRF defense)."""
+    client, _ = _make_client()
+
+    resp = client.post("/auth/logout")  # no X-Request-ID header
+
+    assert resp.status_code == 400
+
+
+def test_logout_x_request_id_required_even_without_cookie() -> None:
+    """The X-Request-ID requirement applies even on the idempotent no-session path."""
+    client, _ = _make_client()
+    # No cookie + no X-Request-ID → 400 (FIX-9 fires before the cookie path).
+    resp = client.post("/auth/logout")
+    assert resp.status_code == 400

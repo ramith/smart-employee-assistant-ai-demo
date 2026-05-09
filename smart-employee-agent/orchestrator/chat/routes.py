@@ -648,6 +648,13 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
         except KeyError:
             raise HTTPException(status_code=401, detail="Invalid or expired session")
 
+        # 3A.1 BLOCK-G: reject in-flight requests once a logout cascade has
+        # set Session.terminating. The cookie may still authenticate but the
+        # session is being torn down — accepting the chat would race the
+        # fan-out and could mint a token-B that survives the cascade.
+        if session.terminating:
+            raise HTTPException(status_code=401, detail="Session terminating")
+
         # Resolve request_id.
         request_id: str = get_request_id() or str(uuid.uuid4())
 

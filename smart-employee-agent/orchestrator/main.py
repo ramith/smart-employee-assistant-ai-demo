@@ -64,6 +64,8 @@ from common.logging.correlation import CorrelationIdMiddleware, install_logging
 from common.logging.redaction import RedactionFilter
 from orchestrator.agent_registry.cards import AgentRegistry
 from orchestrator.auth.pattern_c import PatternCExchanger
+from orchestrator.auth.is_revoke import RevokeClient
+from orchestrator.auth.logout_handler import LogoutHandler
 from orchestrator.auth.routes import AuthRouterDeps, build_auth_router
 from orchestrator.auth.session_store import SessionStore
 from orchestrator.chat.keyword_fallback import KeywordRouter
@@ -349,6 +351,19 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
     # Re-assign the app lifespan with the patching wrapper.
     app.router.lifespan_context = _patching_lifespan
 
+    # ── Sprint 3 3A.1: revoke client + logout cascade handler ────────────────
+    revoke_client = RevokeClient(
+        is_base_url=cfg.is_base_url,
+        client_id=cfg.mcp_client_id,
+        client_secret=cfg.mcp_client_secret,
+        verify_tls=False,  # IS dev cert is self-signed (matches existing IDP_INSECURE_TLS pattern)
+    )
+    logout_handler = LogoutHandler(
+        config=cfg,
+        session_store=session_store,
+        revoke_client=revoke_client,
+    )
+
     # ── Auth router ───────────────────────────────────────────────────────────
     app.include_router(
         build_auth_router(
@@ -356,6 +371,7 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
                 config=cfg,
                 pattern_c=proxy_pattern_c,  # type: ignore[arg-type]
                 session_store=session_store,
+                logout_handler=logout_handler,
             )
         )
     )

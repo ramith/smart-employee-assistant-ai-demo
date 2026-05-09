@@ -73,6 +73,7 @@ class PendingCIBA:
     started_at: datetime
     poll_task: asyncio.Task | None = None  # set by chat/routes; nulled after done (F-10)
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    cancelled_ack: asyncio.Event = field(default_factory=asyncio.Event)  # 3A.1 BLOCK-F: poll loop sets in finally
     status: str = "pending"  # pending | done | denied | expired | cancelled
 
 
@@ -151,6 +152,7 @@ class Session:
     completed_ciba_log: list[IssuedTokenRecord] = field(default_factory=list)
     created_at: datetime = field(default_factory=_utc_now)
     last_seen_at: datetime = field(default_factory=_utc_now)
+    terminating: bool = False  # 3A.1 BLOCK-G: first mutation in logout cascade — gates new chat/CIBA
 
     def touch(self) -> None:
         """Update ``last_seen_at`` to the current UTC time."""
@@ -193,6 +195,9 @@ class SessionStore:
     max_idle_seconds: int = 3600
     _sessions: dict[str, Session] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # 3A.1 FIX-12: per-user_sub lock serialises concurrent UC-09 and UC-10 cascades.
+    # Created lazily on first request via get_user_lock().
+    _user_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Sync helpers (read-only; safe without lock on a single event loop)
@@ -314,6 +319,41 @@ class SessionStore:
                 del self._sessions[session_id]
                 logger.info("[SESSION] deleted session_id=%s", session_id)
             return existed
+
+    def get_user_lock(self, user_sub: str) -> asyncio.Lock:
+        """Return the per-user_sub asyncio.Lock for the revocation cascade.
+
+        Creates one lazily on first call. Same Lock is returned on subsequent
+        calls for the same user_sub. Used by ``logout_handler`` (UC-09) and
+        ``bcl_receiver`` (UC-10, Sprint 3B) to serialise cascades for the
+        same user — see Stage 4 FIX-12.
+
+        Args:
+            user_sub: User UUID (claims.sub) to acquire a lock for.
+
+        Returns:
+            The asyncio.Lock for *user_sub*.
+        """
+        lock = self._user_locks.get(user_sub)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._user_locks[user_sub] = lock
+        return lock
+
+    def find_sessions_for_user(self, user_sub: str) -> list[Session]:
+        """Return all sessions owned by *user_sub* (multi-browser case).
+
+        Sync — read-only iteration over the dict; safe on the single
+        event-loop thread per Q5. Used by the logout cascade to fan out
+        across all open sessions for the same user.
+
+        Args:
+            user_sub: User UUID to search for.
+
+        Returns:
+            List of ``Session`` objects (possibly empty).
+        """
+        return [s for s in self._sessions.values() if s.user_sub == user_sub]
 
     async def prune_expired(self) -> int:
         """Remove all sessions that have been idle longer than ``max_idle_seconds``.

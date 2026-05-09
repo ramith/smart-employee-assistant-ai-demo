@@ -41,6 +41,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
+from orchestrator.auth.logout_handler import LogoutHandler
 from orchestrator.auth.pattern_c import PatternCExchanger, build_authorize_url, make_pkce
 from orchestrator.auth.session_store import SessionStore
 from orchestrator.config import OrchestratorConfig
@@ -101,6 +102,7 @@ class AuthRouterDeps:
     config: OrchestratorConfig
     pattern_c: PatternCExchanger
     session_store: SessionStore
+    logout_handler: LogoutHandler
     pending_logins: dict[str, PendingLogin] = field(default_factory=dict)
 
 
@@ -138,9 +140,20 @@ class ExchangeResponse(BaseModel):
 
 
 class LogoutResponse(BaseModel):
-    """Success response from ``POST /auth/logout``."""
+    """Success response from ``POST /auth/logout`` (Sprint 3 3A.1).
+
+    The SPA navigates to ``redirect_url`` to land on the IS ``/oidc/logout``
+    consent screen (Q3 lock). Q3 + F-19-corrected design: with
+    ``id_token_hint`` set, IS walks session participants and fires BCL —
+    so ``redirect_url`` is the architectural cornerstone of the cascade,
+    not just a UX courtesy.
+
+    When no session existed for the cookie, ``redirect_url`` is ``"/"``
+    so the SPA simply returns home.
+    """
 
     ok: bool = True
+    redirect_url: str
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +407,7 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             value=session.session_id,
             httponly=True,
             secure=deps.config.cookie_secure,
-            samesite="lax",
+            samesite="strict",  # 3A.1 FIX-9: tighter than Lax; CSRF defense
             max_age=deps.config.session_ttl_seconds,
         )
 
@@ -411,41 +424,77 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
 
     @router.post("/auth/logout", response_model=LogoutResponse)
     async def logout(request: Request, response: Response) -> LogoutResponse:
-        """Clear the session and session cookie.
+        """Sprint 3 3A.1: orchestrator-driven logout cascade.
 
-        Idempotent: succeeds even when no session cookie is present or the
-        session has already been deleted.
+        Implements the locked design from
+        ``docs/architecture/sprint-3-tech-arch.md`` §1.1 — set
+        ``Session.terminating``, cancel pending CIBAs, revoke token-A,
+        fan out to receivers (stubbed in 3A.1; wired in 3A.2), delete
+        Session. Returns JSON ``{redirect_url}`` so the SPA navigates to
+        IS ``/oidc/logout?id_token_hint=…`` — F-19-corrected: with
+        ``id_token_hint`` IS fires BCL to all session participants.
 
-        Sprint 3 will extend this to: BCL signal, revoke token-A at IS,
-        fan-out cancel to specialists.
+        Sprint 3 FIX-9: requires ``X-Request-ID`` header (rejects 400
+        without it). Cross-site form POSTs cannot set custom headers,
+        which closes the CSRF vector that ``SameSite=Lax`` left open.
+
+        Idempotent: succeeds with ``{redirect_url: "/"}`` if no session
+        cookie is present.
 
         Args:
-            request: Incoming ``Request`` — used to read the ``orch_sid`` cookie.
+            request: Incoming ``Request`` — used to read ``orch_sid`` and
+                ``X-Request-ID``.
             response: ``Response`` — used to delete the cookie.
 
         Returns:
-            ``{"ok": true}`` unconditionally.
-        """
-        session_id = request.cookies.get(deps.config.session_cookie_name)
-        if session_id:
-            deleted = await deps.session_store.delete(session_id)
-            logger.info(
-                "auth_logout | session_id_prefix=%s deleted=%s",
-                session_id[:8],
-                deleted,
-            )
-        else:
-            logger.debug("auth_logout_no_cookie | no orch_sid cookie present")
+            ``LogoutResponse`` with ``redirect_url`` for the SPA to navigate to.
 
-        # Clear the cookie regardless of whether a session existed.
+        Raises:
+            HTTPException(400): ``X-Request-ID`` header absent (FIX-9 CSRF guard).
+        """
+        # 3A.1 FIX-9: CSRF defense via required custom header.
+        request_id = request.headers.get("X-Request-ID")
+        if not request_id:
+            logger.warning("auth_logout_missing_rid | rejecting per FIX-9")
+            raise HTTPException(status_code=400, detail="X-Request-ID required")
+
+        session_id = request.cookies.get(deps.config.session_cookie_name)
+        result = None
+        if session_id:
+            session = deps.session_store.get(session_id)
+            if session is not None:
+                result = await deps.logout_handler.execute(
+                    session=session,
+                    request_id=request_id,
+                    reason="user_signed_out",
+                )
+                logger.info(
+                    "auth_logout | rid=%s session_id_prefix=%s had_session=%s",
+                    request_id,
+                    session_id[:8],
+                    result.had_session,
+                )
+            else:
+                logger.info(
+                    "auth_logout_session_missing | rid=%s session_id_prefix=%s",
+                    request_id,
+                    session_id[:8],
+                )
+        else:
+            logger.debug("auth_logout_no_cookie | rid=%s", request_id)
+
+        # Clear the cookie unconditionally (best-effort cleanup).
         response.delete_cookie(
             key=deps.config.session_cookie_name,
             httponly=True,
             secure=deps.config.cookie_secure,
-            samesite="lax",
+            samesite="strict",  # match the set_cookie SameSite (FIX-9)
         )
 
-        return LogoutResponse(ok=True)
+        redirect_url = (
+            result.redirect_url if (result and result.redirect_url) else "/"
+        )
+        return LogoutResponse(ok=True, redirect_url=redirect_url)
 
     return router
 
