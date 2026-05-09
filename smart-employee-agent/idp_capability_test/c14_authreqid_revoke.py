@@ -139,6 +139,7 @@ def _mint_agent_actor_token(
 
     r1 = s.post(
         f"{is_base}/oauth2/authorize",
+        auth=(oauth_client_id, oauth_client_secret),  # match production wso2_is_client.py
         data={
             "client_id": oauth_client_id,
             "response_type": "code",
@@ -328,28 +329,41 @@ def main() -> int:
         warn("None of the revoke shapes returned 2xx.")
 
     # ── C14.4 poll the token endpoint and observe ─────────────────────────────
+    # CIBA spec rate-limits polling. Respect `interval` from the initiation
+    # response; back off on `slow_down`.
     hr_("C14.4 — Poll /oauth2/token grant_type=urn:openid:params:grant-type:ciba")
     info("  We expect either: invalid_grant / expired_token / access_denied → revoke worked.")
     info("  Or: authorization_pending → revoke did NOT cancel the auth_req_id.")
-    rT = s.post(
-        f"{is_base}/oauth2/token",
-        auth=(oauth_client_id, oauth_client_secret),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "grant_type": "urn:openid:params:grant-type:ciba",
-            "auth_req_id": auth_req_id,
-        },
-    )
-    info(f"  HTTP status : {rT.status_code}")
-    try:
-        token_body = rT.json()
-        import json as _json
-        for line in _json.dumps(token_body, indent=2).splitlines():
-            info(f"    {line}")
-    except ValueError:
-        info(f"  body (non-JSON): {rT.text[:300]}")
-        token_body = {}
-    error = token_body.get("error", "")
+    poll_interval = float(body.get("interval", 2)) + 1
+    error = ""
+    token_body: dict = {}
+    for attempt in range(1, 5):
+        info(f"  attempt {attempt}: sleeping {poll_interval:.0f}s …")
+        time.sleep(poll_interval)
+        rT = s.post(
+            f"{is_base}/oauth2/token",
+            auth=(oauth_client_id, oauth_client_secret),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "urn:openid:params:grant-type:ciba",
+                "auth_req_id": auth_req_id,
+            },
+        )
+        info(f"  HTTP status : {rT.status_code}")
+        try:
+            token_body = rT.json()
+            import json as _json
+            for line in _json.dumps(token_body, indent=2).splitlines():
+                info(f"    {line}")
+        except ValueError:
+            info(f"  body (non-JSON): {rT.text[:300]}")
+            token_body = {}
+        error = token_body.get("error", "")
+        if error == "slow_down":
+            poll_interval += 1
+            info("  slow_down — backing off and retrying")
+            continue
+        break
 
     # ── Verdict ───────────────────────────────────────────────────────────────
     hr_("C14 verdict")
