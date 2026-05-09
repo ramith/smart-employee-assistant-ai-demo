@@ -21,6 +21,29 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import httpx
+import jwt as _pyjwt  # mid-sprint fix: decode jti from token-B JWT (no sig-verify;
+                     # IS just minted it, it_server validates on the MCP call)
+
+
+def _jti_of(token: object) -> str:
+    """Return the ``jti`` claim of an OAuth/OBO token as a string, or "".
+
+    OAuthToken (Sprint 1 raw) doesn't carry jti as a field; we decode the
+    JWT payload without signature verification to extract it. it_server
+    will validate the token on the actual MCP call, so for the agent's
+    own audit-log purpose (Sprint 3 IssuedTokenRecord, denylist index)
+    skipping verification here is safe.
+    """
+    access_token = getattr(token, "access_token", None) or getattr(token, "raw", None)
+    if not isinstance(access_token, str):
+        explicit = getattr(token, "jti", None)
+        return str(explicit) if explicit else ""
+    try:
+        payload = _pyjwt.decode(access_token, options={"verify_signature": False})
+    except _pyjwt.PyJWTError:
+        return ""
+    raw_jti = payload.get("jti")
+    return str(raw_jti) if raw_jti else ""
 
 from common.a2a.models import (
     A2AMessageResponse,
@@ -260,12 +283,15 @@ class ITDispatcher:
         prior_iat: datetime | None = cached.iat if cached is not None else None
 
         # 3A.2: denylist check before serving a cached token.
-        if cached is not None and self._denylist_contains(getattr(cached.token, "jti", "")):
+        # Mid-sprint fix: jti has to be decoded; OAuthToken has no jti attr.
+        cached_jti = _jti_of(cached.token) if cached is not None else ""
+        if cached is not None and self._denylist_contains(cached_jti):
             logger.info(
                 "it_dispatcher_cache_denylist_hit | dropping cache jti=%s",
-                (getattr(cached.token, "jti", "") or "")[:8],
+                cached_jti[:8] if cached_jti else "(missing)",
             )
-            self._jti_to_cache_key.pop(getattr(cached.token, "jti", ""), None)
+            if cached_jti:
+                self._jti_to_cache_key.pop(cached_jti, None)
             self._token_cache.pop(cache_key, None)
             cached = None
 
@@ -295,7 +321,7 @@ class ITDispatcher:
             else:
                 return ResultPayload(
                     data=tool_result,
-                    token_jti=getattr(cached.token, "jti", "") or "",
+                    token_jti=_jti_of(cached.token),
                     token_exp=int(cached.expires_at.timestamp()),
                     token_iat=int(cached.iat.timestamp()),
                 )
@@ -488,19 +514,22 @@ class ITDispatcher:
                     expires_at=token_b.expires_at,
                 )
                 # 3A.2 FIX-19: maintain jti -> cache_key index for O(1) revoke.
-                jti = getattr(token_b, "jti", "")
+                # Mid-sprint fix: OAuthToken has no jti attr; decode JWT.
+                jti = _jti_of(token_b)
                 if jti:
                     self._jti_to_cache_key[jti] = cache_key
                 logger.info(
-                    "it_dispatcher_token_cached request_id=%s exp_in_s=%d",
+                    "it_dispatcher_token_cached request_id=%s exp_in_s=%d jti=%s",
                     request_id,
                     token_b.expires_in,
+                    jti[:8] if jti else "(missing)",
                 )
 
             # ── c. Write ResultPayload ────────────────────────────────────────
+            # Mid-sprint fix: jti decoded from JWT (OAuthToken has no jti field).
             state.result = ResultPayload(
                 data=tool_result,
-                token_jti=token_b.jti if hasattr(token_b, "jti") and token_b.jti else "",
+                token_jti=_jti_of(token_b),
                 token_exp=int(token_b.expires_at.timestamp()) if hasattr(token_b, "expires_at") else 0,
                 token_iat=int(token_b.expires_at.timestamp() - token_b.expires_in) if hasattr(token_b, "expires_at") else 0,
             )

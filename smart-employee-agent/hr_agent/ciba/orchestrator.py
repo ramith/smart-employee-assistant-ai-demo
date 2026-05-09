@@ -33,6 +33,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+
+import jwt as _pyjwt  # mid-sprint fix: decode jti from token-B JWT (no sig-verify;
+                     # IS just minted it and hr_server will verify on the MCP call)
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -75,6 +78,28 @@ __all__ = ["HRDispatcherDeps", "HRDispatcher"]
 _REQUIRED_ARGS: dict[str, list[str]] = {
     "hr.approve_leave": ["leave_id"],
 }
+
+
+def _jti_of(token: object) -> str:
+    """Return the ``jti`` claim of an OAuth/OBO token as a string, or "".
+
+    OAuthToken (Sprint 1 raw) doesn't carry jti as a field; we decode the
+    JWT payload without signature verification to extract it. hr_server
+    will validate the token on the actual MCP call, so for the agent's
+    own audit-log purpose (Sprint 3 IssuedTokenRecord, denylist index)
+    skipping verification here is safe.
+    """
+    access_token = getattr(token, "access_token", None) or getattr(token, "raw", None)
+    if not isinstance(access_token, str):
+        # Already an OBOToken with explicit jti? Use it.
+        explicit = getattr(token, "jti", None)
+        return str(explicit) if explicit else ""
+    try:
+        payload = _pyjwt.decode(access_token, options={"verify_signature": False})
+    except _pyjwt.PyJWTError:
+        return ""
+    raw_jti = payload.get("jti")
+    return str(raw_jti) if raw_jti else ""
 
 
 _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] = {
@@ -337,12 +362,15 @@ class HRDispatcher:
         # token's jti is on the denylist (e.g. fan-out from a logout cascade),
         # treat as a cache miss + drop the entry. The user will see a fresh
         # consent widget rather than a stale-token reuse.
-        if cached is not None and self._denylist_contains(getattr(cached.token, "jti", "")):
+        # Mid-sprint fix: jti has to be decoded; OAuthToken has no jti attr.
+        cached_jti = _jti_of(cached.token) if cached is not None else ""
+        if cached is not None and self._denylist_contains(cached_jti):
             logger.info(
                 "hr_dispatcher_cache_denylist_hit | dropping cache jti=%s",
-                (getattr(cached.token, "jti", "") or "")[:8],
+                cached_jti[:8] if cached_jti else "(missing)",
             )
-            self._jti_to_cache_key.pop(getattr(cached.token, "jti", ""), None)
+            if cached_jti:
+                self._jti_to_cache_key.pop(cached_jti, None)
             self._token_cache.pop(cache_key, None)
             cached = None
 
@@ -376,7 +404,7 @@ class HRDispatcher:
             else:
                 return ResultPayload(
                     data=tool_result,
-                    token_jti=getattr(cached.token, "jti", "") or "",
+                    token_jti=_jti_of(cached.token),
                     token_exp=int(cached.expires_at.timestamp()),
                     token_iat=int(cached.iat.timestamp()),
                 )
@@ -580,19 +608,24 @@ class HRDispatcher:
                     expires_at=token_b.expires_at,
                 )
                 # 3A.2 FIX-19: maintain jti -> cache_key index for O(1) revoke.
-                jti = getattr(token_b, "jti", "")
+                # Mid-sprint fix: OAuthToken has no jti attr; decode JWT instead.
+                jti = _jti_of(token_b)
                 if jti:
                     self._jti_to_cache_key[jti] = cache_key
                 logger.info(
-                    "hr_dispatcher_token_cached request_id=%s exp_in_s=%d",
+                    "hr_dispatcher_token_cached request_id=%s exp_in_s=%d jti=%s",
                     request_id,
                     token_b.expires_in,
+                    jti[:8] if jti else "(missing)",
                 )
 
             # ── c. Write ResultPayload ────────────────────────────────────────
+            # Mid-sprint fix: jti has to be decoded from JWT (OAuthToken model
+            # has no jti field). Empty jti here means Sprint 3 fan-out can't
+            # target this token at receivers.
             state.result = ResultPayload(
                 data=tool_result,
-                token_jti=token_b.jti if hasattr(token_b, "jti") and token_b.jti else "",
+                token_jti=_jti_of(token_b),
                 token_exp=int(token_b.expires_at.timestamp()) if hasattr(token_b, "expires_at") else 0,
                 token_iat=int(token_b.expires_at.timestamp() - token_b.expires_in) if hasattr(token_b, "expires_at") else 0,
             )
