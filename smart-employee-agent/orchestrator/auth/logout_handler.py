@@ -288,42 +288,38 @@ class LogoutHandler:
     def _build_is_logout_url(self, id_token: str | None) -> str:
         """Build the IS /oidc/logout URL with id_token_hint (F-19 corrected: required).
 
+        WSO2 IS RP-initiated logout requires ``post_logout_redirect_uri`` to
+        EXACTLY MATCH a registered Callback URL on the OAuth app — no query
+        string, no fragment. Live-walk on 2026-05-09 hit
+        ``access_denied: Post logout URI does not match with registered callback URI``
+        because the previous code appended ``?reason=signed_out``. The
+        config-driven `post_logout_redirect_uri` is now exact and operator
+        must register it in IS Console before live-walk.
+
+        The "I just signed out" UX cue is delivered via SPA-side
+        ``sessionStorage`` (set just before the redirect, read on return).
+
         Per the source-code analysis (sprint-3-is-source-analysis.md §2),
         WSO2 IS only fans out BCL when /oidc/logout receives id_token_hint
-        (or client_id). Without it, IS hits the empty-cache branch and never
-        walks session participants. Our locked Q3 design always uses
-        id_token_hint, which means BCL fan-out from IS reaches the
-        orchestrator-mcp-client app (and any other session participants
-        that registered backchannel_logout_uri).
+        (or client_id). Our locked Q3 design always uses id_token_hint.
 
         Args:
             id_token: The id_token captured at code-exchange time. May be
-                None on stale sessions; in that case we still hit
-                /oidc/logout with client_id only — IS will fan BCL based
-                on the OPBS cookie.
+                None on stale sessions; in that case we hit /oidc/logout
+                with client_id only.
 
         Returns:
             Full URL string for SPA window.location.href.
         """
-        post_logout = f"{_spa_base_url(self.config)}/?reason=signed_out"
-        # FIX-3 (mid-sprint review): NIT-5 nonce dictionary removed. We still
-        # send a per-call `state` to IS as required by the OIDC spec (IS uses
-        # it for CSRF on the redirect back). It is not validated server-side
-        # because the SPA does not propagate it; the cookie is already cleared
-        # before the redirect and SameSite=Strict closes the form-POST CSRF
-        # vector. This trade-off matches the documented POC posture.
+        # FIX-3 (mid-sprint review): per-call `state` is sent for OIDC
+        # spec-compliance but not validated server-side; cookie was already
+        # cleared and SameSite=Strict closes the form-POST CSRF vector.
         state = secrets.token_urlsafe(16)
         params: list[tuple[str, str]] = [
             ("client_id", self.config.mcp_client_id),
-            ("post_logout_redirect_uri", post_logout),
+            ("post_logout_redirect_uri", self.config.post_logout_redirect_uri),
             ("state", state),
         ]
         if id_token:
             params.append(("id_token_hint", id_token))
         return f"{self.config.is_base_url}/oidc/logout?{urllib.parse.urlencode(params)}"
-
-
-def _spa_base_url(config: OrchestratorConfig) -> str:
-    """Mirror of orchestrator/auth/routes.py::_spa_base_url; duplicated to
-    avoid an import cycle (routes imports this module)."""
-    return sorted(config.allowed_origins)[0]

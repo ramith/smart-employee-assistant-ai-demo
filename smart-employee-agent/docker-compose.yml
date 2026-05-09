@@ -101,6 +101,10 @@ services:
       - IT_AGENT_URL=http://it_agent:8002
       - HR_SERVER_URL=http://hr_server:8000
       - IT_SERVER_URL=http://it_server:8004
+      # 3A.2.2: must be EXACTLY registered as a Callback URL on the
+      # orchestrator-mcp-client app in IS Console. WSO2 IS rejects with
+      # "Post logout URI does not match" otherwise (live-walk 2026-05-09).
+      - POST_LOGOUT_REDIRECT_URI=${POST_LOGOUT_REDIRECT_URI:-http://localhost:3001/}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]

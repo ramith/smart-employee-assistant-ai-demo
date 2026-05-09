@@ -146,6 +146,12 @@ class OrchestratorConfig:
     # 3A.2: shared secret for /internal/events fan-out auth (BLOCK-B simple).
     # Empty string disables fan-out (test mode); production must set non-empty.
     internal_revoke_shared_secret: str = ""
+
+    # 3A.2.2 (live-walk fix 2026-05-09): explicit post_logout_redirect_uri sent
+    # to IS RP-initiated logout. WSO2 IS requires this URL to be EXACTLY
+    # registered on orchestrator-mcp-client's Callback URLs (no query string,
+    # no fragment). Operator must add this in IS Console before live-walk.
+    post_logout_redirect_uri: str = "http://localhost:3001/"
     gemini_api_key: str | None = None
 
     # Cookie (F-06)
@@ -224,6 +230,11 @@ class OrchestratorConfig:
             "INTERNAL_REVOKE_SHARED_SECRET", ""
         ).strip()
 
+        # 3A.2.2: post_logout_redirect_uri (must be registered in IS Console).
+        post_logout_redirect_uri = env.get(
+            "POST_LOGOUT_REDIRECT_URI", "http://localhost:3001/"
+        ).strip()
+
         # F-15: specialist OAuth client IDs
         hr_agent_oauth_client_id = _require(env, "HR_AGENT_OAUTH_CLIENT_ID")
         it_agent_oauth_client_id = _require(env, "IT_AGENT_OAUTH_CLIENT_ID")
@@ -294,6 +305,7 @@ class OrchestratorConfig:
             hr_server_url=hr_server_url,
             it_server_url=it_server_url,
             internal_revoke_shared_secret=internal_revoke_shared_secret,
+            post_logout_redirect_uri=post_logout_redirect_uri,
             hr_agent_oauth_client_id=hr_agent_oauth_client_id,
             it_agent_oauth_client_id=it_agent_oauth_client_id,
             trusted_specialist_subs=trusted_specialist_subs,

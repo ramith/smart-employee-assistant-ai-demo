@@ -267,6 +267,13 @@ async function init() {
       // is already cleaned but IS SSO may still be active.
       showSigninNotice(COPY.signedOutPartial, false);
     }
+  } else if (sessionStorage.getItem("orch_just_signed_out") === "1") {
+    // 3A.2.2 (live-walk fix 2026-05-09): WSO2 IS rejects post_logout_redirect_uri
+    // with query strings (exact-match against registered callback URLs). We
+    // remember the just-signed-out state in sessionStorage instead of relying
+    // on a ?reason= param. Cleared after first read so reload doesn't re-show.
+    sessionStorage.removeItem("orch_just_signed_out");
+    showSigninNotice(COPY.signedOut, true);
   }
 
   // Try to resume session via cookie (check if orchestrator has our session)
@@ -466,6 +473,11 @@ async function performSignOut() {
   progressEl.querySelector("span").textContent = COPY.signoutRedirecting;
   // Brief delay so the user sees the phase-2 copy.
   await new Promise((r) => setTimeout(r, 200));
+
+  // 3A.2.2 (live-walk fix): IS will redirect to the registered post-logout URL
+  // (no query string), so we can't pass ?reason=signed_out through. Remember
+  // the just-signed-out state via sessionStorage so init() can show the banner.
+  try { sessionStorage.setItem("orch_just_signed_out", "1"); } catch (_) {}
 
   window.location.href = redirectUrl;
 }
