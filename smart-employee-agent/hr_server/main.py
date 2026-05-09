@@ -76,8 +76,11 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
-        # No long-lived clients are owned by the app layer — validator uses
-        # the JWKSCache which is lazily initialised on first token arrival.
+        # Mid-sprint fix #3 (2026-05-09): pre-warm the JWKS cache so the first
+        # token validation doesn't pay the ~800 ms IS round-trip. Best-effort
+        # — non-fatal if IS is briefly unreachable.
+        await validator.prewarm_jwks()
+
         sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
         revocation.sweep_task = sweep_task
         yield

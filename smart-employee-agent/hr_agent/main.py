@@ -180,6 +180,19 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
         sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
         revocation.sweep_task = sweep_task
 
+        # Mid-sprint fix #3 (2026-05-09): pre-warm the shared JWKS registry
+        # so the first inbound A2A token-A doesn't pay the ~800 ms IS RTT.
+        # Best-effort — non-fatal if IS is briefly unreachable.
+        try:
+            from common.auth.jwt_validator import prewarm_shared_cache
+            await prewarm_shared_cache(
+                jwks_url=cfg.is_jwks_url,
+                insecure_tls=cfg.is_insecure_tls,
+            )
+            logger.info("hr_agent.jwks_prewarm_ok jwks_url=%s", cfg.is_jwks_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hr_agent.jwks_prewarm_failed err=%r", exc)
+
         logger.info("hr_agent_startup_complete")
 
         yield  # Application is live.

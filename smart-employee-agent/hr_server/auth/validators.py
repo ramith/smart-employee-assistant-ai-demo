@@ -131,6 +131,32 @@ class HRServerTokenValidator:
             insecure_tls=config.insecure_tls,
         )
 
+    # ── Lifespan helpers ──────────────────────────────────────────────────────
+
+    async def prewarm_jwks(self) -> None:
+        """Eagerly fetch the JWKS so the first request doesn't pay the cold-cache RTT.
+
+        Mid-sprint observability fix (2026-05-09): the live-walk showed an
+        ~800 ms cold-cache penalty on the first inbound CIBA token validation.
+        Calling this from ``lifespan`` startup amortises the cost off the
+        critical user-visible path. Failure is logged but non-fatal — IS
+        may not be reachable yet at startup; the lazy refresh on first
+        ``validate_token()`` will retry.
+        """
+        try:
+            await self._jwks_cache.refresh()
+            logger.info(
+                "validator.jwks_prewarm_ok jwks_url=%s key_count=%d",
+                self._jwks_cache.jwks_url,
+                len(self._jwks_cache._keys),  # noqa: SLF001 — startup observability
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort; fall back to lazy refresh
+            logger.warning(
+                "validator.jwks_prewarm_failed jwks_url=%s err=%r",
+                self._jwks_cache.jwks_url,
+                exc,
+            )
+
     # ── Classmethod factory ───────────────────────────────────────────────────
 
     @classmethod

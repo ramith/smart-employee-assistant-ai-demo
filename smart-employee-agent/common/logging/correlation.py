@@ -246,4 +246,12 @@ def install_logging(level: str = "INFO") -> None:
     root.addHandler(handler)
     root.setLevel(getattr(logging, effective, logging.INFO))
 
+    # Mid-sprint fix #4 (2026-05-09): httpx logs every request at INFO,
+    # including the 400-on-CIBA-poll which is the normal `authorization_pending`
+    # response and reads as alarming during demo. Mute httpx to WARNING
+    # unless we're explicitly in DEBUG mode where the per-request trace is
+    # what the operator wants.
+    if effective != "DEBUG":
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+
     _LOGGING_INSTALLED = True

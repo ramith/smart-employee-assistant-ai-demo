@@ -146,6 +146,18 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
         # 3A.2 FIX-21: lifespan-wired sweeper.
         sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
         revocation.sweep_task = sweep_task
+
+        # Mid-sprint fix #3 (2026-05-09): pre-warm the shared JWKS registry.
+        try:
+            from common.auth.jwt_validator import prewarm_shared_cache
+            await prewarm_shared_cache(
+                jwks_url=cfg.is_jwks_url,
+                insecure_tls=cfg.is_insecure_tls,
+            )
+            logger.info("it_agent.jwks_prewarm_ok jwks_url=%s", cfg.is_jwks_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("it_agent.jwks_prewarm_failed err=%r", exc)
+
         yield
         logger.info("it_agent_shutdown")
         sweep_task.cancel()

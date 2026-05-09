@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "ValidatorConfig",
     "JWKSCache",
+    "prewarm_shared_cache",
     "validate",
 ]
 
@@ -186,6 +187,31 @@ def _get_or_create_cache(config: ValidatorConfig) -> JWKSCache:
             insecure_tls=config.insecure_tls,
         )
     return _cache_registry[key]
+
+
+async def prewarm_shared_cache(*, jwks_url: str, insecure_tls: bool) -> JWKSCache:
+    """Eagerly populate the shared registry's JWKS cache for ``(jwks_url, insecure_tls)``.
+
+    Mid-sprint observability fix (2026-05-09): callers that go through the
+    shared registry path (``validate(..., jwks_cache=None)`` — used by the
+    A2A inbound validator on agents) get the cache lazily on first request,
+    paying ~800 ms IS RTT on the user-visible critical path. Calling this
+    from ``lifespan`` startup amortises the cost.
+
+    Best-effort: returns the (possibly empty) cache instance so callers can
+    inspect it. Failure is allowed to surface — caller decides whether to
+    log + continue or fail-fast.
+    """
+    config = ValidatorConfig(
+        expected_iss="",  # unused for cache key
+        jwks_url=jwks_url,
+        expected_aud=None,
+        required_scopes=frozenset(),
+        insecure_tls=insecure_tls,
+    )
+    cache = _get_or_create_cache(config)
+    await cache.refresh()
+    return cache
 
 
 # ── validate() ────────────────────────────────────────────────────────────────

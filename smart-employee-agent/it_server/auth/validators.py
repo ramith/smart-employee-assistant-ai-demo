@@ -134,6 +134,29 @@ class ITServerTokenValidator:
             insecure_tls=config.insecure_tls,
         )
 
+    # ── Lifespan helpers ──────────────────────────────────────────────────────
+
+    async def prewarm_jwks(self) -> None:
+        """Eagerly fetch the JWKS so the first request doesn't pay cold-cache RTT.
+
+        Mid-sprint observability fix (2026-05-09). Best-effort; failure is
+        logged but non-fatal — IS may not be reachable yet at startup; the
+        lazy refresh on first ``validate_token()`` retries.
+        """
+        try:
+            await self._jwks_cache.refresh()
+            logger.info(
+                "validator.jwks_prewarm_ok jwks_url=%s key_count=%d",
+                self._jwks_cache.jwks_url,
+                len(self._jwks_cache._keys),  # noqa: SLF001
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "validator.jwks_prewarm_failed jwks_url=%s err=%r",
+                self._jwks_cache.jwks_url,
+                exc,
+            )
+
     # ── Classmethod factory ───────────────────────────────────────────────────
 
     @classmethod
