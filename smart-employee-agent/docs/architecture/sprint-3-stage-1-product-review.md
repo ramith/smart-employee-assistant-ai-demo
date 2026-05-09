@@ -1,5 +1,7 @@
 # Sprint 3 — Stage 1: Product Team Review
 
+**Live status (2026-05-09 evening):** 3A.0 spikes + 3A.1 backbone + 3A.2 fan-out shipped on `sprint-3-build` @ `3067074`. Test counts 843/46. Next slice: 3A.3 MCP server enforcement. See [`sprint-3-stage-5-slice-plan.md`](sprint-3-stage-5-slice-plan.md) for live slice status. Decisions below remain locked.
+
 **Date:** 2026-05-09
 **Reviewers:** PM (voltagent-biz:product-manager), BA (voltagent-biz:business-analyst)
 **Inputs:** [`docs/milestone-plan.md`](../milestone-plan.md) §3 Sprint 3 (D3.1–D3.4), [`docs/spikes/sprint-3-logout-design-brainstorm.md`](../spikes/sprint-3-logout-design-brainstorm.md) §-1 verdict + §6 Q-LOGOUT-1..9 + §9 industry context, [`docs/architecture/sprint-1-fixes.md`](sprint-1-fixes.md) §F-19, [`docs/architecture/sprint-2-retro.md`](sprint-2-retro.md), live code state on branch `sprint-1-build` @ `c4a0b9b`.

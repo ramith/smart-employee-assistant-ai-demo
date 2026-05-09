@@ -1,10 +1,23 @@
 # Sprint 3 — Stage 5: Slice Plan
 
-**Date:** 2026-05-09
-**Branch:** `sprint-3-build` (origin tracked).
-**Inputs:** [Stage 1](sprint-3-stage-1-product-review.md), [Stage 4 review](sprint-3-stage-4-review.md), [tech-arch](sprint-3-tech-arch.md), [UC-09](../use-cases/UC-09-logout-cascade.md), [UC-10](../use-cases/UC-10-admin-terminate.md).
+**Date:** 2026-05-09 (created); **2026-05-09 evening** (status updates inline below).
+**Branch:** `sprint-3-build` (origin tracked) @ `3067074`.
+**Inputs:** [Stage 1](sprint-3-stage-1-product-review.md), [Stage 4 review](sprint-3-stage-4-review.md), [tech-arch](sprint-3-tech-arch.md), [UC-09](../use-cases/UC-09-logout-cascade.md), [UC-10](../use-cases/UC-10-admin-terminate.md), [source-dive](../spikes/sprint-3-is-source-analysis.md).
 
 This is the implementation-ready slice plan. After Stage 5 lock, Stage 6 implementation begins slice-by-slice with the convention from Sprint 2: **each slice ends with `tools/run-tests.sh` green AND a UC walkthrough on live IS** before merging onward.
+
+## Live status (2026-05-09 evening)
+
+| Slice | Status | Commit | Tests after |
+|---|---|---|---|
+| 3A.0 spike day | ✓ DONE | `6e75764` (probes) + `6b09fb7` (source dive) | 822/43 (no behavioural change) |
+| 3A.1 orchestrator backbone | ✓ DONE | `d22064a` | 823/43 |
+| 3A.2 internal RPC fan-out | ✓ DONE | `3067074` | **843/46** |
+| 3A.3 MCP server enforcement | ◯ next | — | — |
+| 3A.4 demo polish + UC-09 | ◯ pending | — | — |
+| 3B.1 admin-terminate | ◯ pending | — | — |
+| 3B.2 binding_message + carries | ◯ pending | — | — |
+| 3B.3 R-LOGOUT suite + retro | ◯ pending | — | — |
 
 ---
 
