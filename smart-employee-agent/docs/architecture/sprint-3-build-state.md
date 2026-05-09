@@ -1,9 +1,9 @@
 # Sprint 3 — build state (in-progress)
 
-**Last updated:** 2026-05-09 evening (post mid-sprint review + 2 live-walk attempts + observability pass).
-**Branch:** `sprint-3-build` @ commit `380b4ad` (pushed to origin).
+**Last updated:** 2026-05-09 evening — **UC-09 cascade fully working end-to-end after 5 live-walks.**
+**Branch:** `sprint-3-build` @ commit `1d84112` (pushed to origin).
 **Tests:** 846 / 46 files green (per `tools/run-tests.sh`).
-**Stack:** rebuilt with `LOG_LEVEL=DEBUG`; all 5 services healthy. Awaiting operator retry of UC-02 to surface the ERR-MCP-003 root cause via the new DEBUG diagnostics.
+**Stack:** all 5 services healthy with shared secret + `LOG_LEVEL=DEBUG` injected via gitignored `.env`. Cascade wall-clock 898 ms sequential, no anomalies. **Ready to start 3A.3.**
 
 This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tracks an **in-progress** sprint so the repo always reflects ship-status without requiring memory consultation.
 
@@ -23,8 +23,9 @@ This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tra
 | 3A.2.1 mid-sprint review patches | ✓ done | `fb6dc87` | 6 BLOCKs + 5 FIXes from 5-reviewer audit applied. See `sprint-3-mid-sprint-review.md`. |
 | 3A.2.2 live-walk fix #1 | ✓ done | `5045e90` + `ca41150` | `POST_LOGOUT_REDIRECT_URI` env var + drop query string + sessionStorage banner. Operator registered `http://localhost:8090/` on `orchestrator-mcp-client` Callback URLs in IS Console. |
 | 3A.2.3 observability pass | ✓ done | `7f2719d` + `380b4ad` | ~38 DEBUG lines across 12 files (validators / MCP tools / CIBA dispatchers / fan-out / BCL / auth-exchange) plus tightened catch-block logging (`str(exc)` + `details=`). `LOG_LEVEL` env override on `install_logging`. |
-| **Live-walk #2 (HR query)** | ⚠ in progress | — | ERR-MCP-003 401 from `hr_server` during UC-02. Root cause swallowed by sparse pre-3A.2.3 logs; awaiting retry with `LOG_LEVEL=DEBUG` to surface which validator step (aud / scope / act.sub / sig) is failing. |
-| 3A.3 MCP server enforcement | ◯ pending | — | Validator denylist check + 20s introspection cache. **Gated on the live-walk diagnosis above** — 3A.3 is the wedge demo step (captured-token → 401), and we want a clean UC-02 baseline before changing the validator surface again. |
+| 3A.2.4 jti decode + #1/#3/#4 | ✓ done | `8f15189` + `1d84112` | jti decoded from token-B JWT (OAuthToken has no jti field — fan-out + cache eviction were broken without this). X-Request-ID on `/auth/exchange` relay. JWKS prewarm at lifespan startup. httpx INFO muted at non-DEBUG. |
+| **Live-walk #5 (full UC-09 + UC-02)** | ✓ all-green | — | 2026-05-09 10:41. Cascade wall-clock 898 ms sequential. All 4 receivers acked. hr_agent cache evicted. Zero anomalies. JWKS prewarm shaved ~1 s off first chat request. |
+| 3A.3 MCP server enforcement | ◯ next | — | Validator denylist check (Step 7) + 20s introspection cache (Step 8). New `IntrospectionCache` class. Tests: cache×denylist matrix + R-LOGOUT-5 (captured token-B → 401 ERR-MCP-002). |
 | 3A.4 demo polish + UC-09 walkthrough | ◯ pending | — | Trace panel `DEMO_MODE` gate, a11y, demo-runbook UC-09 section. |
 | 3B.1 admin-terminate (D3.2) | ◯ pending | — | Orchestrator BCL receiver with full 9-check spec validation. |
 | 3B.2 binding_message + carries | ◯ pending | — | Reason-branched binding_message; admin-terminate banner. |
