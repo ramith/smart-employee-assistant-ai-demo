@@ -88,7 +88,7 @@ sequenceDiagram
 8. Release lock.
 9. Return redirect_url.
 
-**Latency budget for steps 1–9 (server-side cascade):** ≤2 s (R-LOGOUT-1..4). Steps 10–14 (IS consent + redirect) are user-paced.
+**Latency budget for steps 1–9 (server-side cascade):** ≤2 s (R-LOGOUT-1..4). Worst-case backstop window for missed fan-out: ≤20 s (Stage 5 L-3 introspection TTL). Steps 10–14 (IS consent + redirect) are user-paced.
 
 ### §1.2 D3.2 — Admin-terminate (UC-10 main flow)
 
@@ -428,7 +428,7 @@ class ServerRevocationState:                          # FIX-2
     introspection_cache: IntrospectionCache
 
 
-_INTROSPECTION_POSITIVE_TTL = 60.0  # Q4 default; measure on 3A Day 4
+_INTROSPECTION_POSITIVE_TTL = 20.0  # Stage 5 L-3 lock (was Q4 60s default; user picked 20s flat — skip Day-4 measurement)
 
 
 async def validate_token(token: str, state: ServerRevocationState) -> ValidationResult:
@@ -598,7 +598,7 @@ assert WORKERS == 1, (
 | OQ-1 | **Resolved** | BLOCK-B locked simple: shared secret only + per-source rate limit + receivers bind to docker-internal interfaces only. Production upgrade path (OAuth client_credentials with `revoke:jti` scope OR mTLS) documented in §3.2 + §4.4 — Sprint 4+. |
 | OQ-2 | **Resolved** | Reuse C12 reverse-SSH tunnel rig. Trust boundary documented in §4.4 (BLOCK-D). Per-source rate limit added on `/backchannel-logout`. |
 | OQ-3 | **Open — 3B.1 Day 1** | Probe whether IS fires BCL for the orchestrator app (auth_code). Document outcome as F-20 PASS/FAIL in `sprint-1-fixes.md`. Falls back to introspection-poll if FAIL (would bump D3.2 to a stretch goal). |
-| OQ-4 | **Resolved** | Q4 locked 60 s. NIT-11 reframe: this is a *propagation backstop*, not load shedder. First call per jti is always cold cache → 1 IS round-trip per session. Measure on 3A Day 4. |
+| OQ-4 | **Resolved** | Stage 5 L-3 supersedes Stage 1 Q4: introspection cache TTL = **20 s flat**, no Day-4 measurement. NIT-11 reframe still applies: this is a *propagation backstop*, not load shedder. First call per jti is always cold cache → 1 IS round-trip per session. |
 | OQ-5 | **Resolved** | Hard cap 10k entries per receiver with FIFO eviction + WARN. Sweeper supervisor restarts on exception (FIX-13). |
 | OQ-6 | **Resolved** | BLOCK-H ordering invariant (§4.4): emit SSE → await flush ack → remove Session. The flush ack pattern is defined in `common/sse.py` (existing wrapper). |
 | OQ-7 | **Resolved** | FIX-12: per-`user_sub` `asyncio.Lock` serialises UC-09/UC-10 concurrent paths; reason precedence `admin_terminated` > `user_signed_out`. Documented in §1.2. |

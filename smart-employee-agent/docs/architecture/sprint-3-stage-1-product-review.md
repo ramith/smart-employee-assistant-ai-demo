@@ -162,7 +162,7 @@ A stakeholder verifies in ~90 seconds using the demo runbook, IS Console, and `d
 - **Q1:** Adopt 3A/3B split. 3A is demo-critical (~3.5 days). 3B carries admin-terminate + R-LOGOUT-1..8 + C10 probe (~2.5 days). *(default accepted)*
 - **Q2:** F-19 verdict locked; no re-spike. C10 probe = Day 1 of 3B. *(default accepted)*
 - **Q3:** **IS consent screen** for sign-out (RP-initiated logout to `/oidc/logout?id_token_hint=…` rendering IS's confirmation page). User explicitly chose spec-pure path over single-click silent flow. Implication: orchestrator's `/api/logout` performs revoke + fan-out + cancel, then returns 302 to IS `/oidc/logout`; IS shows "Yes, sign me out"; on confirm, IS redirects to `post_logout_redirect_uri` = `/?reason=signed_out`. Drives the UC-09 wireframe in Stage 2.
-- **Q4:** Introspection cache TTL = 60 s, measured on Day 4 of 3A; drop to 10 s if cascade looks slow. *(default accepted)*
+- **Q4:** Introspection cache TTL = ~~60 s, measured on Day 4 of 3A~~ → **superseded by Stage 5 L-3: 20 s flat, no Day-4 measurement**. User locked at 20 s as a middle ground between Stage 1 default (60 s) and Stage 4 conditional drop-to-10 s.
 - **Q5:** **New `sprint-3-build` branch — non-destructive.** Branch off from `sprint-1-build` HEAD after the Stage 1 commit lands. `sprint-1-build` is preserved on local + origin as Sprint 2 audit history. No rebase. No force-push. No branch deletion.
 - **Q6:** MCP server gets its own `/internal/revoke` — orchestrator fans out to 4 receivers (HR-AGENT, IT-AGENT, hr_server, it_server). Resolves G-7 topology ambiguity in favour of preserving existing two-process-per-domain shape.
 
