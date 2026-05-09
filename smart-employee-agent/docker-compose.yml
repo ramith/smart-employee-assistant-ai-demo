@@ -32,6 +32,10 @@ services:
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,hr_server"
       # Sprint 0: introspection feature-flagged OFF (Sprint 2 turns ON)
       - HR_INTROSPECT_ENABLED=${HR_INTROSPECT_ENABLED:-false}
+      # Sprint 3 3A.2: shared secret for /internal/events fan-out (BLOCK-B simple).
+      # Operator MUST set this in shell or .env (not committed) before `make demo-up`.
+      - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
+      - UVICORN_WORKERS=1
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
@@ -91,6 +95,12 @@ services:
       - ORCHESTRATOR_HOST=0.0.0.0
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
       - AGENT_CARDS_DIR=/app/agent_cards
+      # Sprint 3 3A.2: shared secret + fan-out target URLs.
+      - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
+      - HR_AGENT_URL=http://hr_agent:8001
+      - IT_AGENT_URL=http://it_agent:8002
+      - HR_SERVER_URL=http://hr_server:8000
+      - IT_SERVER_URL=http://it_server:8004
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]
@@ -122,6 +132,9 @@ services:
       - HR_AGENT_HOST=0.0.0.0
       - HR_MCP_SERVER_URL=http://hr_server:8000
       - HR_EXPECTED_INBOUND_AUD=${ORCHESTRATOR_MCP_CLIENT_ID:-Ry9Wx_Q7w2FSi27miUpYr3O0xR4a}
+      # Sprint 3 3A.2.
+      - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
+      - UVICORN_WORKERS=1
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz', timeout=3)"]
@@ -147,6 +160,9 @@ services:
       - IT_AGENT_HOST=0.0.0.0
       - IT_MCP_SERVER_URL=http://it_server:8004
       - IT_EXPECTED_INBOUND_AUD=${ORCHESTRATOR_MCP_CLIENT_ID:-Ry9Wx_Q7w2FSi27miUpYr3O0xR4a}
+      # Sprint 3 3A.2.
+      - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
+      - UVICORN_WORKERS=1
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8002/healthz', timeout=3)"]
@@ -172,6 +188,9 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
       - IT_SERVER_HOST=0.0.0.0
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,it_server"
+      # Sprint 3 3A.2.
+      - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
+      - UVICORN_WORKERS=1
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8004/healthz', timeout=3)"]

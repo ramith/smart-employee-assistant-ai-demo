@@ -36,7 +36,10 @@ Usage (test injection)::
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -47,6 +50,10 @@ from common.auth.ciba_client import CIBAClient, CIBAClientConfig
 from common.auth.wso2_is_client import WSO2ISClient
 from common.logging.correlation import CorrelationIdMiddleware, install_logging
 from common.logging.redaction import RedactionFilter
+from common.revocation import (
+    RevocationState,
+    build_internal_events_router,
+)
 from hr_agent.a2a.handler import HRA2AHandlerDeps, build_hr_a2a_router
 from hr_agent.ciba.orchestrator import HRDispatcher, HRDispatcherDeps
 from hr_agent.config import HRAgentConfig
@@ -79,6 +86,14 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
         server) is responsible for that.
     """
     cfg: HRAgentConfig = config or HRAgentConfig.from_env()
+
+    # 3A.2 BLOCK-I: single-worker invariant. The denylist is in-process;
+    # multi-worker breaks correctness silently. Fail fast at startup.
+    workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    assert workers == 1, (
+        f"hr_agent requires UVICORN_WORKERS=1 (got {workers}). "
+        "Multi-worker support requires Redis-backed denylist (Sprint 4+)."
+    )
 
     # ── Logging: install once at app-factory time ──────────────────────────────
     install_logging(level="INFO")
@@ -156,12 +171,19 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
         app.state.mcp_client = mcp_client
         app.state.dispatcher = dispatcher
 
+        # 3A.2 FIX-21: lifespan-wired sweeper.
+        sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
+        revocation.sweep_task = sweep_task
+
         logger.info("hr_agent_startup_complete")
 
         yield  # Application is live.
 
         # ── Shutdown: close HTTP connections in reverse dependency order ───────
         logger.info("hr_agent_shutdown_start")
+        sweep_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
         await mcp_client.aclose()
         await ciba_client.aclose()
         await is_client.aclose()
@@ -215,6 +237,12 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
         )
     )
 
+    # 3A.2: revocation state shared between /internal/events receiver and the
+    # dispatcher's cache. Lifespan owns the sweeper task.
+    revocation = RevocationState()
+    if hasattr(_dispatcher_for_router, "attach_revocation"):
+        _dispatcher_for_router.attach_revocation(revocation)
+
     app.include_router(
         build_hr_a2a_router(
             HRA2AHandlerDeps(
@@ -224,6 +252,18 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
             )
         )
     )
+
+    # 3A.2: /internal/events receiver. Disabled if INTERNAL_REVOKE_SHARED_SECRET
+    # is unset (test mode) or if the config object lacks the field (legacy fakes).
+    if getattr(cfg, "internal_revoke_shared_secret", ""):
+        app.include_router(
+            build_internal_events_router(
+                state=revocation,
+                shared_secret=cfg.internal_revoke_shared_secret,
+                on_revoke=_dispatcher_for_router.revoke_jti,
+                service_label="hr-agent",
+            )
+        )
 
     # ── Liveness probe ─────────────────────────────────────────────────────────
 

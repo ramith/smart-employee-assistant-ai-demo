@@ -22,13 +22,17 @@ arrives.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from common.logging.correlation import CorrelationIdMiddleware, install_logging
 from common.logging.redaction import RedactionFilter
+from common.revocation import RevocationState, build_internal_events_router
 from it_server.auth.validators import ITServerTokenValidator
 from it_server.config import ITServerConfig
 from it_server.mcp.tools import ITMcpToolRouterDeps, build_it_mcp_router
@@ -52,6 +56,13 @@ def create_app(config: ITServerConfig | None = None) -> FastAPI:
     """
     cfg: ITServerConfig = config if config is not None else ITServerConfig.from_env()
 
+    # 3A.2 BLOCK-I: single-worker invariant.
+    workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    assert workers == 1, (
+        f"it_server requires UVICORN_WORKERS=1 (got {workers}). "
+        "Multi-worker support requires Redis-backed denylist (Sprint 4+)."
+    )
+
     # Configure the root logger exactly once per process.  Idempotent.
     install_logging(level="INFO")
     logging.getLogger().addFilter(RedactionFilter())
@@ -60,11 +71,19 @@ def create_app(config: ITServerConfig | None = None) -> FastAPI:
     validator = ITServerTokenValidator.from_config(cfg)
     validator.log_startup_assertion()  # F-15 / N28
 
+    # 3A.2: revocation state. Validator wires this in 3A.3.
+    revocation = RevocationState()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
         # No long-lived clients are owned by the app layer — validator uses
         # the JWKSCache which is lazily initialised on first token arrival.
+        sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
+        revocation.sweep_task = sweep_task
         yield
+        sweep_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
 
     app = FastAPI(
         title="IT Server",
@@ -81,6 +100,18 @@ def create_app(config: ITServerConfig | None = None) -> FastAPI:
         build_it_mcp_router(ITMcpToolRouterDeps(validator=validator)),
         prefix="/mcp/tools",
     )
+
+    # 3A.2: /internal/events receiver. Servers don't need a per-jti cache
+    # eviction callback (no _CachedToken on the server), so on_revoke=None.
+    if getattr(cfg, "internal_revoke_shared_secret", ""):
+        app.include_router(
+            build_internal_events_router(
+                state=revocation,
+                shared_secret=cfg.internal_revoke_shared_secret,
+                on_revoke=None,
+                service_label="it-server",
+            )
+        )
 
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, object]:

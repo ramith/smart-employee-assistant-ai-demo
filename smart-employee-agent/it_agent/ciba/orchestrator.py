@@ -153,6 +153,41 @@ class ITDispatcher:
         self._deps = deps
         # UC-06 / D2.5: per-(user_sub, ciba_scope) OBO token cache.
         self._token_cache: dict[tuple[str, str], _CachedToken] = {}
+        # 3A.2 FIX-19: secondary jti -> cache_key index for O(1) revoke lookup.
+        self._jti_to_cache_key: dict[str, tuple[str, str]] = {}
+        # 3A.2: revocation state attached at startup by it_agent/main.py.
+        self._revocation = None  # type: ignore[var-annotated]
+
+    # ── 3A.2: revocation hooks ────────────────────────────────────────────────
+
+    def attach_revocation(self, state) -> None:  # type: ignore[no-untyped-def]
+        """Wire ``common.revocation.RevocationState`` into the dispatcher."""
+        self._revocation = state
+
+    async def revoke_jti(self, jti: str, user_sub: str, exp: float, reason: str) -> None:
+        """Drop the cached _CachedToken for *jti* (3A.2 fan-out receiver hook)."""
+        cache_key = self._jti_to_cache_key.pop(jti, None)
+        if cache_key is not None:
+            popped = self._token_cache.pop(cache_key, None)
+            if popped is not None:
+                logger.info(
+                    "it_dispatcher_revoke_jti | jti=%s user_sub=%s reason=%s cache_dropped=true",
+                    jti[:8],
+                    user_sub,
+                    reason,
+                )
+                return
+        logger.info(
+            "it_dispatcher_revoke_jti | jti=%s user_sub=%s reason=%s cache_dropped=false (no entry)",
+            jti[:8],
+            user_sub,
+            reason,
+        )
+
+    def _denylist_contains(self, jti: str) -> bool:
+        if self._revocation is None or not jti:
+            return False
+        return jti in self._revocation.revoked_jtis
 
     # ── DispatchProtocol entry point ──────────────────────────────────────────
 
@@ -221,6 +256,16 @@ class ITDispatcher:
         now = datetime.now(tz=timezone.utc)
         cached = self._token_cache.get(cache_key)
         prior_iat: datetime | None = cached.iat if cached is not None else None
+
+        # 3A.2: denylist check before serving a cached token.
+        if cached is not None and self._denylist_contains(getattr(cached.token, "jti", "")):
+            logger.info(
+                "it_dispatcher_cache_denylist_hit | dropping cache jti=%s",
+                (getattr(cached.token, "jti", "") or "")[:8],
+            )
+            self._jti_to_cache_key.pop(getattr(cached.token, "jti", ""), None)
+            self._token_cache.pop(cache_key, None)
+            cached = None
 
         if cached and not cached.is_near_expiry(now=now):
             logger.info(
@@ -406,6 +451,10 @@ class ITDispatcher:
                     iat=token_iat_dt,
                     expires_at=token_b.expires_at,
                 )
+                # 3A.2 FIX-19: maintain jti -> cache_key index for O(1) revoke.
+                jti = getattr(token_b, "jti", "")
+                if jti:
+                    self._jti_to_cache_key[jti] = cache_key
                 logger.info(
                     "it_dispatcher_token_cached request_id=%s exp_in_s=%d",
                     request_id,

@@ -41,6 +41,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass, field
 
+from orchestrator.agent_registry.revoke_client import InternalEventsClient
 from orchestrator.auth.is_revoke import RevokeClient, RevokeError
 from orchestrator.auth.session_store import IssuedTokenRecord, Session, SessionStore
 from orchestrator.config import OrchestratorConfig
@@ -124,10 +125,10 @@ class LogoutHandler:
     config: OrchestratorConfig
     session_store: SessionStore
     revoke_client: RevokeClient
+    # 3A.2: fan-out client injected. ``None`` keeps the stub-only mode used
+    # by tests that don't care about the receiver side.
+    events_client: InternalEventsClient | None = None
     cancel_barrier_seconds: float = 0.1
-
-    # 3A.2 will inject the fan-out client here.  For now keep a stub.
-    fan_out_stub_log_only: bool = field(default=True)
 
     async def execute(
         self,
@@ -223,8 +224,25 @@ class LogoutHandler:
             )
 
         # Step 6: fan-out to internal /internal/events on 4 receivers.
-        # 3A.2 will replace this stub with the real RPC client.
-        if self.fan_out_stub_log_only:
+        # 3A.2: real RPC client wired. Each completed CIBA contributes its
+        # jti to the fan-out; the receivers (HR-AGENT, IT-AGENT, hr_server,
+        # it_server) all get told about it.
+        if completed_log and self.events_client is not None:
+            for record in completed_log:
+                # Each fan_out call is per-jti; if the user has multiple OBO
+                # tokens (multi-CIBA, multi-agent) we issue one fan-out per
+                # token. FanOutReport return is logged inside fan_out() —
+                # we capture the structure here for future SSE event emission.
+                await self.events_client.fan_out(
+                    jti=record.jti,
+                    user_sub=session.user_sub,
+                    exp=float(record.exp),
+                    reason=reason,
+                    request_id=request_id,
+                )
+        elif completed_log:
+            # Test mode: events_client is None. Still emit the per-record log
+            # line so the audit chain is unbroken.
             for record in completed_log:
                 logger.info(
                     "logout_fanout_stub | rid=%s agent_id=%s jti=%s exp=%s reason=%s",

@@ -137,6 +137,15 @@ class OrchestratorConfig:
 
     # LLM (F-14: default is keyword)
     llm_fallback_mode: str = "keyword"
+
+    # 3A.2: MCP server URLs (for the 4-receiver fan-out per Q6).
+    # Defaults match compose internal DNS; override via env.
+    hr_server_url: str = "http://hr_server:8000"
+    it_server_url: str = "http://it_server:8004"
+
+    # 3A.2: shared secret for /internal/events fan-out auth (BLOCK-B simple).
+    # Empty string disables fan-out (test mode); production must set non-empty.
+    internal_revoke_shared_secret: str = ""
     gemini_api_key: str | None = None
 
     # Cookie (F-06)
@@ -206,6 +215,15 @@ class OrchestratorConfig:
         hr_agent_url = _validate_url(_require(env, "HR_AGENT_URL"), "HR_AGENT_URL")
         it_agent_url = _validate_url(_require(env, "IT_AGENT_URL"), "IT_AGENT_URL")
 
+        # 3A.2: MCP server URLs for the fan-out (defaults match compose internal DNS).
+        hr_server_url = env.get("HR_SERVER_URL", "http://hr_server:8000").strip()
+        it_server_url = env.get("IT_SERVER_URL", "http://it_server:8004").strip()
+
+        # 3A.2: fan-out shared secret. Empty string -> fan-out disabled (test fallback).
+        internal_revoke_shared_secret = env.get(
+            "INTERNAL_REVOKE_SHARED_SECRET", ""
+        ).strip()
+
         # F-15: specialist OAuth client IDs
         hr_agent_oauth_client_id = _require(env, "HR_AGENT_OAUTH_CLIENT_ID")
         it_agent_oauth_client_id = _require(env, "IT_AGENT_OAUTH_CLIENT_ID")
@@ -273,6 +291,9 @@ class OrchestratorConfig:
             orchestrator_agent=orchestrator_agent,
             hr_agent_url=hr_agent_url,
             it_agent_url=it_agent_url,
+            hr_server_url=hr_server_url,
+            it_server_url=it_server_url,
+            internal_revoke_shared_secret=internal_revoke_shared_secret,
             hr_agent_oauth_client_id=hr_agent_oauth_client_id,
             it_agent_oauth_client_id=it_agent_oauth_client_id,
             trusted_specialist_subs=trusted_specialist_subs,

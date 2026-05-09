@@ -112,6 +112,9 @@ class ITServerConfig:
     introspect_enabled: bool = True
     introspect_url: str = ""
 
+    # 3A.2: shared secret for /internal/events fan-out auth (BLOCK-B simple).
+    internal_revoke_shared_secret: str = ""
+
     # ── Convenience factories ──────────────────────────────────────────────────
 
     def is_client_config(self) -> WSO2ISClientConfig:
@@ -171,6 +174,11 @@ class ITServerConfig:
         )
         introspect_url = env.get("WSO2_IS_INTROSPECT_URL", "").strip()
 
+        # 3A.2: fan-out shared secret (empty -> /internal/events disabled).
+        internal_revoke_shared_secret = env.get(
+            "INTERNAL_REVOKE_SHARED_SECRET", ""
+        ).strip()
+
         # N28 startup log — expected_aud MUST appear here for detectability
         logger.info(
             "[it_server] token enforcement active | expected_aud=%s trusted_act_subs=%s "
@@ -194,6 +202,7 @@ class ITServerConfig:
             port=port,
             introspect_enabled=introspect_enabled,
             introspect_url=introspect_url,
+            internal_revoke_shared_secret=internal_revoke_shared_secret,
         )
 
 

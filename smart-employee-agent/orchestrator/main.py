@@ -64,6 +64,10 @@ from common.logging.correlation import CorrelationIdMiddleware, install_logging
 from common.logging.redaction import RedactionFilter
 from orchestrator.agent_registry.cards import AgentRegistry
 from orchestrator.auth.pattern_c import PatternCExchanger
+from orchestrator.agent_registry.revoke_client import (
+    FanOutTarget,
+    InternalEventsClient,
+)
 from orchestrator.auth.is_revoke import RevokeClient
 from orchestrator.auth.logout_handler import LogoutHandler
 from orchestrator.auth.routes import AuthRouterDeps, build_auth_router
@@ -358,10 +362,29 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         client_secret=cfg.mcp_client_secret,
         verify_tls=False,  # IS dev cert is self-signed (matches existing IDP_INSECURE_TLS pattern)
     )
+
+    # ── Sprint 3 3A.2: internal-events fan-out client (4 receivers) ──────────
+    # If INTERNAL_REVOKE_SHARED_SECRET is unset, the fan-out is disabled
+    # (test/dev compatibility); the cascade still runs but only logs the
+    # stub line per Sprint 3 3A.1 fall-through.
+    events_client: InternalEventsClient | None = None
+    if cfg.internal_revoke_shared_secret:
+        fan_out_targets = [
+            FanOutTarget(label="hr_agent", url=cfg.hr_agent_url),
+            FanOutTarget(label="it_agent", url=cfg.it_agent_url),
+            FanOutTarget(label="hr_server", url=cfg.hr_server_url),
+            FanOutTarget(label="it_server", url=cfg.it_server_url),
+        ]
+        events_client = InternalEventsClient(
+            targets=fan_out_targets,
+            shared_secret=cfg.internal_revoke_shared_secret,
+        )
+
     logout_handler = LogoutHandler(
         config=cfg,
         session_store=session_store,
         revoke_client=revoke_client,
+        events_client=events_client,
     )
 
     # ── Auth router ───────────────────────────────────────────────────────────

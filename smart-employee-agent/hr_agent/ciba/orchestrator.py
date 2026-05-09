@@ -191,6 +191,62 @@ class HRDispatcher:
         # iat as ``prior_consent_at`` so the SPA can render the Session
         # Refresh widget variant.
         self._token_cache: dict[tuple[str, str], _CachedToken] = {}
+        # 3A.2 FIX-19: secondary jti -> cache_key index for O(1) revoke_jti
+        # lookup. Updated on cache write/pop alongside _token_cache.
+        self._jti_to_cache_key: dict[str, tuple[str, str]] = {}
+        # 3A.2: revocation state (denylist). Set by hr_agent/main.py at
+        # startup via attach_revocation(). Optional in tests; None means
+        # the denylist check is a no-op.
+        self._revocation = None  # type: ignore[var-annotated]
+
+    # ── 3A.2: revocation hooks ────────────────────────────────────────────────
+
+    def attach_revocation(self, state) -> None:  # type: ignore[no-untyped-def]
+        """Wire a ``common.revocation.RevocationState`` into the dispatcher.
+
+        Called once at startup from ``hr_agent/main.py``. After this, the
+        cache lookup checks the denylist before serving a cached token,
+        and ``revoke_jti`` becomes a meaningful operation.
+        """
+        self._revocation = state
+
+    async def revoke_jti(self, jti: str, user_sub: str, exp: float, reason: str) -> None:
+        """Drop the cached _CachedToken for *jti* (3A.2 fan-out receiver hook).
+
+        The denylist add itself is performed by the shared
+        ``/internal/events`` router; this callback runs AFTER that, and is
+        responsible for the agent-side cache eviction so a future call
+        for ``(user_sub, scope)`` does not serve the revoked token.
+
+        Args:
+            jti: jti of the OBO token being revoked.
+            user_sub: user_sub from the event payload (used for log context).
+            exp: token exp epoch seconds (already recorded by the denylist).
+            reason: ``"user_signed_out"`` | ``"admin_terminated"``.
+        """
+        cache_key = self._jti_to_cache_key.pop(jti, None)
+        if cache_key is not None:
+            popped = self._token_cache.pop(cache_key, None)
+            if popped is not None:
+                logger.info(
+                    "hr_dispatcher_revoke_jti | jti=%s user_sub=%s reason=%s cache_dropped=true",
+                    jti[:8],
+                    user_sub,
+                    reason,
+                )
+                return
+        logger.info(
+            "hr_dispatcher_revoke_jti | jti=%s user_sub=%s reason=%s cache_dropped=false (no entry)",
+            jti[:8],
+            user_sub,
+            reason,
+        )
+
+    def _denylist_contains(self, jti: str) -> bool:
+        """Helper: check whether *jti* is on the receiver's denylist."""
+        if self._revocation is None or not jti:
+            return False
+        return jti in self._revocation.revoked_jtis
 
     # ── DispatchProtocol entry point ──────────────────────────────────────────
 
@@ -274,6 +330,19 @@ class HRDispatcher:
         # Captured separately so we can still mark is_refresh=True even after
         # we drop a hit-but-MCP-rejected cache entry.
         prior_iat: datetime | None = cached.iat if cached is not None else None
+
+        # 3A.2: denylist check before serving a cached token. If the cached
+        # token's jti is on the denylist (e.g. fan-out from a logout cascade),
+        # treat as a cache miss + drop the entry. The user will see a fresh
+        # consent widget rather than a stale-token reuse.
+        if cached is not None and self._denylist_contains(getattr(cached.token, "jti", "")):
+            logger.info(
+                "hr_dispatcher_cache_denylist_hit | dropping cache jti=%s",
+                (getattr(cached.token, "jti", "") or "")[:8],
+            )
+            self._jti_to_cache_key.pop(getattr(cached.token, "jti", ""), None)
+            self._token_cache.pop(cache_key, None)
+            cached = None
 
         if cached and not cached.is_near_expiry(now=now):
             logger.info(
@@ -473,6 +542,10 @@ class HRDispatcher:
                     iat=token_iat_dt,
                     expires_at=token_b.expires_at,
                 )
+                # 3A.2 FIX-19: maintain jti -> cache_key index for O(1) revoke.
+                jti = getattr(token_b, "jti", "")
+                if jti:
+                    self._jti_to_cache_key[jti] = cache_key
                 logger.info(
                     "hr_dispatcher_token_cached request_id=%s exp_in_s=%d",
                     request_id,

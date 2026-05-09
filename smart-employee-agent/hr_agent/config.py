@@ -112,6 +112,10 @@ class HRAgentConfig:
     # Self-referential canonical URL (agent-card)
     canonical_url: str = "http://hr_agent:8001/a2a"
 
+    # 3A.2: shared secret for /internal/events fan-out auth (BLOCK-B simple).
+    # Empty string disables the receiver (test mode).
+    internal_revoke_shared_secret: str = ""
+
     # ── Convenience factories ──────────────────────────────────────────────────
 
     def is_client_config(self) -> WSO2ISClientConfig:
@@ -189,6 +193,11 @@ class HRAgentConfig:
         # Canonical URL
         canonical_url = env.get("HR_AGENT_CANONICAL_URL", "http://hr_agent:8001/a2a").strip()
 
+        # 3A.2: fan-out shared secret (empty -> /internal/events disabled).
+        internal_revoke_shared_secret = env.get(
+            "INTERNAL_REVOKE_SHARED_SECRET", ""
+        ).strip()
+
         logger.info(
             "hr_agent_config_loaded | is_base_url=%s hr_server_url=%s port=%d",
             is_base_url,
@@ -210,6 +219,7 @@ class HRAgentConfig:
             ciba_scope=ciba_scope,
             max_poll_seconds=max_poll_seconds,
             canonical_url=canonical_url,
+            internal_revoke_shared_secret=internal_revoke_shared_secret,
         )
 
 

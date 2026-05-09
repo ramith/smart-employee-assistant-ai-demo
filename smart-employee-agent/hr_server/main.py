@@ -20,13 +20,17 @@ arrives.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
 from common.logging.correlation import CorrelationIdMiddleware, install_logging
 from common.logging.redaction import RedactionFilter
+from common.revocation import RevocationState, build_internal_events_router
 from hr_server.auth.validators import HRServerTokenValidator
 from hr_server.config import HRServerConfig
 from hr_server.mcp.tools import HRMcpToolRouterDeps, build_hr_mcp_router
@@ -50,6 +54,13 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
     """
     cfg: HRServerConfig = config if config is not None else HRServerConfig.from_env()
 
+    # 3A.2 BLOCK-I: single-worker invariant.
+    workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    assert workers == 1, (
+        f"hr_server requires UVICORN_WORKERS=1 (got {workers}). "
+        "Multi-worker support requires Redis-backed denylist (Sprint 4+)."
+    )
+
     # Configure the root logger exactly once per process.  Idempotent.
     install_logging(level="INFO")
     logging.getLogger().addFilter(RedactionFilter())
@@ -58,11 +69,21 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
     validator = HRServerTokenValidator.from_config(cfg)
     validator.log_startup_assertion()  # F-15 / N28
 
+    # 3A.2: revocation state. Validator wires this in 3A.3 to enforce
+    # denylist on /mcp/tools/* requests; for now the receiver populates it
+    # so by 3A.3 the cache is non-empty when validators get the new check.
+    revocation = RevocationState()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
         # No long-lived clients are owned by the app layer — validator uses
         # the JWKSCache which is lazily initialised on first token arrival.
+        sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
+        revocation.sweep_task = sweep_task
         yield
+        sweep_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
 
     app = FastAPI(
         title="HR Server",
@@ -79,6 +100,18 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
         build_hr_mcp_router(HRMcpToolRouterDeps(validator=validator)),
         prefix="/mcp/tools",
     )
+
+    # 3A.2: /internal/events receiver. Servers don't need a per-jti cache
+    # eviction callback (no _CachedToken on the server), so on_revoke=None.
+    if getattr(cfg, "internal_revoke_shared_secret", ""):
+        app.include_router(
+            build_internal_events_router(
+                state=revocation,
+                shared_secret=cfg.internal_revoke_shared_secret,
+                on_revoke=None,
+                service_label="hr-server",
+            )
+        )
 
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, object]:

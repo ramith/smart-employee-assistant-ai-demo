@@ -28,7 +28,10 @@ All objects that contain ``asyncio`` types (``asyncio.Lock``, ``asyncio.Event``,
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -38,6 +41,7 @@ from common.auth.actor_token_provider import ActorTokenProvider
 from common.auth.ciba_client import CIBAClient, CIBAClientConfig
 from common.auth.wso2_is_client import WSO2ISClient
 from common.logging.correlation import CorrelationIdMiddleware, install_logging
+from common.revocation import RevocationState, build_internal_events_router
 from it_agent.a2a.handler import ITA2AHandlerDeps, build_it_a2a_router
 from it_agent.ciba.orchestrator import ITDispatcher, ITDispatcherDeps
 from it_agent.config import ITAgentConfig
@@ -72,6 +76,13 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
         - ``GET /healthz`` liveness probe
     """
     cfg: ITAgentConfig = config if config is not None else ITAgentConfig.from_env()
+
+    # 3A.2 BLOCK-I: single-worker invariant.
+    workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    assert workers == 1, (
+        f"it_agent requires UVICORN_WORKERS=1 (got {workers}). "
+        "Multi-worker support requires Redis-backed denylist (Sprint 4+)."
+    )
 
     # ── 1. WSO2ISClient ────────────────────────────────────────────────────────
     is_client = WSO2ISClient(cfg.is_client_config())
@@ -109,6 +120,11 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
     )
     dispatcher = ITDispatcher(deps=dispatcher_deps)
 
+    # 3A.2: revocation state. Lifespan owns the sweeper task.
+    revocation = RevocationState()
+    if hasattr(dispatcher, "attach_revocation"):
+        dispatcher.attach_revocation(revocation)
+
     # Shared pending state: keyed by auth_req_id, accessed by router + dispatcher
     pending: dict = {}
 
@@ -127,8 +143,14 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
             cfg.is_base_url,
             cfg.it_server_url,
         )
+        # 3A.2 FIX-21: lifespan-wired sweeper.
+        sweep_task = asyncio.create_task(revocation.revoked_jtis.sweep_loop())
+        revocation.sweep_task = sweep_task
         yield
         logger.info("it_agent_shutdown")
+        sweep_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
         await mcp_client.aclose()
         await ciba_client.aclose()
         await is_client.aclose()
@@ -151,6 +173,18 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
         )
     )
     app.include_router(a2a_router)
+
+    # 3A.2: /internal/events receiver (disabled if shared secret unset, or
+    # if the config object lacks the field — legacy test fakes).
+    if getattr(cfg, "internal_revoke_shared_secret", ""):
+        app.include_router(
+            build_internal_events_router(
+                state=revocation,
+                shared_secret=cfg.internal_revoke_shared_secret,
+                on_revoke=dispatcher.revoke_jti,
+                service_label="it-agent",
+            )
+        )
 
     # ── /healthz ───────────────────────────────────────────────────────────────
     @app.get("/healthz", tags=["ops"])
