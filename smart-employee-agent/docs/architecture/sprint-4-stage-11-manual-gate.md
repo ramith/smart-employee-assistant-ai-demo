@@ -47,18 +47,23 @@ Sprint 4 keys business data by `username` (with `email` as a secondary identifie
 
 ```bash
 cd /Users/ramith/demo/dda-poc/iam-ai-samples/smart-employee-agent
-./scripts/check-is-config.sh
+./scripts/check-is-config.py
 ```
 
 Expected: `PASS: N | FAIL: 0 | WARN: 0` (or only WARNs on operator-discretion items). Any FAIL means stop and fix before continuing.
 
-The script audits:
-1. Connectivity to `13.60.190.47:9443/oauth2/jwks`.
-2. JWKS keys array non-empty.
-3. The two new scopes are registered as API resource scopes.
-4. A sample access token (issued via `client_credentials` against `IS_ADMIN_CLIENT_*` env vars) carries `username` + `email`.
+The script audits the **full system topology** in nine sections:
+1. **Connectivity** — JWKS endpoint up.
+2. **JWKS payload** — keys[] non-empty.
+3. **Mgmt API auth** — admin credentials accepted on `/api/server/v1/api-resources`.
+4. **OAuth Applications** — every client_id from `orchestrator/.env` registered (orchestrator-mcp-client, orchestrator-agent-oauth, hr_agent OAuth App, it_agent OAuth App).
+5. **API Resources** — `hr_server-api` + `it_server-api` exist.
+6. **Scopes per resource** — full Sprint 1-4 inventory (HR: 6 scopes; IT: 3 scopes) registered.
+7. **Demo users (SCIM2)** — `employee_user` + `hr_admin_user` exist.
+8. **Demo roles (SCIM2 v2)** — `Employee` + `HR Admin` exist.
+9. **Sample-token claim audit** — access token issued via `client_credentials` against `IS_ADMIN_CLIENT_*` carries `username` + `email`.
 
-If check 4 fails, IS attribute mapping for `username`/`email` needs fixing (see §1.3) before re-running.
+The script is **stdlib-only Python** (no extra deps). It sources expected client IDs from `orchestrator/.env` automatically; override with env vars if needed. Sections 4–9 fail closed if Section 3 (admin auth) fails — fix admin creds first.
 
 ### 1.5 Verify both demo accounts are alive
 
