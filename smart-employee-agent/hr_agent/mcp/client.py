@@ -254,6 +254,42 @@ class HRMcpClient:
             body={"leave_id": leave_id},
         )
 
+    async def reject_leave(
+        self,
+        *,
+        token_b: OAuthToken,
+        leave_id: str,
+        reason: str,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST {base_url}/mcp/tools/reject_leave`` with Bearer token-B.
+
+        Required scope on token-B: ``hr_approve_rest`` (enforced by hr_server).
+        Sprint 4 S4.4 — UC-15 admin reject flow. The reason string is recorded
+        on the leave request row for audit; F-08 sanitisation of any text that
+        feeds the consent action is applied upstream by the dispatcher.
+
+        Args:
+            token_b: User-OBO token (must carry ``hr_approve_rest``).
+            leave_id: Leave request identifier (e.g. ``LR007``).
+            reason: Non-empty rejection reason captured at the SPA.
+            request_id: Optional ``X-Request-ID`` propagation override.
+
+        Returns:
+            Tool result body. On success: ``{success, request_id, new_status,
+            employee, notification, rejected_by}``. Service-layer rejection:
+            ``{success: False, error, message, ...}``.
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx response.
+        """
+        return await self._post(
+            "/mcp/tools/reject_leave",
+            token_b=token_b,
+            request_id=request_id,
+            body={"leave_id": leave_id, "reason": reason},
+        )
+
     # ── Cubicle methods (Sprint 4 S4.1, UC-11) ───────────────────────────────
     #
     # Mirror the same shape as the leave methods: take token_b + optional

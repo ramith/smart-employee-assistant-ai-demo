@@ -744,3 +744,44 @@ async def test_lookup_employee_with_hr_read_rest(rsa_keypair, sign_token, hr_rea
     assert data["found"] is True
     assert data["username"] == "jane.doe"
     assert data["email"] == "jane.doe@example.com"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 S4.4 (UC-15) — reject_leave scope guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reject_leave_with_hr_approve_rest(rsa_keypair, sign_token, hr_write_payload):
+    """T-HR-MCP-S44-01: reject_leave routes through hr_service.reject_leave_request."""
+    _, public_jwk = rsa_keypair
+
+    # Seed a pending leave request authored by SUBJECT.
+    await _hr_service_mod.apply_leave(
+        sub=SUBJECT,
+        first_name="Probe",
+        last_name="",
+        leave_type="Annual Leave",
+        start_date=_dt(8),
+        end_date=_dt(8),
+        reason="Family event",
+    )
+    request_id = "LR001"
+
+    token = sign_token(hr_write_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/reject_leave",
+        json={"leave_id": request_id, "reason": "Insufficient notice"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is True
+    assert data["request_id"] == request_id
+    assert data["new_status"] == "Rejected"
+    # The store reflects the rejection + reason.
+    assert _hr_store_mod.leave_requests[request_id]["status"] == "Rejected"
+    assert _hr_store_mod.leave_requests[request_id]["rejection_reason"] == "Insufficient notice"

@@ -183,3 +183,152 @@ def test_get_my_leaves_returns_upstream_envelope_verbatim() -> None:
     http_client.get.assert_awaited_once()
     target_url = http_client.get.call_args.args[0]
     assert target_url == "http://hr_server:8000/api/me/leaves"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 S4.4 (UC-15) — A3 / A6 / A7 tests
+# ---------------------------------------------------------------------------
+
+
+def _admin_session(session_id: str = "sess-admin-001") -> Session:
+    """HR Admin session with hr_read_rest + hr_approve_rest scopes."""
+    return Session(
+        session_id=session_id,
+        user_sub="user-sub-admin",
+        user_label="Admin",
+        token_a=_make_token(scope="openid hr_read_rest hr_approve_rest"),
+        pkce_state=None,
+        code_verifier=None,
+        sse_queue=asyncio.Queue(),
+    )
+
+
+def _build_admin_app(
+    *, http_client: MagicMock, session: Session
+) -> tuple[TestClient, MagicMock]:
+    mock_store = MagicMock(spec=SessionStore)
+
+    async def _get_or_404(sid: str) -> Session:
+        if sid == session.session_id:
+            return session
+        raise KeyError(sid)
+
+    mock_store.get_or_404 = AsyncMock(side_effect=_get_or_404)
+
+    # chat_deps is required for A6/A7 (CIBA-driven endpoints) but the
+    # tests here intercept _run_serial_fan_out via monkeypatch in the
+    # individual test bodies; we only need a non-None placeholder.
+    chat_deps_placeholder = MagicMock()
+
+    deps = ReportsRouterDeps(
+        session_store=mock_store,
+        http_client=http_client,  # type: ignore[arg-type]
+        session_cookie_name="orch_sid",
+        hr_server_url="http://hr_server:8000",
+        it_server_url="http://it_server:8004",
+        a2a_clients={},
+        agent_registry=None,
+        chat_deps=chat_deps_placeholder,
+    )
+
+    app = FastAPI()
+    app.include_router(build_reports_router(deps))
+    return TestClient(app), mock_store
+
+
+def test_a3_pending_leaves_proxies_with_query_string() -> None:
+    """A3: GET /api/reports/leave-requests?status=pending forwards query verbatim."""
+    upstream_body = {
+        "data": [
+            {
+                "request_id": "LR001",
+                "employee_username": "employee_user",
+                "employee_email": "employee@example.com",
+                "leave_type": "Annual Leave",
+                "days_requested": 5,
+                "start_date": "2026-06-10",
+                "status": "Pending",
+            }
+        ],
+        "count": 1,
+    }
+    session = _admin_session()
+    http_client = _make_http_client(status_code=200, body=upstream_body)
+    client, _ = _build_admin_app(http_client=http_client, session=session)
+
+    resp = client.get(
+        "/api/reports/leave-requests?status=Pending",
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == upstream_body
+    target_url = http_client.get.call_args.args[0]
+    assert target_url == "http://hr_server:8000/api/reports/leave-requests?status=Pending"
+
+
+def test_a6_approve_requires_x_request_id_header() -> None:
+    """A6: POST .../approve without X-Request-ID returns 400 (CSRF guard F-02)."""
+    session = _admin_session()
+    http_client = _make_http_client()
+    client, _ = _build_admin_app(http_client=http_client, session=session)
+
+    resp = client.post(
+        "/api/reports/leave-requests/LR001/approve",
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 400
+    assert "X-Request-ID" in resp.text
+
+
+def test_a7_reject_dispatches_with_reason() -> None:
+    """A7: reject endpoint validates X-Request-ID + non-empty reason; ack includes hr_agent."""
+    import orchestrator.chat.routes as _chat_routes_mod
+
+    session = _admin_session()
+    http_client = _make_http_client()
+    client, _ = _build_admin_app(http_client=http_client, session=session)
+
+    captured: dict = {}
+
+    async def _fake_fan_out(_session, tool_calls, rid, _chat_deps):
+        captured["tool_id"] = tool_calls[0].tool_id
+        captured["args"] = tool_calls[0].args
+        captured["rid"] = rid
+
+    # Patch the symbol the routes module imports at module-load time.
+    import orchestrator.reports.routes as _routes
+    original = _routes._run_serial_fan_out
+    _routes._run_serial_fan_out = _fake_fan_out
+    try:
+        # Empty reason → 400.
+        resp_empty = client.post(
+            "/api/reports/leave-requests/LR001/reject",
+            cookies={"orch_sid": session.session_id},
+            headers={"X-Request-ID": "rid-reject-1"},
+            json={"reason": "   "},
+        )
+        assert resp_empty.status_code == 400
+        body_empty = resp_empty.json()
+        assert body_empty["error_id"] == "ERR-VALIDATION-reason-empty"
+
+        # Valid reason → 200 + dispatched.
+        resp_ok = client.post(
+            "/api/reports/leave-requests/LR001/reject",
+            cookies={"orch_sid": session.session_id},
+            headers={"X-Request-ID": "rid-reject-2"},
+            json={"reason": "Insufficient notice"},
+        )
+        assert resp_ok.status_code == 200
+        body_ok = resp_ok.json()
+        assert body_ok["ok"] is True
+        assert body_ok["agent_id"] == "hr_agent"
+        assert body_ok["request_id"] == "rid-reject-2"
+        # Allow the background task to run.
+        import asyncio as _asyncio
+        _asyncio.get_event_loop().run_until_complete(_asyncio.sleep(0))
+        # Captured the synthetic tool_call.
+        assert captured.get("tool_id") == "hr.reject_leave"
+        assert captured.get("args", {}).get("leave_id") == "LR001"
+        assert captured.get("args", {}).get("reason") == "Insufficient notice"
+    finally:
+        _routes._run_serial_fan_out = original

@@ -59,6 +59,9 @@
         </div>
         <!-- User identity + sign-out -->
         <span class="user-display" id="user-display-name"></span>
+        <!-- Sprint 4 S4.4: Reports nav, gated on hr_approve_rest scope -->
+        <button class="btn-ghost btn-sm" id="reports-nav-btn" hidden>Reports</button>
+        <button class="btn-ghost btn-sm" id="home-nav-btn" hidden>Home</button>
         <button
           class="btn-ghost btn-sm trace-toggle"
           id="trace-toggle-btn"
@@ -273,6 +276,63 @@
         </div>
       </section>
 
+    </main>
+
+    <!-- ── Reports view (Sprint 4 S4.4 — UC-15; UC-16 lands tabs in S4.5) ── -->
+    <main id="reports-view" class="reports-view" hidden aria-label="HR Admin reports">
+      <header class="reports-header">
+        <h2 class="reports-title">Reports</h2>
+        <p class="reports-subtitle">HR Admin only. Reads aggregate data using your session token; no per-action consent for reads.</p>
+      </header>
+
+      <nav class="reports-tabs" role="tablist" aria-label="Report tabs">
+        <button class="reports-tab is-active" id="tab-pending-leaves" role="tab" aria-selected="true" aria-controls="tabpanel-pending-leaves">Pending Leaves</button>
+        <button class="reports-tab" id="tab-cubicles" role="tab" aria-selected="false" aria-controls="tabpanel-cubicles">Cubicles</button>
+        <button class="reports-tab" id="tab-devices" role="tab" aria-selected="false" aria-controls="tabpanel-devices">Devices</button>
+      </nav>
+
+      <section id="tabpanel-pending-leaves" class="reports-tabpanel" role="tabpanel" aria-labelledby="tab-pending-leaves">
+        <div class="reports-toolbar">
+          <span class="reports-status" id="pending-leaves-status" aria-live="polite"></span>
+          <button class="btn-ghost btn-sm" id="pending-leaves-refresh">Refresh</button>
+        </div>
+        <div id="pending-leaves-body">
+          <p id="pending-leaves-empty" class="reports-empty">No pending leave requests.</p>
+          <table id="pending-leaves-table" class="reports-table" hidden>
+            <thead>
+              <tr>
+                <th>Request ID</th>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Leave Type</th>
+                <th>Days</th>
+                <th>Start</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="pending-leaves-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tabpanel-cubicles" class="reports-tabpanel" role="tabpanel" aria-labelledby="tab-cubicles" hidden>
+        <p class="reports-empty">Cubicles report — lands in S4.5 (UC-16).</p>
+      </section>
+
+      <section id="tabpanel-devices" class="reports-tabpanel" role="tabpanel" aria-labelledby="tab-devices" hidden>
+        <p class="reports-empty">Devices report — lands in S4.5 (UC-16).</p>
+      </section>
+
+      <!-- Reject reason prompt (inline, simple) -->
+      <div id="reject-reason-dialog" class="reports-modal" hidden role="dialog" aria-labelledby="reject-reason-title">
+        <p id="reject-reason-title" class="dialog-title">Reject leave request</p>
+        <p class="dialog-body">Provide a reason. The employee will see this on their My Leaves panel.</p>
+        <input id="reject-reason-input" type="text" maxlength="120" placeholder="Reason (required)">
+        <div class="dialog-actions">
+          <button class="btn-primary btn-danger-primary" id="reject-reason-confirm">Reject</button>
+          <button class="btn-ghost" id="reject-reason-cancel">Cancel</button>
+        </div>
+      </div>
     </main>
 
   </div>

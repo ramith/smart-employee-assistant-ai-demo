@@ -1226,3 +1226,162 @@ textarea, input {
   color: var(--danger);
   border: 1px solid var(--danger);
 }
+
+/* ── Sprint 4 S4.4: Reports view (UC-15 + S4.5 placeholders) ───────────── */
+
+.reports-view {
+  max-width: 1100px;
+  margin: 24px auto;
+  padding: 0 16px 48px;
+}
+
+.reports-header {
+  margin-bottom: 16px;
+}
+
+.reports-title {
+  font-size: 1.4rem;
+  margin: 0 0 4px;
+}
+
+.reports-subtitle {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+.reports-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+
+.reports-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 10px 16px;
+  font-size: 0.92rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.reports-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent, var(--text));
+  font-weight: 500;
+}
+
+.reports-tabpanel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.reports-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  min-height: 32px;
+}
+
+.reports-status {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.reports-empty {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  text-align: center;
+  padding: 24px;
+}
+
+.reports-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.reports-table th,
+.reports-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.reports-table th {
+  background: var(--surface-alt);
+  font-weight: 500;
+  color: var(--text);
+}
+
+.reports-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.btn-action {
+  appearance: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  margin-right: 6px;
+}
+
+.btn-approve {
+  background: var(--success-soft);
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+.btn-reject {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.reports-modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(420px, 92vw);
+  height: fit-content;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  z-index: 100;
+}
+
+.reports-modal .dialog-title {
+  font-size: 1.05rem;
+  font-weight: 500;
+  margin: 0 0 8px;
+}
+
+.reports-modal .dialog-body {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  margin: 0 0 12px;
+}
+
+.reports-modal input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.92rem;
+  margin-bottom: 12px;
+}
+
+.reports-modal .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

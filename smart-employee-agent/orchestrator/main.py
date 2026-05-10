@@ -448,17 +448,14 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
     )
 
     # ── Chat router ───────────────────────────────────────────────────────────
-    app.include_router(
-        build_chat_router(
-            ChatRouterDeps(
-                config=cfg,
-                session_store=session_store,
-                keyword_router=keyword_router,
-                agent_registry=agent_registry,
-                a2a_clients=a2a_clients,
-            )
-        )
+    chat_deps = ChatRouterDeps(
+        config=cfg,
+        session_store=session_store,
+        keyword_router=keyword_router,
+        agent_registry=agent_registry,
+        a2a_clients=a2a_clients,
     )
+    app.include_router(build_chat_router(chat_deps))
     # ── Reports router (Sprint 4 S4.3) ────────────────────────────────────────
     # Cookie-auth REST surfaces (`/api/me/leaves` today; `/api/reports/...` in
     # S4.4 / S4.5). The router uses the lifespan-owned `reports_http_client`
@@ -493,6 +490,9 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
                 session_cookie_name=cfg.session_cookie_name,
                 hr_server_url=cfg.hr_server_url,
                 it_server_url=cfg.it_server_url,
+                a2a_clients=a2a_clients,
+                agent_registry=agent_registry,
+                chat_deps=chat_deps,
             )
         )
     )

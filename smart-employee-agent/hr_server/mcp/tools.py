@@ -5,6 +5,7 @@ Exposes FastAPI POST endpoints under ``/mcp/tools/``:
     POST /mcp/tools/get_leave_balance              scope: hr_self_rest
     POST /mcp/tools/get_leave_history              scope: hr_self_rest
     POST /mcp/tools/approve_leave                  scope: hr_approve_rest
+    POST /mcp/tools/reject_leave                   scope: hr_approve_rest    [S4.4 UC-15]
     POST /mcp/tools/get_cubicle_summary            scope: hr_read_rest        [S4.1 D1]
     POST /mcp/tools/get_vacant_cubicles_on_floor   scope: hr_read_rest        [S4.1 D2]
     POST /mcp/tools/assign_cubicle                 scope: hr_assets_write_rest [S4.1 D3]
@@ -72,6 +73,8 @@ __all__ = [
     "GetLeaveHistoryResult",
     "ApproveLeaveArgs",
     "ApproveLeaveResult",
+    "RejectLeaveArgs",
+    "RejectLeaveResult",
     # Sprint 4 S4.1 cubicle models
     "GetCubicleSummaryArgs",
     "CubicleFloorCounts",
@@ -174,6 +177,31 @@ class ApproveLeaveResult(BaseModel):
     error: str | None = None
     message: str | None = None
     approved_by: str | None = None
+
+
+class RejectLeaveArgs(BaseModel):
+    """Request body for ``reject_leave`` (Sprint 4 S4.4 UC-15)."""
+
+    leave_id: str = Field(description="Maps to hr_service request_id.")
+    reason: str = Field(min_length=1, description="Non-empty rejection reason.")
+
+
+class RejectLeaveResult(BaseModel):
+    """Response for ``reject_leave``.
+
+    Mirrors ``hr_service.reject_leave_request`` shape. Same envelope rules
+    as :class:`ApproveLeaveResult` — auth/scope failure → 401; business-
+    layer rejection (not_found / invalid_status) → 200 with ``success=False``.
+    """
+
+    success: bool = True
+    request_id: str
+    new_status: str | None = None
+    employee: str | None = None
+    notification: str | None = None
+    error: str | None = None
+    message: str | None = None
+    rejected_by: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +607,88 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             error=result.get("error"),
             message=result.get("message"),
             approved_by=act_sub or claims.sub,
+        )
+
+    # ── reject_leave (Sprint 4 S4.4, UC-15) ───────────────────────────────────
+    #
+    # Mirrors approve_leave: same auth boilerplate, same scope (hr_approve_rest),
+    # delegates to hr_service.reject_leave_request. Body carries `reason` which
+    # is recorded on the leave request row for audit; the dispatcher constructs
+    # action_text per F-08 sanitisation upstream.
+
+    @router.post("/reject_leave", response_model=RejectLeaveResult)
+    async def reject_leave(
+        body: RejectLeaveArgs,
+        request: Request,
+    ) -> RejectLeaveResult:
+        """Reject a pending leave request (manager-only, scope hr_approve_rest)."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("reject_leave missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+
+        logger.debug(
+            "reject_leave tool_entry rid=%s leave_id=%s required_scopes=%s",
+            rid,
+            body.leave_id,
+            ["hr_approve_rest"],
+        )
+
+        try:
+            claims = await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_approve_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "reject_leave token validation failed error_id=%s rid=%s reason=%r details=%s",
+                exc.error_id,
+                rid,
+                str(exc),
+                getattr(exc, "details", None),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        logger.debug(
+            "reject_leave validation_ok rid=%s sub=%s jti=%s",
+            rid,
+            claims.sub,
+            claims.jti,
+        )
+
+        reviewer_name = _username_for(claims)
+        result = await hr_service.reject_leave_request(
+            request_id=body.leave_id,
+            reason=body.reason,
+            reviewer_sub=claims.sub,
+            reviewer_name=reviewer_name,
+        )
+
+        act_sub: str | None = (
+            claims.act.get("sub") if isinstance(claims.act, dict) else None
+        )
+        if result.get("success"):
+            return RejectLeaveResult(
+                success=True,
+                request_id=result["request_id"],
+                new_status=result.get("new_status"),
+                employee=result.get("employee"),
+                notification=result.get("notification"),
+                rejected_by=act_sub or claims.sub,
+            )
+        return RejectLeaveResult(
+            success=False,
+            request_id=body.leave_id,
+            error=result.get("error"),
+            message=result.get("message"),
+            rejected_by=act_sub or claims.sub,
         )
 
     # ── Sprint 4 S4.1 cubicle handlers (UC-11) ────────────────────────────────

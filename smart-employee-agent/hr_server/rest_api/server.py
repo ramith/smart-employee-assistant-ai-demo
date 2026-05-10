@@ -15,6 +15,7 @@
     GET  /api/leave-policy           (hr_basic_rest)
     GET  /api/leave-balance          (hr_self_rest)
     GET  /api/me/leaves              (hr_self_rest)                  [S4.3]
+    GET  /api/reports/leave-requests (hr_read_rest)                  [S4.4 B2]
     GET  /api/leaves                 (hr_self_rest | hr_read_rest)
     GET  /api/leaves/{id}            (hr_self_rest for own | hr_read_rest)
     POST /api/leaves                 (hr_self_rest)
@@ -236,6 +237,54 @@ def build_rest_router(deps: RestApiDeps) -> APIRouter:
             ctx.sub, ctx.first_name, ctx.last_name
         )
         return JSONResponse({"data": leaves, "count": len(leaves)})
+
+    @router.get("/api/reports/leave-requests")
+    async def get_pending_leave_requests(request: Request):
+        """Sprint 4 S4.4 (UC-15) — Pending Leaves report.
+
+        Bearer token-A; scope ``hr_read_rest``. Calls
+        ``hr_service.get_all_leave_requests(status=...)`` so each row
+        carries ``request_id`` (the dashboard helper drops it). Each row
+        also surfaces ``employee_username`` + ``employee_email`` resolved
+        from ``store.users`` via the request's ``user_sub``; ``sub`` is
+        never returned (sprint-4.md §7).
+
+        Response envelope (Stage 5 §5): ``{data: [...], count: N}``.
+        """
+        ctx = await authenticate(request)
+        if isinstance(ctx, JSONResponse):
+            return ctx
+        err = _require_scope(ctx, "hr_read_rest")
+        if err:
+            return err
+
+        status_q = (request.query_params.get("status") or "Pending").strip()
+        # Stage 6.5 D5: get_all_leave_requests preserves request_id (the
+        # dashboard helper does not). Status arg is case-insensitive on
+        # the service side; normalise here for log clarity.
+        rows = await hr_service.get_all_leave_requests(status=status_q)
+
+        # Project to the locked report shape: identity surfaced as
+        # username + email (never sub / never employee_id), plus the
+        # leave fields the SPA renders.
+        out = []
+        for row in rows:
+            req = store.leave_requests.get(row["request_id"], {})
+            user_sub = req.get("user_sub", "")
+            user_record = store.users.get(user_sub, {}) if user_sub else {}
+            username = user_record.get("username") or row.get("employee", "")
+            email = user_record.get("email", "")
+            out.append({
+                "request_id": row["request_id"],
+                "employee_username": username,
+                "employee_email": email,
+                "leave_type": row["type"],
+                "days_requested": row["days_requested"],
+                "start_date": row["start_date"],
+                "end_date": row["end_date"],
+                "status": row["status"],
+            })
+        return JSONResponse({"data": out, "count": len(out)})
 
     @router.get("/api/leaves")
     async def get_leaves(request: Request):

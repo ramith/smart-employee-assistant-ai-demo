@@ -208,6 +208,7 @@ function recordTraceEvent(rid, type, summary, opts = {}) {
 
 let sessionId = null;          // from /auth/exchange response
 let userDisplayName = "";
+let userScopes = [];           // Sprint 4: from /auth/exchange response
 let sseSource = null;          // EventSource
 let sseRetryCount = 0;
 const SSE_MAX_RETRIES = 3;
@@ -296,6 +297,12 @@ async function init() {
     // Verify session is still valid by opening SSE stream
     sessionId = savedSessionId;
     userDisplayName = savedUserName || "";
+    try {
+      const savedScopes = localStorage.getItem("orch_scopes");
+      userScopes = savedScopes ? JSON.parse(savedScopes) : [];
+    } catch {
+      userScopes = [];
+    }
     showAppShell();
     connectSse(sessionId);
   } else {
@@ -403,13 +410,15 @@ async function completeLogin(code, state) {
     }
 
     const data = await resp.json();
-    // data: { session_id, user_display_name, expires_at }
+    // data: { session_id, user_display_name, scopes, expires_at }
     sessionId = data.session_id;
     userDisplayName = data.user_display_name || "";
+    userScopes = Array.isArray(data.scopes) ? data.scopes : [];
 
     // Persist for page reload resumption
     localStorage.setItem("orch_session_id", sessionId);
     localStorage.setItem("orch_user_name", userDisplayName);
+    try { localStorage.setItem("orch_scopes", JSON.stringify(userScopes)); } catch {}
 
     window.history.replaceState({}, "", "/");
     showAppShell();
@@ -509,6 +518,243 @@ function showAppShell() {
   // Sprint 4 S4.3: My Leaves panel — wire sort handlers once, then fetch.
   wireMyLeavesPanel();
   fetchMyLeaves();
+  // Sprint 4 S4.4: Reports nav, gated on hr_approve_rest scope (canonical
+  // HR-Admin probe — Employee role never holds it per docs/scope-policy.md).
+  renderReportsNav();
+  wireReportsView();
+  // Default to home view on app shell entry.
+  showHomeView();
+}
+
+function isHrAdmin() {
+  // Sprint 4 amendment: hr_approve_rest is HR-Admin-exclusive (Employee
+  // never holds it). Single canonical probe; the server-side per-endpoint
+  // scope check remains authoritative.
+  return Array.isArray(userScopes) && userScopes.includes("hr_approve_rest");
+}
+
+function renderReportsNav() {
+  const reportsBtn = $("reports-nav-btn");
+  const homeBtn = $("home-nav-btn");
+  if (!reportsBtn || !homeBtn) return;
+  if (isHrAdmin()) {
+    reportsBtn.hidden = false;
+    // home-nav-btn visibility is toggled by the active view.
+  } else {
+    reportsBtn.hidden = true;
+    homeBtn.hidden = true;
+  }
+}
+
+function showHomeView() {
+  const main = document.querySelector("main:not(.reports-view)");
+  if (main) main.hidden = false;
+  $("reports-view").hidden = true;
+  const homeBtn = $("home-nav-btn");
+  const reportsBtn = $("reports-nav-btn");
+  if (homeBtn) homeBtn.hidden = true;
+  if (reportsBtn && isHrAdmin()) reportsBtn.hidden = false;
+}
+
+function showReportsView() {
+  const main = document.querySelector("main:not(.reports-view)");
+  if (main) main.hidden = true;
+  $("reports-view").hidden = false;
+  const homeBtn = $("home-nav-btn");
+  const reportsBtn = $("reports-nav-btn");
+  if (homeBtn) homeBtn.hidden = false;
+  if (reportsBtn) reportsBtn.hidden = true;
+  // Default to Pending Leaves tab; load now.
+  selectReportsTab("pending-leaves");
+  loadPendingLeaves();
+}
+
+function selectReportsTab(name) {
+  const tabs = ["pending-leaves", "cubicles", "devices"];
+  for (const t of tabs) {
+    const btn = $("tab-" + t);
+    const panel = $("tabpanel-" + t);
+    if (!btn || !panel) continue;
+    const active = (t === name);
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", String(active));
+    panel.hidden = !active;
+  }
+}
+
+function _ridGen() {
+  return (crypto.randomUUID && crypto.randomUUID()) ||
+         (Date.now().toString(16) + "-" + Math.random().toString(16).slice(2));
+}
+
+let _pendingLeavesRows = [];
+
+async function loadPendingLeaves() {
+  const status = $("pending-leaves-status");
+  const empty = $("pending-leaves-empty");
+  const table = $("pending-leaves-table");
+  const tbody = $("pending-leaves-tbody");
+  if (!table || !tbody) return;
+  if (status) { status.textContent = "Loading…"; }
+  try {
+    const resp = await fetch("/api/reports/leave-requests?status=Pending", {
+      credentials: "include",
+    });
+    if (resp.status === 401) {
+      if (status) status.textContent = "Sign in to view reports.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    if (resp.status === 403) {
+      if (status) status.textContent = "You do not have permission to view this report.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    if (!resp.ok) {
+      if (status) status.textContent = "Could not load report.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    const body = await resp.json();
+    _pendingLeavesRows = Array.isArray(body.data) ? body.data : [];
+    if (status) status.textContent = "";
+    if (_pendingLeavesRows.length === 0) {
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    empty.hidden = true;
+    table.hidden = false;
+    tbody.innerHTML = "";
+    for (const row of _pendingLeavesRows) {
+      const tr = document.createElement("tr");
+      const cells = [
+        row.request_id, row.employee_username, row.employee_email,
+        row.leave_type, String(row.days_requested), row.start_date,
+      ];
+      for (const c of cells) {
+        const td = document.createElement("td");
+        td.textContent = c == null ? "" : String(c);
+        tr.appendChild(td);
+      }
+      const td = document.createElement("td");
+      const approveBtn = document.createElement("button");
+      approveBtn.className = "btn-action btn-approve";
+      approveBtn.textContent = "Approve";
+      approveBtn.addEventListener("click", () => onApproveClick(row));
+      const rejectBtn = document.createElement("button");
+      rejectBtn.className = "btn-action btn-reject";
+      rejectBtn.textContent = "Reject";
+      rejectBtn.addEventListener("click", () => onRejectClick(row));
+      td.appendChild(approveBtn);
+      td.appendChild(rejectBtn);
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    logErr("[reports]", "loadPendingLeaves error:", e);
+    if (status) status.textContent = "Could not load report.";
+  }
+}
+
+async function onApproveClick(row) {
+  const rid = _ridGen();
+  log("[reports]", "approve_clicked", { request_id: row.request_id, rid });
+  try {
+    const resp = await fetch(
+      `/api/reports/leave-requests/${encodeURIComponent(row.request_id)}/approve`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "X-Request-ID": rid },
+      }
+    );
+    if (!resp.ok) {
+      logErr("[reports]", "approve failed", resp.status);
+      const status = $("pending-leaves-status");
+      if (status) status.textContent = `Approve failed (${resp.status}).`;
+      return;
+    }
+    const status = $("pending-leaves-status");
+    if (status) status.textContent = `Approve dispatched — approve the consent in the popup, then this list will refresh.`;
+  } catch (e) {
+    logErr("[reports]", "approve error:", e);
+  }
+}
+
+let _pendingRejectRow = null;
+
+function onRejectClick(row) {
+  _pendingRejectRow = row;
+  const dlg = $("reject-reason-dialog");
+  const inp = $("reject-reason-input");
+  if (inp) inp.value = "";
+  if (dlg) dlg.hidden = false;
+  if (inp) inp.focus();
+}
+
+async function _submitReject() {
+  if (!_pendingRejectRow) return;
+  const inp = $("reject-reason-input");
+  const reason = (inp && inp.value || "").trim();
+  if (!reason) {
+    if (inp) inp.focus();
+    return;
+  }
+  const row = _pendingRejectRow;
+  _pendingRejectRow = null;
+  const dlg = $("reject-reason-dialog");
+  if (dlg) dlg.hidden = true;
+  const rid = _ridGen();
+  try {
+    const resp = await fetch(
+      `/api/reports/leave-requests/${encodeURIComponent(row.request_id)}/reject`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": rid,
+        },
+        body: JSON.stringify({ reason }),
+      }
+    );
+    const status = $("pending-leaves-status");
+    if (!resp.ok) {
+      if (status) status.textContent = `Reject failed (${resp.status}).`;
+      return;
+    }
+    if (status) status.textContent = `Reject dispatched — approve the consent in the popup, then this list will refresh.`;
+  } catch (e) {
+    logErr("[reports]", "reject error:", e);
+  }
+}
+
+function _cancelReject() {
+  _pendingRejectRow = null;
+  const dlg = $("reject-reason-dialog");
+  if (dlg) dlg.hidden = true;
+}
+
+function wireReportsView() {
+  const reportsBtn = $("reports-nav-btn");
+  const homeBtn = $("home-nav-btn");
+  if (reportsBtn) reportsBtn.addEventListener("click", showReportsView);
+  if (homeBtn) homeBtn.addEventListener("click", showHomeView);
+
+  const tabPL = $("tab-pending-leaves");
+  const tabCu = $("tab-cubicles");
+  const tabDe = $("tab-devices");
+  if (tabPL) tabPL.addEventListener("click", () => { selectReportsTab("pending-leaves"); loadPendingLeaves(); });
+  if (tabCu) tabCu.addEventListener("click", () => selectReportsTab("cubicles"));
+  if (tabDe) tabDe.addEventListener("click", () => selectReportsTab("devices"));
+
+  const refresh = $("pending-leaves-refresh");
+  if (refresh) refresh.addEventListener("click", loadPendingLeaves);
+
+  const confirmBtn = $("reject-reason-confirm");
+  const cancelBtn = $("reject-reason-cancel");
+  if (confirmBtn) confirmBtn.addEventListener("click", _submitReject);
+  if (cancelBtn) cancelBtn.addEventListener("click", _cancelReject);
 }
 
 function showSigninNotice(text, autoDismiss = false) {
@@ -806,6 +1052,13 @@ function onChatMessageEvent(event) {
   // a manual reload. Conservative: re-fetch on EVERY settled chat_message
   // (demo scale; performance not a concern).
   fetchMyLeaves();
+  // Sprint 4 S4.4: if the admin is on the Reports view, refresh Pending
+  // Leaves so a successful Approve/Reject (which dispatches CIBA and
+  // settles via this SSE event) updates the table without manual reload.
+  const reportsView = $("reports-view");
+  if (reportsView && !reportsView.hidden) {
+    loadPendingLeaves();
+  }
 }
 
 // ─── SSE: error event ────────────────────────────────────────────────────────

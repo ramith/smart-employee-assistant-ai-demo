@@ -77,6 +77,7 @@ __all__ = ["HRDispatcherDeps", "HRDispatcher"]
 # token.sub). Write-tier tools name what they need to fail clearly.
 _REQUIRED_ARGS: dict[str, list[str]] = {
     "hr.approve_leave": ["leave_id"],
+    "hr.reject_leave": ["leave_id", "reason"],
 }
 
 
@@ -119,6 +120,16 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "Approve a leave request on your behalf",
         "approve_leave",
         lambda args: {"leave_id": args.get("leave_id")},
+        "openid hr_approve_rest",
+    ),
+    # ── Sprint 4 S4.4 reject (UC-15) ─────────────────────────────────────────
+    "hr.reject_leave": (
+        "Reject a leave request on your behalf",
+        "reject_leave",
+        lambda args: {
+            "leave_id": args.get("leave_id"),
+            "reason": args.get("reason", ""),
+        },
         "openid hr_approve_rest",
     ),
     # ── Sprint 4 S4.1 cubicle tools (UC-11) ──────────────────────────────────
@@ -504,6 +515,35 @@ class HRDispatcher:
                 f"{deps.agent_label} wants to assign cubicle {cubicle_id} "
                 f"to {employee_username} corr-id {request_id}"
             )
+        elif tool in ("hr.approve_leave", "hr.reject_leave"):
+            # Sprint 4 S4.4 (UC-15): construct parameterised action_text
+            # naming the employee + start_date so the consent widget reads
+            # "Approve <username>'s leave from <start_date>". Look up the
+            # leave request via hr_service.get_leave_request_details to
+            # extract the employee name + dates. On lookup failure fall
+            # back to the bare leave id; sanitised through F-08.
+            verb = "Approve" if tool == "hr.approve_leave" else "Reject"
+            leave_id = (args.get("leave_id") or "").strip()
+            employee_label = ""
+            start_date = ""
+            try:
+                # Lazy import — avoids importing hr_service in test paths
+                # that stub the dispatcher's deps.
+                from hr_server.service import hr_service as _hr_service
+                details = await _hr_service.get_leave_request_details(leave_id)
+            except Exception:  # noqa: BLE001
+                details = None
+            if details:
+                employee_label = str(details.get("employee") or "")
+                start_date = str(details.get("start_date") or "")
+            if employee_label and start_date:
+                sprint4_action_text = _sanitise_action_text(
+                    f"{verb} {employee_label}'s leave from {start_date}"
+                )
+            else:
+                sprint4_action_text = _sanitise_action_text(
+                    f"{verb} leave request {leave_id}"
+                )
 
         # ── 2b. Render binding message (F-05; 3B.2 FIX-17 reason-branched) ────
         if custom_binding_msg is not None:
