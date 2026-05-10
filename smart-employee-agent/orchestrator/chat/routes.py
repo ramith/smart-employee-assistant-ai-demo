@@ -344,6 +344,21 @@ async def _run_serial_fan_out(
             continue
 
         # --- Phase 1: message/send ---
+        # 3B.2 FIX-17: forward last_logout_reason on the FIRST agent call
+        # only, then null it on the Session. The reason is a one-shot
+        # signal: once the user's first re-CIBA after a logout has
+        # rendered its reason-aware binding message, subsequent CIBAs
+        # in the same session should fall back to FRESH/REFRESH.
+        last_logout_reason = session.last_logout_reason
+        if last_logout_reason is not None:
+            session.last_logout_reason = None
+            _logger.info(
+                "chat_fan_out | propagating_logout_reason rid=%s reason=%s agent_id=%s",
+                request_id,
+                last_logout_reason,
+                agent_id,
+            )
+
         first: Any
         try:
             first = await client.message_send(
@@ -351,6 +366,7 @@ async def _run_serial_fan_out(
                 tool_call.tool_id,
                 tool_call.args,
                 request_id=request_id,
+                last_logout_reason=last_logout_reason,
             )
         except (A2AError, Exception) as exc:  # noqa: BLE001
             _logger.error(

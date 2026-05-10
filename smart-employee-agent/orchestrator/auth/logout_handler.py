@@ -328,6 +328,14 @@ class LogoutHandler:
                     exc,
                 )
 
+            # Step 6.7: 3B.2 FIX-17 — record the reason so the user's next
+            # re-login can render a reason-aware binding message. Stored
+            # per-user_sub (not per-session) because Pattern C exchange
+            # creates a fresh Session and needs to look the reason up by
+            # the user identity, not the dropped session id.
+            if reason in ("user_signed_out", "admin_terminated"):
+                self.session_store.record_pending_logout_reason(s.user_sub, reason)
+
             # Step 7: clear this session (LAST mutation per BLOCK-H).
             await self.session_store.delete(s.session_id)
 

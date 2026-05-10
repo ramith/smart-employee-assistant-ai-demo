@@ -270,7 +270,7 @@ class TestRoutesMounted:
 
     _EXPECTED_ROUTES: list[tuple[str, str]] = [
         ("GET",  "/auth/login"),
-        ("GET",  "/auth/callback"),
+        ("GET",  "/agent-callback"),
         ("POST", "/auth/exchange"),
         ("POST", "/auth/logout"),
         ("POST", "/api/chat"),
@@ -466,9 +466,15 @@ class TestAuthAndChatRoutesPresence:
         assert resp.status_code != 404
 
     def test_logout_route_is_idempotent_200(self, app: FastAPI) -> None:
-        """POST /auth/logout without a cookie must return 200 (idempotent per spec)."""
+        """POST /auth/logout without a cookie must return 200 (idempotent per spec).
+
+        Sprint 3 3A.1 FIX-9: X-Request-ID is required on /auth/logout (CSRF
+        defense — without it the route 400s before the cookie check). The
+        test now sends a synthetic rid so the idempotent-200 path is
+        exercised, not the FIX-9 reject.
+        """
         with TestClient(app, raise_server_exceptions=False) as c:
-            resp = c.post("/auth/logout")
+            resp = c.post("/auth/logout", headers={"X-Request-ID": "rid-test-idempotent"})
         assert resp.status_code == 200
 
     def test_exchange_without_body_returns_422(self, app: FastAPI) -> None:

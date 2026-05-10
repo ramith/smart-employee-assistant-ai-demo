@@ -163,6 +163,7 @@ class DispatchProtocol(Protocol):
         orchestrator_act_sub: str,
         request_id: str,
         pending_register: Callable[[A2APendingState], None],
+        last_logout_reason: str | None = None,
     ) -> A2AMessageResponse: ...
 
 
@@ -394,6 +395,10 @@ def build_a2a_router(
             orchestrator_act_sub=orchestrator_act_sub,
             request_id=request_id,
             pending_register=pending_register,
+            # 3B.2 FIX-17: pass through the orchestrator's recorded logout
+            # reason. Specialist's CIBA dispatcher uses it to render a
+            # reason-aware binding message.
+            last_logout_reason=msg_params.last_logout_reason,
         )
 
         # ── Step 8: wrap in JSON-RPC response ────────────────────────────────

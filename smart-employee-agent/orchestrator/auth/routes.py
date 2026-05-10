@@ -429,6 +429,22 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             token_a=result.token_a,
         )
 
+        # 3B.2 FIX-17: if a previous session for this user ended with a
+        # known reason (user_signed_out / admin_terminated), pop it now
+        # so the next CIBA's binding message can reflect that.
+        # Consumed once; nulled on the Session after the first A2A
+        # invocation that carries it.
+        pending_reason = deps.session_store.consume_pending_logout_reason(claims.sub)
+        if pending_reason is not None:
+            session.last_logout_reason = pending_reason
+            logger.info(
+                "auth_exchange_logout_reason_consumed | session_id_prefix=%s "
+                "user_sub=%s reason=%s",
+                session.session_id[:8],
+                claims.sub,
+                pending_reason,
+            )
+
         # 3B.1 BLOCK-C #9: populate sid → user_sub reverse index for BCL.
         # WSO2 IS includes ``sid`` in id_tokens by default; some BCL events
         # ship sid only, so the receiver consults this index when sub is

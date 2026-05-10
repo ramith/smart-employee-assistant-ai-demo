@@ -153,6 +153,11 @@ class Session:
     created_at: datetime = field(default_factory=_utc_now)
     last_seen_at: datetime = field(default_factory=_utc_now)
     terminating: bool = False  # 3A.1 BLOCK-G: first mutation in logout cascade — gates new chat/CIBA
+    # 3B.2 FIX-17: reason this session's predecessor ended ("user_signed_out"
+    # / "admin_terminated"). Set by Pattern C exchange via
+    # ``SessionStore.consume_pending_logout_reason``; consumed once by
+    # the chat fan-out path on the next CIBA, then nulled.
+    last_logout_reason: str | None = None
 
     def touch(self) -> None:
         """Update ``last_seen_at`` to the current UTC time."""
@@ -203,6 +208,12 @@ class SessionStore:
     # ``sub``. Populated at code-exchange time from the freshly-issued
     # id_token's ``sid`` claim, evicted on session delete.
     _sid_to_user_sub: dict[str, str] = field(default_factory=dict)
+    # 3B.2 FIX-17: ``user_sub`` → last logout reason (``"user_signed_out"``
+    # or ``"admin_terminated"``). Set by the logout cascade just before
+    # session deletion, consumed once by the next Pattern C exchange so
+    # the next CIBA can render a reason-aware binding message. Bounded
+    # by user count, so no explicit eviction; cleared on consume.
+    _pending_logout_reasons: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Sync helpers (read-only; safe without lock on a single event loop)
@@ -399,6 +410,34 @@ class SessionStore:
         by the BCL receiver when ``logout_token.sub`` is absent.
         """
         return self._sid_to_user_sub.get(sid)
+
+    # ------------------------------------------------------------------
+    # 3B.2 FIX-17 — logout-reason hand-off across re-login
+    # ------------------------------------------------------------------
+
+    def record_pending_logout_reason(self, user_sub: str, reason: str) -> None:
+        """Stash the logout reason so the user's next re-login can read it.
+
+        Called by the logout cascade just before session deletion.
+        Overwrites any previous unconsumed entry for the same user
+        (admin-terminate after user-signed-out → admin-terminate wins —
+        most specific reason).
+
+        Args:
+            user_sub: User UUID being logged out.
+            reason: ``"user_signed_out"`` or ``"admin_terminated"``.
+                Other values are accepted but ignored downstream.
+        """
+        self._pending_logout_reasons[user_sub] = reason
+
+    def consume_pending_logout_reason(self, user_sub: str) -> str | None:
+        """Pop and return the pending logout reason for *user_sub*.
+
+        Called once by the Pattern C exchange when a fresh session is
+        being created. Returns ``None`` if no reason was recorded
+        (e.g. first-ever login, or pending entry already consumed).
+        """
+        return self._pending_logout_reasons.pop(user_sub, None)
 
     async def prune_expired(self) -> int:
         """Remove all sessions that have been idle longer than ``max_idle_seconds``.

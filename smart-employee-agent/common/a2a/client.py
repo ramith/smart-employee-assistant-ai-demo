@@ -190,6 +190,7 @@ class A2AClient:
         args: dict[str, Any],
         *,
         request_id: str | None = None,
+        last_logout_reason: str | None = None,
     ) -> A2AMessageResponse:
         """POST /a2a/message/send — Phase 1 of the two-phase A2A protocol.
 
@@ -220,7 +221,16 @@ class A2AClient:
             httpx.TimeoutException: The request timed out (``timeout_seconds``).
         """
         rid = self._resolve_request_id(request_id)
-        params = MessageSendParams(tool=tool, args=args).model_dump()
+        # 3B.2 FIX-17: forward the orchestrator's recorded logout reason so
+        # the specialist's CIBA dispatcher can pick a reason-aware
+        # binding-message template. ``None`` for routine flows; the
+        # orchestrator clears its Session.last_logout_reason after
+        # passing it once.
+        params = MessageSendParams(
+            tool=tool,
+            args=args,
+            last_logout_reason=last_logout_reason,
+        ).model_dump()
         rpc_request = make_request(_METHOD_MESSAGE_SEND, params, request_id=rid)
         url = f"{self._config.base_url}/a2a/message/send"
 

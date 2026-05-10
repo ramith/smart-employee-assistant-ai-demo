@@ -24,7 +24,12 @@ total_tests=0
 for f in $(find tests -name 'test_*.py' | sort); do
     output=$(PYTHONPATH=. python3 -m pytest "$f" -q --override-ini="addopts=" 2>&1)
     last=$(echo "$output" | tail -1)
-    if echo "$last" | grep -qE "passed"; then
+    # 2026-05-10 fix: previously this script accepted any line containing
+    # "passed" — but pytest emits "X failed, Y passed" when SOME tests fail
+    # too. That made real failures invisible (the BCL receiver tests showed
+    # green for half a sprint). Reject the file if "failed" appears anywhere
+    # in the last summary line, regardless of how many "passed" alongside.
+    if echo "$last" | grep -qE "passed" && ! echo "$last" | grep -qE "failed|error"; then
         # extract test count
         n=$(echo "$last" | grep -oE "[0-9]+ passed" | head -1 | awk '{print $1}')
         total_tests=$((total_tests + n))

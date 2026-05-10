@@ -49,7 +49,7 @@ from common.a2a.models import (
 )
 from common.a2a.server import A2APendingState
 from common.auth.actor_token_provider import ActorTokenProvider
-from common.auth.binding_messages import FRESH, REFRESH, render
+from common.auth.binding_messages import render, select_template
 from common.auth.ciba_client import CIBAClient
 from common.auth.errors import CIBADeniedError, CIBAExpiredError, CIBATimeoutError
 from common.auth.models import OAuthToken
@@ -286,6 +286,7 @@ class HRDispatcher:
         orchestrator_act_sub: str,
         request_id: str,
         pending_register: Callable[[A2APendingState], None],
+        last_logout_reason: str | None = None,
     ) -> A2AMessageResponse:
         """Orchestrate the CIBA flow for one tool call and return immediately.
 
@@ -415,13 +416,21 @@ class HRDispatcher:
         is_refresh = prior_iat is not None
         prior_consent_at = prior_iat
 
-        # ── 2. Render binding message (F-05) ──────────────────────────────────
+        # ── 2. Render binding message (F-05; 3B.2 FIX-17 reason-branched) ────
         binding_msg = render(
-            REFRESH if is_refresh else FRESH,
+            select_template(last_logout_reason, is_refresh=is_refresh),
             agent_label=deps.agent_label,
             action=action_text,
             request_id=request_id,
         )
+        if last_logout_reason is not None:
+            logger.info(
+                "hr_dispatcher_binding_reason_applied request_id=%s reason=%s "
+                "is_refresh=%s",
+                request_id,
+                last_logout_reason,
+                is_refresh,
+            )
 
         # ── 3. Obtain actor-token ─────────────────────────────────────────────
         try:

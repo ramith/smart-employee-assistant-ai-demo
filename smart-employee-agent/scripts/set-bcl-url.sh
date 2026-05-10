@@ -52,26 +52,45 @@ print(apps[0]["id"])
 ')
 echo "→ application id: $APP_ID" >&2
 
-# 2. PATCH the OIDC inbound protocol with backChannelLogoutUrl. The
-#    Applications API exposes it as inboundProtocolConfiguration.oidc.logout.backChannelLogoutUrl.
-echo "→ PATCHing back_channel_logout_uri = $BCL_URL …" >&2
-PATCH_BODY=$(python3 -c '
+# 2. GET the current OIDC config; merge in our logout field; PUT back
+#    the FULL config. WSO2 IS's PUT on inbound-protocols/oidc is a
+#    full-replacement (not a patch); a partial body fails validation
+#    with size-constraint errors on the empty required arrays.
+echo "→ fetching current OIDC config to merge…" >&2
+CURRENT=$(curl "${CURL_FLAGS[@]}" \
+    -u "$IS_ADMIN_USER:$IS_ADMIN_PASS" \
+    "$IS_BASE/api/server/v1/applications/$APP_ID/inbound-protocols/oidc")
+
+echo "→ merging back_channel_logout_uri = $BCL_URL …" >&2
+MERGED=$(printf '%s' "$CURRENT" | python3 -c '
 import json, sys
-print(json.dumps({
-    "logout": {
-        "backChannelLogoutUrl": sys.argv[1]
-    }
-}))
+doc = json.load(sys.stdin)
+new_url = sys.argv[1]
+
+# Per application.yaml schema:
+#   - "state" is readOnly — sending it back triggers 400.
+#   - "clientSecret" view requires the
+#     internal_application_mgt_client_secret_view scope; without it the
+#     GET returns a placeholder. Echoing that placeholder on PUT can
+#     corrupt the live secret. Safer to omit; IS leaves the existing
+#     secret untouched when the field is absent.
+for field in ("state", "clientSecret"):
+    doc.pop(field, None)
+
+doc.setdefault("logout", {})["backChannelLogoutUrl"] = new_url
+print(json.dumps(doc))
 ' "$BCL_URL")
 
 curl "${CURL_FLAGS[@]}" \
     -X PUT \
     -u "$IS_ADMIN_USER:$IS_ADMIN_PASS" \
     -H "Content-Type: application/json" \
-    -d "$PATCH_BODY" \
+    -d "$MERGED" \
     "$IS_BASE/api/server/v1/applications/$APP_ID/inbound-protocols/oidc" \
     > /tmp/.set-bcl-url.resp || {
-    echo "PATCH failed. Response body:" >&2
+    echo "PUT failed. Request body (merged):" >&2
+    printf '%s\n' "$MERGED" >&2
+    echo "Response body:" >&2
     cat /tmp/.set-bcl-url.resp >&2
     rm -f /tmp/.set-bcl-url.resp
     exit 1

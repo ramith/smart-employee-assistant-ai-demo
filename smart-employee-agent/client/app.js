@@ -22,6 +22,7 @@ const COPY = {
   signinCertHint: 'First time? Your browser may show a certificate warning for the development identity server. Choose "Advanced" then "Proceed".',
   sessionExpired: "Your session has expired. Sign in again to continue.",
   signedOut: "Signed out. Agent sessions cleared.",  // 3A.4: confirms the cascade ran without listing receivers / jtis
+  adminTerminated: "Your session was ended by your administrator. Sign in again to continue.",  // 3B.2 / copy-deck 8.11
   consentDeniedAtIs: "You did not approve the delegation. Sign in and approve to continue, or contact your administrator.",
   stateMismatch: "The sign-in flow could not be completed. Please try again.",
   configError: "Sign-in is temporarily unavailable. Please contact your administrator.",
@@ -266,7 +267,17 @@ async function init() {
       // 3A.1 BLOCK-E: user cancelled at IS consent screen. Orchestrator state
       // is already cleaned but IS SSO may still be active.
       showSigninNotice(COPY.signedOutPartial, false);
+    } else if (reason === "admin_terminated") {
+      // 3B.2: admin clicked Terminate in IS Console; UC-10 cascade fired.
+      // Sticky banner (no auto-dismiss) so the audience reads why.
+      showSigninNotice(COPY.adminTerminated, false);
     }
+  } else if (sessionStorage.getItem("orch_just_admin_terminated") === "1") {
+    // 3B.2: SSE session_terminated handler (below) sets this flag before
+    // the SPA navigates to "/". Surfaces the banner without depending on
+    // a ?reason= round-trip through IS.
+    sessionStorage.removeItem("orch_just_admin_terminated");
+    showSigninNotice(COPY.adminTerminated, false);
   } else if (sessionStorage.getItem("orch_just_signed_out") === "1") {
     // 3A.2.2 (live-walk fix 2026-05-09): WSO2 IS rejects post_logout_redirect_uri
     // with query strings (exact-match against registered callback URLs). We
@@ -563,7 +574,7 @@ function connectSse(sid) {
   // Named event types emitted by the orchestrator
   // The orchestrator may emit named events or generic `message` events.
   // Handle named events for explicitness:
-  ["routing", "ciba_url", "ciba_state_change", "chat_message", "error", "session_ready"].forEach((type) => {
+  ["routing", "ciba_url", "ciba_state_change", "chat_message", "error", "session_ready", "session_terminated"].forEach((type) => {
     sseSource.addEventListener(type, (e) => {
       let event;
       try { event = JSON.parse(e.data); }
@@ -606,9 +617,39 @@ function handleSseEvent(event) {
       onSseErrorEvent(event);
       break;
 
+    case "session_terminated":
+      onSessionTerminatedEvent(event);
+      break;
+
     default:
       log("[sse]", "unknown event type:", type, event);
   }
+}
+
+// ─── SSE: session_terminated (3B.2 / UC-10) ──────────────────────────────────
+//
+// Pushed by the orchestrator's logout cascade BEFORE the session is dropped
+// (BLOCK-H ordering). Two variants by reason:
+//   - "admin_terminated": IS Console terminate fired BCL → orchestrator ran
+//     the cascade. SPA must clear local state and surface the right banner.
+//   - "user_signed_out": multi-browser case. Tab A signed out; tab B (same
+//     user) gets this push so it doesn't sit on stale UI.
+function onSessionTerminatedEvent(event) {
+  log("[sse]", "session_terminated", { reason: event.reason, rid: event.request_id });
+  // Stash the reason; the post-reload code path (initialize) reads this
+  // sessionStorage flag and shows the banner. Do this BEFORE wiping
+  // localStorage so a navigation race doesn't leak a half-cleared state.
+  if (event.reason === "admin_terminated") {
+    try { sessionStorage.setItem("orch_just_admin_terminated", "1"); } catch (_) {}
+  } else if (event.reason === "user_signed_out") {
+    try { sessionStorage.setItem("orch_just_signed_out", "1"); } catch (_) {}
+  }
+  // Drop client-side session state and navigate back to "/", which
+  // triggers the sign-in page render and reads the sessionStorage flag.
+  localStorage.removeItem("orch_session_id");
+  localStorage.removeItem("orch_user_name");
+  if (sseSource) { try { sseSource.close(); } catch (_) {} }
+  window.location.assign("/");
 }
 
 // ─── SSE: routing event ──────────────────────────────────────────────────────

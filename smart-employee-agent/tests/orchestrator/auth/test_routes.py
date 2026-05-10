@@ -326,7 +326,12 @@ def test_login_redirects_to_is_authorize() -> None:
 
     assert parsed.scheme + "://" + parsed.netloc == "https://is.example.com"
     assert parsed.path == "/oauth2/authorize"
-    assert params["client_id"] == "orchestrator-app-client-id"
+    # 3B.1 finding (project_orchestrator_app_vestigial.md): Pattern C login
+    # uses mcp_client_id (the confidential MCP-template app), not the
+    # vestigial SPA-template orchestrator-app. routes.py line 292 passes
+    # mcp_client_id to build_authorize_url despite the misleading kwarg
+    # name "spa_client_id".
+    assert params["client_id"] == "orchestrator-mcp-client-id"
     assert params["response_type"] == "code"
     assert params["redirect_uri"] == "http://localhost:8090/agent-callback"
     assert "openid" in params["scope"]
@@ -394,7 +399,7 @@ def test_callback_valid_state_returns_html_relay() -> None:
     client, deps = _make_client()
     state, _ = _seed_pending(deps)
 
-    resp = client.get(f"/auth/callback?code=test-code-xyz&state={state}")
+    resp = client.get(f"/agent-callback?code=test-code-xyz&state={state}")
 
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
@@ -417,7 +422,7 @@ def test_callback_unknown_state_returns_400() -> None:
     """GET /auth/callback with an unrecognised state must return 400."""
     client, _ = _make_client()
 
-    resp = client.get("/auth/callback?code=any-code&state=not-a-real-state")
+    resp = client.get("/agent-callback?code=any-code&state=not-a-real-state")
 
     assert resp.status_code == 400
 
@@ -431,7 +436,7 @@ def test_callback_access_denied_returns_html_redirect() -> None:
     """GET /auth/callback?error=access_denied must return 200 HTML pointing to login error page."""
     client, _ = _make_client()
 
-    resp = client.get("/auth/callback?error=access_denied&state=irrelevant")
+    resp = client.get("/agent-callback?error=access_denied&state=irrelevant")
 
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]

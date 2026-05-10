@@ -267,6 +267,7 @@ class StubHRDispatcher:
         orchestrator_act_sub: str,
         request_id: str,
         pending_register: Callable[[A2APendingState], None],
+        last_logout_reason: str | None = None,
     ) -> A2AMessageResponse:
         self.calls.append(
             {

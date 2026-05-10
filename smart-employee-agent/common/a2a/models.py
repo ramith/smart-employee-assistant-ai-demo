@@ -28,10 +28,19 @@ class MessageSendParams(BaseModel):
     Attributes:
         tool: MCP tool name, e.g. ``"get_leave_balance"``.
         args: Tool-specific keyword arguments; may be empty.
+        last_logout_reason: Sprint 3 3B.2 / FIX-17. Optional reason
+            string set by the orchestrator when the user's previous
+            session ended for a known reason (``"user_signed_out"`` or
+            ``"admin_terminated"``). The specialist dispatcher passes
+            this to ``binding_messages.select_template`` so the consent
+            widget reflects *why* re-approval is being asked. Consumed
+            once — orchestrator clears the field on the Session after
+            the first A2A invocation that carries it.
     """
 
     tool: str
     args: dict
+    last_logout_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
