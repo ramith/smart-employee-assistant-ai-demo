@@ -1123,14 +1123,36 @@ async function cancelCiba() {
   }
 }
 
+// Tracks the dismiss-after-transition setTimeout id so a new ciba_url that
+// arrives during the 300ms hide animation can cancel it. Without this, the
+// stale dismiss timer hides the next agent's widget ~300ms after it
+// appears (multi-tool fan-out: HR DONE → dismiss scheduled → IT
+// ciba_url renders new widget → stale timer fires → user never sees IT
+// widget).
+let _dismissWidgetTimer = null;
+
 function dismissWidget() {
   stopCountdown();
   const widget = $("consent-widget");
   widget.classList.remove("consent-widget--visible");
-  // After transition, hide
-  setTimeout(() => {
-    widget.hidden = true;
-    widget.className = "consent-widget";
+  // After transition, hide. Track the timer so renderWidget() can cancel
+  // if a new ciba_url arrives in the same tick.
+  if (_dismissWidgetTimer !== null) {
+    clearTimeout(_dismissWidgetTimer);
+  }
+  _dismissWidgetTimer = setTimeout(() => {
+    _dismissWidgetTimer = null;
+    // Race guard: only hide if cibaState is still null. If a new widget
+    // was rendered between dismiss and this callback, leave it alone.
+    if (cibaState === null) {
+      widget.hidden = true;
+      widget.className = "consent-widget";
+      log("[widget]", "dismiss_fired_no_new_state — widget hidden");
+    } else {
+      log("[widget]", "dismiss_skipped_new_widget_present", {
+        agentId: cibaState.agentId,
+      });
+    }
   }, 300);
   cibaState = null;
 }
