@@ -90,6 +90,10 @@ services:
       # avoids a conflict with a common SSH-tunnel default. Sprint 1
       # may switch this to 5001 once `agent` service is removed.
       - "8090:8080"
+      # 3B.1.i: additional host port 8123 for the C12 reverse-SSH tunnel
+      # so WSO2 IS's BCL POSTs land on the orchestrator's
+      # /backchannel-logout receiver. Bound to loopback only.
+      - "127.0.0.1:8123:8080"
     env_file:
       - ./orchestrator/.env
     environment:
