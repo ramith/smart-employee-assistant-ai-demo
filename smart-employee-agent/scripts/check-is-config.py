@@ -295,7 +295,12 @@ def check_mgmt_api_auth(base_url: str, auth_hdr: str) -> bool:
 
 
 def check_applications(base_url: str, auth_hdr: str, expected_client_ids: dict[str, str]) -> None:
-    """Verify each known client_id is present in the Applications list."""
+    """Verify each known client_id is present.
+
+    The IS list endpoint (`GET /applications`) does NOT return `clientId`
+    in row data — only the filter form (`?filter=clientId eq <id>`) does.
+    So query per-id; one round-trip per expected app.
+    """
     hdr("Section 4 — OAuth Applications")
     if not expected_client_ids:
         warn(
@@ -303,27 +308,27 @@ def check_applications(base_url: str, auth_hdr: str, expected_client_ids: dict[s
             "no expected client IDs (orchestrator/.env not found and no env vars set)",
         )
         return
-    code, body = http_get(
-        f"{base_url}/api/server/v1/applications?limit=200",
-        headers={"Authorization": auth_hdr, "Accept": "application/json"},
-    )
-    if code != 200:
-        warn("applications", f"GET /applications returned {code}; verify manually in IS Console")
-        return
-    try:
-        apps = json.loads(body).get("applications") or []
-    except Exception:
-        bad("applications", "invalid JSON from /applications")
-        return
-    present_client_ids = {a.get("clientId") for a in apps if a.get("clientId")}
-    present_names = {a.get("name") for a in apps if a.get("name")}
     for label, client_id in expected_client_ids.items():
-        if client_id and client_id in present_client_ids:
-            ok(f"{label} ({client_id[:8]}…) registered")
-        elif label in present_names:
-            ok(f"{label} registered (matched by name)")
+        if not client_id:
+            warn(label, "no client_id in env — skipping")
+            continue
+        code, body = http_get(
+            f"{base_url}/api/server/v1/applications?filter=clientId+eq+{urllib.parse.quote(client_id)}",
+            headers={"Authorization": auth_hdr, "Accept": "application/json"},
+        )
+        if code != 200:
+            warn(label, f"filter query returned {code}")
+            continue
+        try:
+            apps = json.loads(body).get("applications") or []
+        except Exception:
+            bad(label, "invalid JSON from /applications filter")
+            continue
+        if apps and any(a.get("clientId") == client_id for a in apps):
+            app_name = apps[0].get("name", "(unnamed)")
+            ok(f"{label} ({client_id[:8]}…) registered — app name: '{app_name}'")
         else:
-            bad(f"{label}", f"client_id '{client_id}' not in /applications response")
+            bad(label, f"client_id '{client_id}' not registered as any application")
 
 
 def check_api_resources(
@@ -529,14 +534,24 @@ def check_agents(base_url: str, auth_hdr: str) -> None:
     except Exception:
         bad("SCIM2 Agents", "invalid SCIM2 JSON")
         return
-    # Match by either name or userName field — depends on IS version.
+    # WSO2 IS stores agent display name in a nested custom schema:
+    #   `urn:scim:wso2:agent:schema`.`DisplayName`
+    # The top-level userName is `AGENT/<uuid>` (SCIM convention) and not
+    # human-meaningful. Pull from the custom schema; fall back to top
+    # level if a future IS version stores it elsewhere.
+    AGENT_SCHEMA = "urn:scim:wso2:agent:schema"
     present_names: set[str] = set()
     for r in resources:
-        for k in ("displayName", "name", "userName"):
+        wso2 = r.get(AGENT_SCHEMA) or {}
+        if isinstance(wso2, dict):
+            dn = wso2.get("DisplayName")
+            if dn:
+                present_names.add(dn)
+        # Also accept the top-level fields if present (future-proof).
+        for k in ("displayName", "name"):
             v = r.get(k)
             if v:
                 present_names.add(v)
-                break
     for agent in DEMO_AGENTS:
         if agent in present_names:
             ok(f"agent '{agent}' registered (SCIM2)")
