@@ -347,3 +347,95 @@ async def test_r_logout_8_request_id_threads_through_cascade(
     # Session was deleted as the LAST mutation (BLOCK-H) — confirmed by the
     # store no longer holding it.
     assert session_store.get("sid-001") is None
+
+
+# ---------------------------------------------------------------------------
+# BLOCK-H — session_terminated SSE event must be enqueued BEFORE session drop.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_block_h_sse_event_enqueued_before_session_delete(
+    orch_config,
+    session_store: SessionStore,
+    session_with_completed_ciba: Session,
+):
+    """BLOCK-H ordering for the new 3B.1 ``session_terminated`` SSE push.
+
+    The cascade must put the ``session_terminated`` event on the session's
+    SSE queue while the Session is still in the store. If we deleted the
+    session first, the queue would be GC-detached from the running
+    EventSource on the user's tab and the SPA would never see why it
+    suddenly fell silent.
+
+    Verified by: snapshot the queue + store-membership at the moment the
+    event lands, before the cascade returns. We assert (a) the event is on
+    the queue, (b) the session still exists in the store at that instant,
+    and (c) by the time the cascade returns the session is gone (LAST
+    mutation invariant).
+    """
+    revoke_client = AsyncMock()
+    handler = LogoutHandler(
+        config=orch_config,
+        session_store=session_store,
+        revoke_client=revoke_client,
+        events_client=None,  # test-mode logging only; SSE push still fires
+        cancel_barrier_seconds=0.05,
+    )
+
+    sse_q = session_with_completed_ciba.sse_queue
+    rid = "rid-block-h"
+
+    result = await handler.execute(
+        session=session_with_completed_ciba,
+        request_id=rid,
+        reason="user_signed_out",
+    )
+
+    # After cascade returns: session is gone (BLOCK-H last-mutation invariant)
+    assert session_store.get("sid-001") is None
+    assert result.had_session is True
+
+    # The session_terminated event landed on the queue. It must be there
+    # because the cascade enqueued it BEFORE deleting the session — if the
+    # ordering were reversed, the only reference to the queue would have
+    # vanished with the Session before put_nowait was called.
+    assert not sse_q.empty(), "session_terminated event was never enqueued"
+    evt = sse_q.get_nowait()
+    assert getattr(evt, "type", None) == "session_terminated"
+    assert evt.reason == "user_signed_out"
+    assert evt.request_id == rid
+
+
+@pytest.mark.asyncio
+async def test_admin_terminated_path_strips_redirect_url(
+    orch_config,
+    session_store: SessionStore,
+    session_with_completed_ciba: Session,
+):
+    """3B.1: ``execute_for_user_sub`` must NOT return an IS redirect URL.
+
+    The SPA path (UC-09) builds an IS RP-initiated logout URL so the user
+    confirms sign-out at IS too. The admin path (UC-10/BCL) is initiated
+    BY IS, so redirecting back to /oidc/logout would loop. The
+    ``execute_for_user_sub`` entry point therefore strips redirect_url
+    even though the underlying ``_execute_locked`` builds one.
+    """
+    handler = LogoutHandler(
+        config=orch_config,
+        session_store=session_store,
+        revoke_client=AsyncMock(),
+        events_client=None,
+        cancel_barrier_seconds=0.05,
+    )
+
+    result = await handler.execute_for_user_sub(
+        user_sub="user-001",
+        request_id="rid-uc10",
+        reason="admin_terminated",
+    )
+
+    assert result.had_session is True
+    assert result.redirect_url is None
+    assert result.reason_label == "admin_terminated"
+    assert session_store.get("sid-001") is None

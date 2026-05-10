@@ -137,7 +137,30 @@ class SseErrorEvent(BaseModel):
     request_id: str | None = None
 
 
-# Discriminated union over all six event types (F-13).
+class SessionTerminatedEvent(BaseModel):
+    """3B.1: emitted when the orchestrator drops a session out-of-band.
+
+    Pushed in two cases:
+
+    * ``reason="admin_terminated"`` — IS Console terminate fired BCL,
+      orchestrator ran the cascade. The SPA should land on
+      ``/?reason=admin_terminated`` so the user sees a banner explaining
+      why their tab is no longer signed in.
+    * ``reason="user_signed_out"`` — multi-browser case. Tab A initiates
+      sign-out; tab B (same user_sub) gets this push so it doesn't keep
+      stale state.
+
+    BLOCK-H: this event must be emitted BEFORE ``Session`` removal so the
+    SPA's still-open SSE stream picks it up. The cascade enforces
+    emit-then-delete ordering in ``logout_handler._execute_locked``.
+    """
+
+    type: Literal["session_terminated"] = "session_terminated"
+    reason: Literal["admin_terminated", "user_signed_out"]
+    request_id: str
+
+
+# Discriminated union over all event types (F-13 + 3B.1 session_terminated).
 SseEvent = Annotated[
     Union[
         SessionReadyEvent,
@@ -146,6 +169,7 @@ SseEvent = Annotated[
         CibaStateChangeEvent,
         ChatMessageEvent,
         SseErrorEvent,
+        SessionTerminatedEvent,
     ],
     Field(discriminator="type"),
 ]

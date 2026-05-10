@@ -140,6 +140,72 @@ class LogoutHandler:
                 reason=reason,
             )
 
+    async def execute_for_user_sub(
+        self,
+        *,
+        user_sub: str,
+        request_id: str,
+        reason: str = "admin_terminated",
+    ) -> LogoutResult:
+        """Run the cascade for every session owned by *user_sub* (UC-10 entry point).
+
+        Used by the BCL receiver (3B.1) when IS pushes an admin-terminate
+        event. There is no "initiating session" — the trigger came from
+        outside, so we just enumerate. The IS redirect URL is meaningless
+        here (IS is the originator), so ``LogoutResult.redirect_url`` is
+        always ``None``.
+
+        Idempotent: if no sessions exist for ``user_sub`` we short-circuit
+        to ``had_session=False``.
+
+        Args:
+            user_sub: User UUID resolved from ``logout_token.sub`` (or
+                ``sid`` via the reverse index).
+            request_id: rid for log correlation.
+            reason: ``"admin_terminated"`` (default). Drives the
+                3B.2 binding_message branch.
+
+        Returns:
+            ``LogoutResult(had_session, redirect_url=None, ...)``.
+        """
+        sessions = self.session_store.find_sessions_for_user(user_sub)
+        if not sessions:
+            logger.info(
+                "bcl_cascade_no_sessions | rid=%s user_sub=%s reason=%s",
+                request_id,
+                user_sub,
+                reason,
+            )
+            return LogoutResult(
+                had_session=False,
+                redirect_url=None,
+                request_id=request_id,
+                reason_label=reason,
+            )
+
+        # Same lock as UC-09 to serialise against a racing user-initiated logout.
+        user_lock = self.session_store.get_user_lock(user_sub)
+        async with user_lock:
+            # Pick any session (we only need user_sub for the locked path).
+            # ``redirect_url`` is built from the initiator's id_token; for
+            # admin-terminate the SPA never sees this redirect, so it is
+            # discarded by the caller. Picking an arbitrary session keeps
+            # the existing _execute_locked path reusable without a fork.
+            initiator = sessions[0]
+            result = await self._execute_locked(
+                session=initiator,
+                request_id=request_id,
+                reason=reason,
+            )
+            # Strip the redirect URL — IS originated this; SPA mustn't
+            # navigate back to /oidc/logout (it would be a loop).
+            return LogoutResult(
+                had_session=result.had_session,
+                redirect_url=None,
+                request_id=result.request_id,
+                reason_label=result.reason_label,
+            )
+
     async def _execute_locked(
         self,
         *,
@@ -234,6 +300,33 @@ class LogoutHandler:
                         record.jti[:8],
                         reason,
                     )
+
+            # Step 6.5: 3B.1 BLOCK-H — push ``session_terminated`` to the SPA's
+            # SSE stream BEFORE the Session is dropped. If we deleted first the
+            # queue would be GC'd and the still-open EventSource on the user's
+            # tab would never see why it suddenly fell silent. Best-effort: a
+            # full queue, a closed channel, or a missing queue are all logged
+            # and ignored — the cascade must not block on SSE plumbing.
+            try:
+                from orchestrator.events.sse import SessionTerminatedEvent  # noqa: PLC0415
+                if reason in ("admin_terminated", "user_signed_out"):
+                    evt = SessionTerminatedEvent(reason=reason, request_id=request_id)
+                    sse_q = getattr(s, "sse_queue", None)
+                    if sse_q is not None:
+                        sse_q.put_nowait(evt)
+                        logger.debug(
+                            "session_terminated_sse_pushed | rid=%s session_id=%s reason=%s",
+                            request_id,
+                            s.session_id[:8],
+                            reason,
+                        )
+            except Exception as exc:  # noqa: BLE001 — never block cascade on SSE
+                logger.warning(
+                    "session_terminated_sse_push_failed | rid=%s session_id=%s err=%r",
+                    request_id,
+                    s.session_id[:8],
+                    exc,
+                )
 
             # Step 7: clear this session (LAST mutation per BLOCK-H).
             await self.session_store.delete(s.session_id)

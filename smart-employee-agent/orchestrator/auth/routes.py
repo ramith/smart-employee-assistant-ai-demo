@@ -185,6 +185,27 @@ def _spa_base_url(config: OrchestratorConfig) -> str:
 _DISPLAY_NAME_CLAIMS = ("given_name", "username", "preferred_username", "email")
 
 
+def _extract_id_token_sid(id_token: str | None) -> str | None:
+    """Return the ``sid`` claim from an id_token, or ``None`` if absent.
+
+    Used at code-exchange time (3B.1) to populate the BCL receiver's
+    ``sid → user_sub`` reverse index. Decoded without signature
+    verification — the id_token arrived in the same /token response as
+    the already-validated access token.
+    """
+    if not id_token:
+        return None
+    try:
+        payload: dict[str, Any] = pyjwt.decode(
+            id_token, options={"verify_signature": False}
+        )
+    except pyjwt.PyJWTError as exc:
+        logger.warning("id_token sid decode failed | %s", exc)
+        return None
+    sid = payload.get("sid")
+    return sid if isinstance(sid, str) and sid else None
+
+
 def _extract_display_name(id_token: str | None, fallback_sub: str) -> str:
     """Return a human-friendly label, preferring OIDC profile claims.
 
@@ -407,6 +428,21 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             user_label=user_label,
             token_a=result.token_a,
         )
+
+        # 3B.1 BLOCK-C #9: populate sid → user_sub reverse index for BCL.
+        # WSO2 IS includes ``sid`` in id_tokens by default; some BCL events
+        # ship sid only, so the receiver consults this index when sub is
+        # absent. Decoded without sig-verify — same trust pattern as
+        # display-name extraction.
+        id_token_sid = _extract_id_token_sid(result.token_a.id_token)
+        if id_token_sid:
+            deps.session_store.register_sid(id_token_sid, claims.sub)
+            logger.debug(
+                "auth_exchange_sid_registered | sid=%s user_sub=%s",
+                id_token_sid,
+                claims.sub,
+            )
+
         logger.info(
             "auth_exchange_success | session_id_prefix=%s user_sub=%s",
             session.session_id[:8],

@@ -1,8 +1,8 @@
 # Sprint 3 — build state (in-progress)
 
-**Last updated:** 2026-05-10 — **3A.4 closed: UC-09 demo polish landed; manual walk green. Stage 6 D3.1 (UC-09) signed off; 3B.1 (admin-terminate) up next.**
-**Branch:** `sprint-3-build` @ `f751e05`.
-**Tests:** 853 / 47 files green (per `tools/run-tests.sh`).
+**Last updated:** 2026-05-10 — **3B.1 code complete: BCL receiver + 9-check validator + admin-terminate cascade entry point + SSE session_terminated push. Tests green; manual verify with C12 tunnel pending.**
+**Branch:** `sprint-3-build` (3B.1 commit pending).
+**Tests:** 876 / 48 files green (per `tools/run-tests.sh`). +23 over 3A.4: 21 BCL receiver tests + 2 logout_handler tests (BLOCK-H ordering + admin_terminated redirect-strip).
 **Stack:** all 5 services healthy with `denylist_enforcement=on` startup line on both MCP servers. Cascade fan-out clean (4/4 receivers acked). Captured token-B replay → 401 ERR-MCP-002 with `reason=denylist_hit`. **3A.3 ships denylist-only — introspection deferred to Sprint 4 per the 2026-05-10 lock (see `project_introspection_deferred.md`).**
 
 This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tracks an **in-progress** sprint so the repo always reflects ship-status without requiring memory consultation.
@@ -27,7 +27,7 @@ This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tra
 | **Live-walk #5 (full UC-09 + UC-02)** | ✓ all-green | — | 2026-05-09 10:41. Cascade wall-clock 898 ms sequential. All 4 receivers acked. hr_agent cache evicted. Zero anomalies. JWKS prewarm shaved ~1 s off first chat request. |
 | 3A.3 MCP server enforcement | ✓ done | `69e0e8e` + `25cc01e` | **Denylist check only** (Step 7). Introspection deferred to Sprint 4 — F-21 confirmed at source means revoke-at-IS doesn't propagate to OBO. `attach_revocation()` + Step 7 in both validators; wired in both `main.py` lifespans. F-15 startup line carries `denylist_enforcement=on` (warns on `=off`). Tests: V-HR-11/12 + V-IT-11/12 green. **R-LOGOUT-5 manual walk: pre-signout 200 → 4-leg fan-out clean → captured token-B replay 401 ERR-MCP-002 reason=denylist_hit (jti `042ebb99…`).** |
 | 3A.4 demo polish + UC-09 walkthrough | ✓ done | `f751e05` | Lean rescope 2026-05-10: SPA trace panel + DEMO_MODE gate **dropped**; receipts moved to operator terminal. New `tools/grep-trace.sh` (rid chain + ✓/✗ hop coverage), `COPY.signedOut` tightened to *"Signed out. Agent sessions cleared."*, `showSigninNotice` routes through `announce()` (NIT-8). 3 new tests: R-LOGOUT-6 happy + barrier timeout + R-LOGOUT-8 rid threading (853 / 47 green). UC-09 runbook section with pre-flight, 7-step storyboard, captured-token-replay walkthrough, failure matrix. Manual walk verified by operator. |
-| 3B.1 admin-terminate (D3.2) | ◯ pending | — | Orchestrator BCL receiver with full 9-check spec validation. |
+| 3B.1 admin-terminate (D3.2) | ◐ code complete, manual pending | (commit pending) | New `orchestrator/auth/bcl_receiver.py` with `SeenLogoutTokens` (FIX-3) + `validate_logout_token()` (BLOCK-C 9-check) + `POST /backchannel-logout`. New `LogoutHandler.execute_for_user_sub()` for the IS-originated path (strips redirect URL). New SSE `SessionTerminatedEvent` pushed BEFORE session.delete (BLOCK-H). New `SessionStore.register_sid` / `resolve_sid` reverse index, populated at code-exchange time from `id_token.sid`. Tests: 21 BCL + 2 logout_handler covering all 9 checks individually + dedup + sweep + sid-fallback + forged-token (R-LOGOUT-EX-3) + BLOCK-H ordering. R-LOGOUT-7/7b deferred to 3B.3. Manual walk needs C12 tunnel rig. |
 | 3B.2 binding_message + carries | ◯ pending | — | Reason-branched binding_message; admin-terminate banner. |
 | 3B.3 R-LOGOUT suite + retro | ◯ pending | — | R-LOGOUT-1..8 + R-LOGOUT-7b automated; sprint-3-retro.md. |
 

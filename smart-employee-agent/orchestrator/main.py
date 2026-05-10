@@ -47,6 +47,7 @@ Design notes
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -70,6 +71,11 @@ from orchestrator.agent_registry.revoke_client import (
 )
 from orchestrator.auth.is_revoke import RevokeClient
 from orchestrator.auth.logout_handler import LogoutHandler
+from orchestrator.auth.bcl_receiver import (
+    BCLReceiverDeps,
+    SeenLogoutTokens,
+    build_bcl_router,
+)
 from orchestrator.auth.routes import AuthRouterDeps, build_auth_router
 from orchestrator.auth.session_store import SessionStore
 from orchestrator.chat.keyword_fallback import KeywordRouter
@@ -200,6 +206,9 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
     keyword_router = KeywordRouter()  # DEFAULT_RULES per F-14
     session_store = SessionStore()
 
+    # 3B.1: BCL replay-protection set. Lifespan-managed sweep loop wired below.
+    seen_logout_tokens = SeenLogoutTokens()
+
     # ── Lifespan ──────────────────────────────────────────────────────────────
 
     @asynccontextmanager
@@ -267,6 +276,9 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         _app.state.pattern_c = pattern_c
         _app.state.is_client = is_client
 
+        # 3B.1: start the SeenLogoutTokens sweep loop. Cancelled on shutdown.
+        bcl_sweep_task = asyncio.create_task(seen_logout_tokens.sweep_loop())
+
         logger.info(
             "orchestrator_startup | host=%s port=%d llm_fallback_mode=%s",
             cfg.host,
@@ -278,6 +290,11 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
 
         # ── Shutdown ──────────────────────────────────────────────────────────
         logger.info("orchestrator_shutdown | closing httpx clients")
+        bcl_sweep_task.cancel()
+        try:
+            await bcl_sweep_task
+        except asyncio.CancelledError:
+            pass
         await is_client.aclose()
         for agent_id, client in a2a_clients.items():
             await client.aclose()
@@ -393,6 +410,26 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
             AuthRouterDeps(
                 config=cfg,
                 pattern_c=proxy_pattern_c,  # type: ignore[arg-type]
+                session_store=session_store,
+                logout_handler=logout_handler,
+            )
+        )
+    )
+
+    # ── 3B.1: BCL receiver — POST /backchannel-logout (D3.2) ─────────────────
+    # Mounted at the top level (no prefix) because IS calls the exact URI
+    # registered on ``orchestrator-mcp-client.back_channel_logout_uri``.
+    bcl_jwks_cache = JWKSCache(
+        jwks_url=cfg.is_jwks_url,
+        insecure_tls=cfg.is_insecure_tls,
+    )
+    app.include_router(
+        build_bcl_router(
+            BCLReceiverDeps(
+                expected_iss=cfg.is_issuer,
+                expected_aud=cfg.mcp_client_id,
+                jwks_cache=bcl_jwks_cache,
+                seen_logout_tokens=seen_logout_tokens,
                 session_store=session_store,
                 logout_handler=logout_handler,
             )

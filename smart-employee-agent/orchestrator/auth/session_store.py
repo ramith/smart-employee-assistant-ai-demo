@@ -198,6 +198,11 @@ class SessionStore:
     # 3A.1 FIX-12: per-user_sub lock serialises concurrent UC-09 and UC-10 cascades.
     # Created lazily on first request via get_user_lock().
     _user_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
+    # 3B.1 BLOCK-C #9: OIDC ``id_token.sid`` → ``user_sub`` reverse index. The
+    # BCL receiver consults this when ``logout_token`` carries ``sid`` but no
+    # ``sub``. Populated at code-exchange time from the freshly-issued
+    # id_token's ``sid`` claim, evicted on session delete.
+    _sid_to_user_sub: dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------------
     # Sync helpers (read-only; safe without lock on a single event loop)
@@ -355,6 +360,45 @@ class SessionStore:
             List of ``Session`` objects (possibly empty).
         """
         return [s for s in self._sessions.values() if s.user_sub == user_sub]
+
+    # ------------------------------------------------------------------
+    # 3B.1 BLOCK-C #9 — sid → user_sub reverse index for BCL receiver
+    # ------------------------------------------------------------------
+
+    def register_sid(self, sid: str, user_sub: str) -> None:
+        """Map an OIDC ``id_token.sid`` to the owning ``user_sub``.
+
+        Called by ``POST /auth/exchange`` immediately after a session is
+        created. Many IS deployments include ``sid`` in id_tokens; some
+        BCL ``logout_token`` events carry ``sid`` only (no ``sub``). The
+        receiver consults this index to translate.
+
+        Idempotent — registering the same sid twice for the same user is
+        a no-op; for a different user it is an error (collision should be
+        impossible given IS issues globally-unique sids per session).
+
+        Args:
+            sid: The ``sid`` claim from the freshly issued id_token.
+            user_sub: The session's ``user_sub`` (id_token ``sub`` claim).
+        """
+        existing = self._sid_to_user_sub.get(sid)
+        if existing is not None and existing != user_sub:
+            logger.error(
+                "[SESSION] sid_collision sid=%s prev_user=%s new_user=%s — refusing",
+                sid,
+                existing,
+                user_sub,
+            )
+            return
+        self._sid_to_user_sub[sid] = user_sub
+
+    def resolve_sid(self, sid: str) -> str | None:
+        """Return the ``user_sub`` for a given OIDC ``sid``, or ``None``.
+
+        Sync — read-only dict lookup, safe on the single event loop. Used
+        by the BCL receiver when ``logout_token.sub`` is absent.
+        """
+        return self._sid_to_user_sub.get(sid)
 
     async def prune_expired(self) -> int:
         """Remove all sessions that have been idle longer than ``max_idle_seconds``.
