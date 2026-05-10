@@ -1,10 +1,16 @@
-"""HR-server MCP tool endpoints — Sprint 1 Wave 6.
+"""HR-server MCP tool endpoints — Sprint 1 Wave 6 / Sprint 4 S4.0 (Track B).
 
 Exposes three FastAPI POST endpoints under ``/mcp/tools/``:
 
     POST /mcp/tools/get_leave_balance   scope: hr_self_rest
     POST /mcp/tools/get_leave_history   scope: hr_self_rest
     POST /mcp/tools/approve_leave       scope: hr_approve_rest
+
+Sprint 4 S4.0 reconciliation (D1): handlers now delegate to ``hr_service``
+(the canonical in-memory implementation backed by ``service/store.py``)
+instead of returning the Sprint-1 canned dicts. The ``_CANNED_*`` constants
+have been removed; ``hr_service.ensure_user`` auto-registers users on first
+call so the demo's "single-user" assumption keeps holding.
 
 Each handler:
   1. Extracts a Bearer token from the ``Authorization`` header.
@@ -14,10 +20,9 @@ Each handler:
      the full F-04 six-step check (sig, iss, exp, aud, act.sub, scope).
   4. On ``JWTValidationError``, ``PeerTrustError``, or ``ScopeError``: raises
      ``HTTPException(401)`` whose ``detail`` dict is ``{"error_id": ..., "request_id": ...}``.
-  5. On success: looks up canned data via ``claims.sub`` and returns a typed
-     Pydantic response.
-
-Sprint 1 uses hardcoded canned data.  Sprint 2 may swap in a real ``HRDataStore``.
+  5. On success: delegates to ``hr_service`` using the now-Sprint-4-plumbed
+     ``claims.username`` (Track A) — falling back to ``claims.sub`` prefix when
+     username is absent (e.g. system tokens).
 """
 
 from __future__ import annotations
@@ -45,6 +50,16 @@ except ModuleNotFoundError:
     HRServerTokenValidator = None  # type: ignore[assignment,misc]
     HRServerConfig = None  # type: ignore[assignment,misc]
 
+# Lazy-import the service so the module loads even when service/__init__.py
+# (or the in-memory store's `from hr_server.service import store` chain) is
+# stubbed out in test fixtures. Tests that exercise full handler bodies will
+# import the real service via the fixture path; lightweight tests that only
+# care about scope-guard behaviour can stub `hr_service` in sys.modules.
+try:
+    from hr_server.service import hr_service
+except ModuleNotFoundError:
+    hr_service = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -53,6 +68,7 @@ __all__ = [
     # Pydantic models (re-exported so tests can import them directly)
     "GetLeaveBalanceArgs",
     "LeaveBalanceResult",
+    "LeaveBalanceBuckets",
     "GetLeaveHistoryArgs",
     "LeaveHistoryEntry",
     "GetLeaveHistoryResult",
@@ -60,100 +76,61 @@ __all__ = [
     "ApproveLeaveResult",
 ]
 
-# ---------------------------------------------------------------------------
-# Canned data (Sprint 1 — no DB)
-# ---------------------------------------------------------------------------
-
-#: Annual leave balance per employee ``sub``.
-_CANNED_LEAVE_BALANCES: dict[str, dict] = {
-    "probe.user": {"leave_days": 12, "leave_type": "annual"},
-    "user-uuid-abc123": {"leave_days": 10, "leave_type": "annual"},
-    "default": {"leave_days": 14, "leave_type": "annual"},
-}
-
-#: Leave history per employee ``sub``.
-_CANNED_LEAVE_HISTORY: dict[str, list[dict]] = {
-    "probe.user": [
-        {
-            "leave_id": "LV-001",
-            "start_date": "2026-03-10",
-            "end_date": "2026-03-12",
-            "days": 3,
-            "status": "approved",
-            "type": "annual",
-        },
-        {
-            "leave_id": "LV-002",
-            "start_date": "2026-04-01",
-            "end_date": "2026-04-01",
-            "days": 1,
-            "status": "approved",
-            "type": "sick",
-        },
-    ],
-    "user-uuid-abc123": [
-        {
-            "leave_id": "LV-003",
-            "start_date": "2026-02-14",
-            "end_date": "2026-02-14",
-            "days": 1,
-            "status": "approved",
-            "type": "annual",
-        },
-    ],
-    "default": [],
-}
-
-#: Leave requests available for approval, keyed by ``leave_id``.
-_CANNED_LEAVE_REQUESTS: dict[str, dict] = {
-    "LV-001": {"employee_id": "probe.user", "pending": False},
-    "LV-004": {"employee_id": "probe.user", "pending": True},
-    "LV-005": {"employee_id": "user-uuid-abc123", "pending": True},
-}
-
-# Today's date string (canned; Sprint 2 will use real date queries).
-_TODAY: str = str(date.today())
-
 
 # ---------------------------------------------------------------------------
-# Pydantic request / response models (from api-contracts.md §4)
+# Pydantic request / response models — Sprint 4 reshape (D1, RR-1)
 # ---------------------------------------------------------------------------
 
 
 class GetLeaveBalanceArgs(BaseModel):
     """Request body for ``get_leave_balance``.
 
-    ``employee_id`` is optional; if absent the handler uses ``claims.sub``.
+    ``employee_id`` is accepted for legacy compatibility but is no longer
+    consulted — the service always keys on ``claims.sub``. Sprint 5 will drop
+    the field entirely once chat-side callers stop sending it.
     """
 
-    employee_id: str | None = Field(default=None, description="Defaults to token.sub")
+    employee_id: str | None = Field(default=None, description="Legacy; ignored.")
+
+
+class LeaveBalanceBuckets(BaseModel):
+    """Per-leave-type day balances. Mirrors ``hr_service.get_my_leave_balance``."""
+
+    annual: int
+    sick: int
+    personal: int
 
 
 class LeaveBalanceResult(BaseModel):
-    """Response for ``get_leave_balance``."""
+    """Response for ``get_leave_balance`` (Sprint 4 shape).
 
-    employee_id: str
-    leave_days: int
-    leave_type: str = "annual"
+    Returned by ``hr_service.get_my_leave_balance`` after store.ensure_user
+    auto-registration. The legacy single-int ``leave_days`` shape was dropped
+    in S4.0 — see docs/architecture/sprint-4-stage-6.5-reconciliation.md §1.6.
+    """
+
+    employee: str
+    balance: LeaveBalanceBuckets
     as_of_date: str = Field(default_factory=lambda: str(date.today()))
 
 
 class GetLeaveHistoryArgs(BaseModel):
     """Request body for ``get_leave_history``."""
 
-    employee_id: str | None = Field(default=None, description="Defaults to token.sub")
+    employee_id: str | None = Field(default=None, description="Legacy; ignored.")
     limit: int = Field(default=10, ge=1, le=50)
 
 
 class LeaveHistoryEntry(BaseModel):
-    """A single leave record."""
+    """A single leave record (Sprint 4 shape — matches hr_service projection)."""
 
-    leave_id: str
+    request_id: str
+    type: str
     start_date: str
     end_date: str
-    days: int
-    status: Literal["approved", "pending", "rejected"]
-    type: str
+    days_requested: int
+    status: str
+    reason: str = ""
 
 
 class GetLeaveHistoryResult(BaseModel):
@@ -166,16 +143,27 @@ class GetLeaveHistoryResult(BaseModel):
 class ApproveLeaveArgs(BaseModel):
     """Request body for ``approve_leave``."""
 
-    leave_id: str
+    leave_id: str = Field(description="Maps to hr_service request_id.")
 
 
 class ApproveLeaveResult(BaseModel):
-    """Response for ``approve_leave``."""
+    """Response for ``approve_leave``.
 
-    leave_id: str
-    status: Literal["approved"] = "approved"
-    approved_by: str  # act.sub of the token (agent acting for the manager)
-    approved_at: str  # ISO-8601 datetime
+    Mirrors ``hr_service.approve_leave_request`` happy-path response. ``error``/
+    ``message`` are populated for service-level rejections (insufficient
+    balance, not-found, already approved); HTTP status stays 200 in those
+    cases since the auth/scope checks succeeded — the rejection is business
+    rather than security.
+    """
+
+    success: bool = True
+    request_id: str
+    new_status: str | None = None
+    employee: str | None = None
+    notification: str | None = None
+    error: str | None = None
+    message: str | None = None
+    approved_by: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -189,17 +177,13 @@ class HRMcpToolRouterDeps:
 
     Attributes:
         validator: Wave 5 token validator that enforces the F-04 six-step check.
-
-    Sprint 2 addition::
-
-        data_store: HRDataStore  # non-canned persistence layer
     """
 
     validator: HRServerTokenValidator  # type: ignore[valid-type]
 
 
 # ---------------------------------------------------------------------------
-# Helper — extract Bearer token
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -232,6 +216,21 @@ def _get_rid(request: Request) -> str:
     )
 
 
+def _username_for(claims) -> str:  # type: ignore[no-untyped-def]
+    """Resolve a display first-name from the verified token claims.
+
+    Sprint 4 plumbs ``username`` (Track A) through the JWT model. When absent —
+    e.g. internal/system tokens or legacy fixtures — fall back to the prefix
+    of ``sub`` so ``hr_service.ensure_user`` still gets a non-empty name. The
+    fallback is intentionally lossy; production tokens always carry username.
+    """
+    name = getattr(claims, "username", None)
+    if name:
+        return name
+    raw_sub = getattr(claims, "sub", "") or ""
+    return raw_sub.split("@", 1)[0] or "user"
+
+
 # ---------------------------------------------------------------------------
 # Router factory
 # ---------------------------------------------------------------------------
@@ -242,13 +241,7 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
 
     All endpoints are mounted under the prefix supplied by the caller (typically
     ``/mcp/tools``).  Each handler validates the inbound token via
-    ``deps.validator.validate_token()`` before accessing canned data.
-
-    Args:
-        deps: Injected validator (and future data_store in Sprint 2).
-
-    Returns:
-        Configured ``APIRouter`` ready to be included in the hr_server FastAPI app.
+    ``deps.validator.validate_token()`` before delegating to ``hr_service``.
     """
     router = APIRouter()
 
@@ -256,21 +249,14 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
 
     @router.post("/get_leave_balance", response_model=LeaveBalanceResult)
     async def get_leave_balance(
-        body: GetLeaveBalanceArgs,
+        body: GetLeaveBalanceArgs,  # noqa: ARG001 — kept for client compat
         request: Request,
     ) -> LeaveBalanceResult:
-        """Return the employee's current leave balance.
-
-        Required scope: ``hr_self_rest``.
-        Uses ``token.sub`` as the employee identifier unless ``body.employee_id``
-        is supplied (manager use-case).
-        """
+        """Return the caller's current leave balance (per token.sub)."""
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
-            logger.warning(
-                "get_leave_balance missing_bearer rid=%s", rid
-            )
+            logger.warning("get_leave_balance missing_bearer rid=%s", rid)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
@@ -307,13 +293,14 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             claims.jti,
         )
 
-        employee_id = body.employee_id or claims.sub
-        row = _CANNED_LEAVE_BALANCES.get(employee_id) or _CANNED_LEAVE_BALANCES["default"]
+        # S4.0 D1: delegate to hr_service. The "" last_name keeps the existing
+        # service signature compat (full_name = "<first> ".strip()).
+        result = await hr_service.get_my_leave_balance(
+            claims.sub, _username_for(claims), ""
+        )
         return LeaveBalanceResult(
-            employee_id=employee_id,
-            leave_days=row["leave_days"],
-            leave_type=row.get("leave_type", "annual"),
-            as_of_date=_TODAY,
+            employee=result["employee"],
+            balance=LeaveBalanceBuckets(**result["balance"]),
         )
 
     # ── get_leave_history ─────────────────────────────────────────────────────
@@ -323,17 +310,11 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         body: GetLeaveHistoryArgs,
         request: Request,
     ) -> GetLeaveHistoryResult:
-        """Return the employee's leave history.
-
-        Required scope: ``hr_self_rest``.
-        Returns at most ``body.limit`` entries (default 10, max 50).
-        """
+        """Return the caller's leave history (at most ``body.limit`` rows)."""
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
-            logger.warning(
-                "get_leave_history missing_bearer rid=%s", rid
-            )
+            logger.warning("get_leave_history missing_bearer rid=%s", rid)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
@@ -370,14 +351,14 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             claims.jti,
         )
 
-        employee_id = body.employee_id or claims.sub
-        raw_entries = (
-            _CANNED_LEAVE_HISTORY.get(employee_id) or _CANNED_LEAVE_HISTORY["default"]
+        rows = await hr_service.get_my_leave_requests(
+            claims.sub, _username_for(claims), ""
         )
-        limited = raw_entries[: body.limit]
+        # body.limit caps the response — service returns full history.
+        limited = rows[: body.limit]
         return GetLeaveHistoryResult(
-            employee_id=employee_id,
-            entries=[LeaveHistoryEntry(**e) for e in limited],
+            employee_id=claims.sub,
+            entries=[LeaveHistoryEntry(**r) for r in limited],
         )
 
     # ── approve_leave ─────────────────────────────────────────────────────────
@@ -387,18 +368,11 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
         body: ApproveLeaveArgs,
         request: Request,
     ) -> ApproveLeaveResult:
-        """Approve a pending leave request.
-
-        Required scope: ``hr_approve_rest``.
-        Manager-only.  Sprint 1: canned response; the scope guard is exercised
-        even though this tool is not exposed in the demo query path.
-        """
+        """Approve a pending leave request (manager-only, scope hr_approve_rest)."""
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
         if not token_str:
-            logger.warning(
-                "approve_leave missing_bearer rid=%s", rid
-            )
+            logger.warning("approve_leave missing_bearer rid=%s", rid)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-006", "request_id": rid},
@@ -436,16 +410,37 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             claims.jti,
         )
 
-        from datetime import datetime, timezone
+        # act.sub identifies the agent acting for the manager; reviewer_sub is
+        # the human manager (claims.sub). The audit trail records both via
+        # the F-13 correlation log already; the service captures reviewer_sub +
+        # reviewer_name on the request row.
+        reviewer_name = _username_for(claims)
+        result = await hr_service.approve_leave_request(
+            request_id=body.leave_id,
+            reviewer_sub=claims.sub,
+            reviewer_name=reviewer_name,
+        )
 
-        act_sub: str = (
+        act_sub: str | None = (
             claims.act.get("sub") if isinstance(claims.act, dict) else None
-        ) or claims.sub
+        )
+        if result.get("success"):
+            return ApproveLeaveResult(
+                success=True,
+                request_id=result["request_id"],
+                new_status=result.get("new_status"),
+                employee=result.get("employee"),
+                notification=result.get("notification"),
+                approved_by=act_sub or claims.sub,
+            )
+        # Service-level rejection (not_found / invalid_status / insufficient
+        # balance). Auth + scope passed, so we return 200 with success=False.
         return ApproveLeaveResult(
-            leave_id=body.leave_id,
-            status="approved",
-            approved_by=act_sub,
-            approved_at=datetime.now(tz=timezone.utc).isoformat(),
+            success=False,
+            request_id=body.leave_id,
+            error=result.get("error"),
+            message=result.get("message"),
+            approved_by=act_sub or claims.sub,
         )
 
     return router

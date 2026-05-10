@@ -1,18 +1,28 @@
-"""Tests for hr_server/mcp/tools.py — Sprint 1 Wave 6.
+"""Tests for hr_server/mcp/tools.py — Sprint 1 Wave 6 / Sprint 4 S4.0 Track B.
+
+Sprint 4 reshape: handlers now delegate to ``hr_service`` (in-memory store)
+instead of the Sprint-1 canned dicts, per
+``docs/architecture/sprint-4-stage-6.5-reconciliation.md`` §D1. Assertions
+are reshaped against the ``hr_service`` response projection.
 
 Test count: 10 tests (>= 8 required).
 
 Catalog:
-    T-HR-MCP-01  Valid token + hr.read → get_leave_balance returns 200 with canned data
-    T-HR-MCP-02  Valid token + hr.read → get_leave_history returns 200 with entries
-    T-HR-MCP-03  Valid token + hr.write → approve_leave returns 200 with approved status
-    T-HR-MCP-04  Missing Authorization header → 401 with error_id=ERR-AUTH-006
-    T-HR-MCP-05  Token failing JWT validation → 401 with error body (error_id present)
-    T-HR-MCP-06  Token with hr.read calls approve_leave (needs hr.write) → 401 ERR-MCP-003
-    T-HR-MCP-07  Token with wrong aud → 401 with error_id=ERR-MCP-001
-    T-HR-MCP-08  Error body contains request_id echoed from X-Request-ID header
-    T-HR-MCP-09  Bad request body (missing required field) → 422
-    T-HR-MCP-10  get_leave_balance with explicit employee_id overrides token.sub lookup
+    T-HR-MCP-01  Valid token + hr_self_rest → get_leave_balance returns 200 with
+                 {employee, balance: {annual, sick, personal}, as_of_date}.
+    T-HR-MCP-02  Valid token + hr_self_rest → get_leave_history returns 200 with
+                 entries shaped as hr_service rows (request_id/type/start_date/...).
+    T-HR-MCP-03  Valid token + hr_approve_rest → approve_leave returns 200 with
+                 success-or-error envelope from hr_service.
+    T-HR-MCP-04  Missing Authorization header → 401 with error_id=ERR-AUTH-006.
+    T-HR-MCP-05  Token failing JWT validation → 401 with error body (error_id present).
+    T-HR-MCP-06  Token with hr_self_rest only calls approve_leave (needs
+                 hr_approve_rest) → 401 ERR-MCP-003.
+    T-HR-MCP-07  Token with wrong aud → 401 with error_id=ERR-MCP-001.
+    T-HR-MCP-08  Error body contains request_id echoed from X-Request-ID header.
+    T-HR-MCP-09  Bad request body (missing required field) → 422.
+    T-HR-MCP-10  get_leave_balance auto-registers the user via store.ensure_user
+                 (legacy ``employee_id`` arg is ignored — Sprint 4 D1).
 """
 
 from __future__ import annotations
@@ -61,6 +71,7 @@ for _pkg in (
     "hr_server",
     "hr_server.auth",
     "hr_server.mcp",
+    "hr_server.service",
 ):
     if _pkg not in sys.modules:
         _stub = _types.ModuleType(_pkg)
@@ -74,6 +85,7 @@ for _src, _dst in (
     ("hr_server", "hr_server"),
     ("hr_server.auth", "hr_server.auth"),
     ("hr_server.mcp", "hr_server.mcp"),
+    ("hr_server.service", "hr_server.service"),
 ):
     if _dst not in sys.modules:
         _stub = _types.ModuleType(_dst)
@@ -90,6 +102,11 @@ _correlation_mod = _load("common.logging.correlation", "common/logging/correlati
 _hr_validators_mod = _load(
     "hr_server.auth.validators", "hr_server/auth/validators.py"
 )
+# Sprint 4 S4.0 Track B: tools.py now imports hr_service. The service in turn
+# imports `hr_server.service.store` — load both so the full delegation chain
+# resolves under the importlib bootstrap.
+_hr_store_mod = _load("hr_server.service.store", "hr_server/service/store.py")
+_hr_service_mod = _load("hr_server.service.hr_service", "hr_server/service/hr_service.py")
 _hr_tools_mod = _load("hr_server.mcp.tools", "hr_server/mcp/tools.py")
 
 # Pull out the types we need in tests
@@ -155,9 +172,18 @@ def sign_token(rsa_keypair):
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _reset_store():
+    """Reset the in-memory store before each test so user auto-registration is
+    deterministic (no leak from a prior test's ensure_user call)."""
+    _hr_store_mod.reset_data()
+    yield
+    _hr_store_mod.reset_data()
+
+
 @pytest.fixture
 def hr_read_payload() -> dict[str, Any]:
-    """Valid JWT payload with hr.read scope."""
+    """Valid JWT payload with hr_self_rest scope and Sprint 4 username claim."""
     now = int(time.time())
     return {
         "iss": ISSUER,
@@ -168,6 +194,9 @@ def hr_read_payload() -> dict[str, Any]:
         "jti": JTI,
         "scope": "openid hr_self_rest",
         "act": {"sub": HR_AGENT_UUID},
+        # Sprint 4 Track A: identity claims plumbed through JWTClaims.
+        "username": "Probe",
+        "email": "probe.user@example.com",
     }
 
 
@@ -184,6 +213,8 @@ def hr_write_payload() -> dict[str, Any]:
         "jti": JTI + "-w",
         "scope": "openid hr_self_rest hr_approve_rest",
         "act": {"sub": HR_AGENT_UUID},
+        "username": "Probe",
+        "email": "probe.user@example.com",
     }
 
 
@@ -212,13 +243,13 @@ def _build_app(public_jwk: dict[str, Any]) -> FastAPI:
 
 
 # ---------------------------------------------------------------------------
-# T-HR-MCP-01: Valid hr.read token → get_leave_balance returns 200
+# T-HR-MCP-01: Valid token → get_leave_balance returns Sprint-4 balance shape
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_get_leave_balance_valid_token(rsa_keypair, sign_token, hr_read_payload):
-    """T-HR-MCP-01: Valid token with hr.read returns leave balance for token.sub."""
+    """T-HR-MCP-01: Returns the hr_service balance projection (annual/sick/personal)."""
     _, public_jwk = rsa_keypair
     token = sign_token(hr_read_payload)
     app = _build_app(public_jwk)
@@ -232,21 +263,35 @@ async def test_get_leave_balance_valid_token(rsa_keypair, sign_token, hr_read_pa
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["employee_id"] == SUBJECT
-    assert isinstance(data["leave_days"], int)
-    assert data["leave_days"] == 12  # probe.user canned value
+    # Sprint 4 D1 reshape: employee + balance buckets, no leave_days int.
+    assert data["employee"] == "Probe"
+    assert data["balance"] == {"annual": 20, "sick": 10, "personal": 5}
     assert "as_of_date" in data
+    # store.ensure_user side-effect: user is now registered.
+    assert SUBJECT in _hr_store_mod.users
 
 
 # ---------------------------------------------------------------------------
-# T-HR-MCP-02: Valid hr.read token → get_leave_history returns 200 with entries
+# T-HR-MCP-02: Valid token → get_leave_history returns hr_service shape
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_get_leave_history_valid_token(rsa_keypair, sign_token, hr_read_payload):
-    """T-HR-MCP-02: Valid token with hr.read returns leave history list."""
+    """T-HR-MCP-02: Returns rows shaped per hr_service.get_my_leave_requests."""
     _, public_jwk = rsa_keypair
+
+    # Seed one leave request via the service so the endpoint has data to project.
+    await _hr_service_mod.apply_leave(
+        sub=SUBJECT,
+        first_name="Probe",
+        last_name="",
+        leave_type="Sick Leave",
+        start_date="2026-06-10",
+        end_date="2026-06-10",
+        reason="Doctor visit",
+    )
+
     token = sign_token(hr_read_payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
@@ -261,36 +306,61 @@ async def test_get_leave_history_valid_token(rsa_keypair, sign_token, hr_read_pa
     data = resp.json()
     assert data["employee_id"] == SUBJECT
     assert isinstance(data["entries"], list)
-    # probe.user has 2 canned entries; limit=5 should return both
-    assert len(data["entries"]) == 2
-    assert data["entries"][0]["leave_id"] == "LV-001"
+    assert len(data["entries"]) == 1
+    row = data["entries"][0]
+    # Sprint 4 D1 row shape: request_id / days_requested / type — not leave_id / days.
+    assert row["request_id"] == "LR001"
+    assert row["type"] == "Sick Leave"
+    assert row["days_requested"] == 1
+    assert row["status"] == "Pending"
 
 
 # ---------------------------------------------------------------------------
-# T-HR-MCP-03: Valid hr.write token → approve_leave returns 200
+# T-HR-MCP-03: Valid hr_approve_rest token → approve_leave delegates
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_approve_leave_valid_hr_write_token(rsa_keypair, sign_token, hr_write_payload):
-    """T-HR-MCP-03: Token with hr.write scope approves a leave request."""
+    """T-HR-MCP-03: approve_leave routes through hr_service.approve_leave_request."""
     _, public_jwk = rsa_keypair
+
+    # Seed a pending leave request authored by SUBJECT.
+    await _hr_service_mod.apply_leave(
+        sub=SUBJECT,
+        first_name="Probe",
+        last_name="",
+        leave_type="Annual Leave",
+        start_date=(_dt(8)),  # 8 days out — passes 7-day notice
+        end_date=(_dt(8)),
+        reason="Family event",
+    )
+    request_id = "LR001"
+
     token = sign_token(hr_write_payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
 
     resp = client.post(
         "/mcp/tools/approve_leave",
-        json={"leave_id": "LV-004"},
+        json={"leave_id": request_id},
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["leave_id"] == "LV-004"
-    assert data["status"] == "approved"
+    assert data["success"] is True
+    assert data["request_id"] == request_id
+    assert data["new_status"] == "Approved"
     assert data["approved_by"] == HR_AGENT_UUID  # act.sub from token
-    assert "approved_at" in data
+    # The store now reflects the approval.
+    assert _hr_store_mod.leave_requests[request_id]["status"] == "Approved"
+
+
+def _dt(days_out: int) -> str:
+    """Return an ISO-format date `days_out` days from today."""
+    from datetime import date as _date, timedelta as _td
+    return (_date.today() + _td(days=days_out)).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +370,7 @@ async def test_approve_leave_valid_hr_write_token(rsa_keypair, sign_token, hr_wr
 
 @pytest.mark.asyncio
 async def test_missing_auth_header_returns_401(rsa_keypair):
-    """T-HR-MCP-04: No Authorization header produces 401 with error_id in body."""
+    """T-HR-MCP-04: No Authorization header produces 401 with error_id=ERR-AUTH-006."""
     _, public_jwk = rsa_keypair
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
@@ -328,7 +398,6 @@ async def test_invalid_jwt_returns_401(rsa_keypair, sign_token, hr_read_payload)
     """T-HR-MCP-05: A token signed by a different key fails verification → 401."""
     _, public_jwk = rsa_keypair
 
-    # Sign with a different key — verification against public_jwk will fail
     other_private = rsa.generate_private_key(
         public_exponent=65537, key_size=2048, backend=default_backend()
     )
@@ -355,13 +424,13 @@ async def test_invalid_jwt_returns_401(rsa_keypair, sign_token, hr_read_payload)
 
 
 # ---------------------------------------------------------------------------
-# T-HR-MCP-06: hr.read token calling approve_leave → 401 ERR-MCP-003
+# T-HR-MCP-06: hr_self_rest-only token cannot approve_leave
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_hr_read_token_cannot_approve_leave(rsa_keypair, sign_token, hr_read_payload):
-    """T-HR-MCP-06: Token with only hr.read is rejected by approve_leave (needs hr.write)."""
+    """T-HR-MCP-06: hr_self_rest is rejected by approve_leave → 401 ERR-MCP-003."""
     _, public_jwk = rsa_keypair
     token = sign_token(hr_read_payload)
     app = _build_app(public_jwk)
@@ -369,7 +438,7 @@ async def test_hr_read_token_cannot_approve_leave(rsa_keypair, sign_token, hr_re
 
     resp = client.post(
         "/mcp/tools/approve_leave",
-        json={"leave_id": "LV-004"},
+        json={"leave_id": "LR001"},
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
@@ -453,26 +522,30 @@ async def test_approve_leave_missing_required_field_returns_422(rsa_keypair, sig
 
 
 # ---------------------------------------------------------------------------
-# T-HR-MCP-10: explicit employee_id overrides token.sub
+# T-HR-MCP-10: get_leave_balance auto-registers via store.ensure_user
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_leave_balance_explicit_employee_id(rsa_keypair, sign_token, hr_read_payload):
-    """T-HR-MCP-10: Passing employee_id in body overrides token.sub for data lookup."""
+async def test_get_leave_balance_auto_registers_user(rsa_keypair, sign_token, hr_read_payload):
+    """T-HR-MCP-10: First call seeds the user + default balance via ensure_user.
+
+    Sprint 4 D1 supersedes the legacy ``employee_id``-override behaviour: the
+    body field is ignored; the token's sub + username drive store registration.
+    """
     _, public_jwk = rsa_keypair
+    assert SUBJECT not in _hr_store_mod.users  # autouse fixture cleared the store.
     token = sign_token(hr_read_payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
 
-    # "user-uuid-abc123" has 10 leave days in the canned data
     resp = client.post(
         "/mcp/tools/get_leave_balance",
-        json={"employee_id": "user-uuid-abc123"},
+        json={"employee_id": "ignored-by-design"},
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["employee_id"] == "user-uuid-abc123"
-    assert data["leave_days"] == 10
+    assert data["employee"] == "Probe"
+    assert _hr_store_mod.users[SUBJECT]["name"] == "Probe"

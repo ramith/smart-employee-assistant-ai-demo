@@ -254,3 +254,29 @@ class TestFrozenDataclasses:
         claims = _make_jwt_claims()
         with pytest.raises(dataclasses.FrozenInstanceError):
             claims.jti = "tampered"  # type: ignore[misc]
+
+
+class TestJWTClaimsSprint4Identity:
+    """Sprint 4: JWTClaims gains username/email fields with None defaults."""
+
+    def test_username_email_default_to_none(self) -> None:
+        claims = _make_jwt_claims()
+        assert claims.username is None
+        assert claims.email is None
+
+    def test_username_email_settable(self) -> None:
+        claims = JWTClaims(
+            sub="user-uuid",
+            iss="https://is.example.com/oauth2/token",
+            aud="client-id",
+            exp=9999999999,
+            iat=1700000000,
+            jti="jti-abc",
+            act=None,
+            scope="openid",
+            aut="APPLICATION_USER",
+            username="jane.doe",
+            email="jane.doe@example.com",
+        )
+        assert claims.username == "jane.doe"
+        assert claims.email == "jane.doe@example.com"

@@ -463,3 +463,46 @@ async def test_unknown_kid_raises_err_auth_006(base_payload, base_config, rsa_ke
 
     assert exc_info.value.error_id == "ERR-AUTH-006"
     assert "kid" in exc_info.value.details
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 (security audit F-03): identity claim sanitisation
+# ---------------------------------------------------------------------------
+
+from common.auth.jwt_validator import _sanitise_user_string  # noqa: E402
+
+
+class TestSanitiseUserString:
+    def test_none_returns_none(self) -> None:
+        assert _sanitise_user_string(None, max_len=64) is None
+
+    def test_non_string_returns_none(self) -> None:
+        assert _sanitise_user_string(42, max_len=64) is None
+        assert _sanitise_user_string({"x": 1}, max_len=64) is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert _sanitise_user_string("", max_len=64) is None
+        assert _sanitise_user_string("   ", max_len=64) is None
+
+    def test_clean_string_passes_through(self) -> None:
+        assert _sanitise_user_string("jane.doe", max_len=64) == "jane.doe"
+
+    def test_strips_control_chars(self) -> None:
+        assert _sanitise_user_string("jane\x00doe\x07", max_len=64) == "janedoe"
+
+    def test_strips_newlines_and_carriage_returns(self) -> None:
+        assert _sanitise_user_string("jane\ndoe\r\n", max_len=64) == "janedoe"
+
+    def test_strips_unicode_line_separators(self) -> None:
+        assert _sanitise_user_string("jane doe ", max_len=64) == "janedoe"
+
+    def test_caps_to_max_len(self) -> None:
+        long = "a" * 100
+        assert _sanitise_user_string(long, max_len=64) == "a" * 64
+
+    def test_email_max_len_256(self) -> None:
+        long_email = ("x" * 250) + "@e.com"
+        result = _sanitise_user_string(long_email, max_len=256)
+        assert result is not None
+        assert len(result) == 256
+

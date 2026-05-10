@@ -22,6 +22,27 @@ _SEED_ASSETS: List[Dict] = [
     {"asset_id": "AST-30116", "employee_id": "3110", "type": "headset", "model": "AirPods Pro 2", "status": "returned"},
 ]
 
+# ─── Asset Catalogue (demo: assets available for issuance) ──────────────────
+
+#: Sprint 4 S4.0: relocated here from it_server/mcp/tools.py:_CANNED_ASSET_CATALOGUE
+#: so the MCP tool delegates into the service layer rather than carrying its own
+#: hardcoded data. Keyed by asset_id; consumed by list_available_assets.
+_ASSET_CATALOGUE: List[Dict] = [
+    {"asset_id": "MBP-14-001", "model": "MacBook Pro 14", "type": "laptop", "available_count": 3},
+    {"asset_id": "MBP-16-001", "model": "MacBook Pro 16", "type": "laptop", "available_count": 1},
+    {"asset_id": "MON-LG-001", "model": "LG 27UK850", "type": "monitor", "available_count": 5},
+    {"asset_id": "MON-DEL-001", "model": "Dell UltraSharp 27", "type": "monitor", "available_count": 2},
+    {"asset_id": "PHN-IP15-001", "model": "iPhone 15 Pro", "type": "phone", "available_count": 4},
+]
+
+
+def get_asset_catalogue(asset_type: str | None = None) -> List[Dict]:
+    """Return the asset catalogue, optionally filtered by asset_type."""
+    if asset_type is None:
+        return list(_ASSET_CATALOGUE)
+    return [a for a in _ASSET_CATALOGUE if a["type"] == asset_type]
+
+
 # ─── Mutable In-Memory Stores ────────────────────────────────────────────────
 
 assets: List[Dict] = []

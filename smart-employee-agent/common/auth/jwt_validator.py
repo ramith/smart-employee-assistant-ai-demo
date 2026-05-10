@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -389,10 +390,37 @@ async def validate(
         act=payload.get("act"),
         scope=payload.get("scope"),
         aut=payload.get("aut"),
+        # Sprint 4: read identity claims if present. _sanitise_user_string
+        # strips control chars + Unicode line separators and caps length
+        # (security audit F-03).
+        username=_sanitise_user_string(payload.get("username"), max_len=64),
+        email=_sanitise_user_string(payload.get("email"), max_len=256),
     )
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
+
+
+# Sprint 4 (security audit F-03): identity claim sanitisation.
+# Strips control chars (\x00-\x1F except \t, \n, \r — but \n/\r are removed too
+# because they would inject log-line breaks) and Unicode line/paragraph
+# separators ( / , used in JS injection vectors). Caps length to
+# bound log-line size + UI-render cost. Returns None on absent / non-string
+# input — callers fail-closed if they need a non-None value.
+_USER_STRING_FORBIDDEN = re.compile(r"[\x00-\x1F  ]")
+
+
+def _sanitise_user_string(value: Any, *, max_len: int) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    cleaned = _USER_STRING_FORBIDDEN.sub("", value).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len]
+    return cleaned
 
 
 def _decode_unverified(token: str) -> dict[str, Any]:

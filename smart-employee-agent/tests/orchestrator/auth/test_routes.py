@@ -461,6 +461,14 @@ def test_exchange_happy_path_creates_session_and_cookie() -> None:
     assert isinstance(body["user_label"], str)
     assert len(body["user_label"]) > 0
 
+    # Sprint 4: scopes field exposed for SPA navigation gating.
+    assert "scopes" in body
+    assert isinstance(body["scopes"], list)
+    # Default test fixture token-A has scope="openid orchestrate"; assert
+    # both elements split correctly (canonical "is HR Admin" probe in
+    # production: scopes.includes("hr_approve_rest")).
+    assert "openid" in body["scopes"]
+
     # Session cookie must be set.
     assert "orch_sid" in resp.cookies
     session_id = resp.cookies["orch_sid"]

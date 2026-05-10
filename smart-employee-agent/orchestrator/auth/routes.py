@@ -184,6 +184,11 @@ class ExchangeResponse(BaseModel):
     user_label: str
     session_id: str
     user_display_name: str
+    # Sprint 4: scope set from token-A's `scope` claim. SPA derives
+    # `isHrAdmin = scopes.includes("hr_approve_rest")` for navigation gating
+    # (per docs/architecture/sprint-4.md §3 A3). Server-side authority is
+    # unchanged — every endpoint still enforces scope on its own token check.
+    scopes: list[str] = []
 
 
 class LogoutResponse(BaseModel):
@@ -528,11 +533,16 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             max_age=deps.config.session_ttl_seconds,
         )
 
+        # Sprint 4: derive scope set from token-A for SPA navigation gating.
+        # The `scope` field is a space-separated string per OAuth conventions.
+        scopes_list: list[str] = (result.token_a.scope or "").split()
+
         return ExchangeResponse(
             ok=True,
             user_label=session.user_label,
             session_id=session.session_id,
             user_display_name=session.user_label,
+            scopes=scopes_list,
         )
 
     # ------------------------------------------------------------------

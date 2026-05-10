@@ -76,6 +76,7 @@ for _pkg, _rel in (
     ("it_server", "it_server"),
     ("it_server.auth", "it_server/auth"),
     ("it_server.mcp", "it_server/mcp"),
+    ("it_server.rest_api", "it_server/rest_api"),
 ):
     _ensure_pkg(_pkg, _rel)
 
@@ -153,6 +154,55 @@ _tools_stub.__package__ = "it_server.mcp"
 _tools_stub.build_it_mcp_router = _stub_build_it_mcp_router  # type: ignore[attr-defined]
 _tools_stub.ITMcpToolRouterDeps = _StubITMcpToolRouterDeps  # type: ignore[attr-defined]
 sys.modules["it_server.mcp.tools"] = _tools_stub
+
+# ---------------------------------------------------------------------------
+# Stub it_server.auth.jwt_validator  (bypass pyjwt + httpx import)
+# ---------------------------------------------------------------------------
+
+
+class _MockRestValidator:
+    """Minimal REST validator stub. validate_token() is unreachable here."""
+
+    def __init__(self, audiences: list) -> None:
+        self.audience = audiences
+
+
+def _stub_build_validator_from_config(cfg: object) -> _MockRestValidator:
+    aud = getattr(cfg, "expected_aud", "")
+    return _MockRestValidator(audiences=[aud] if aud else [])
+
+
+_jwt_validator_stub = _types.ModuleType("it_server.auth.jwt_validator")
+_jwt_validator_stub.__package__ = "it_server.auth"
+_jwt_validator_stub.build_validator_from_config = _stub_build_validator_from_config  # type: ignore[attr-defined]
+_jwt_validator_stub.JWTValidator = _MockRestValidator  # type: ignore[attr-defined]
+sys.modules["it_server.auth.jwt_validator"] = _jwt_validator_stub
+
+# ---------------------------------------------------------------------------
+# Stub it_server.rest_api.server  (build_rest_router returns a plain APIRouter)
+# ---------------------------------------------------------------------------
+
+
+def _stub_build_rest_router(deps: object) -> APIRouter:  # noqa: ARG001
+    router = APIRouter()
+
+    @router.get("/health")
+    async def _rest_health() -> dict:
+        return {"status": "ok"}
+
+    return router
+
+
+class _StubITRestRouterDeps:
+    def __init__(self, *, validator: object) -> None:
+        self.validator = validator
+
+
+_rest_stub = _types.ModuleType("it_server.rest_api.server")
+_rest_stub.__package__ = "it_server.rest_api"
+_rest_stub.build_rest_router = _stub_build_rest_router  # type: ignore[attr-defined]
+_rest_stub.ITRestRouterDeps = _StubITRestRouterDeps  # type: ignore[attr-defined]
+sys.modules["it_server.rest_api.server"] = _rest_stub
 
 # ---------------------------------------------------------------------------
 # NOW load main.py  (its imports are satisfied by stubs above)

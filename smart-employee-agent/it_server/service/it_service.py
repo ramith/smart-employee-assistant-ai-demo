@@ -55,3 +55,22 @@ def get_employee_assets(
 
 def get_asset_by_id(asset_id: str) -> Optional[dict]:
     return store.get_asset_by_id(asset_id)
+
+
+def list_available_assets(asset_type: Optional[str] = None) -> list:
+    """Return the asset catalogue, optionally filtered by type.
+
+    Sprint 4 S4.0: replaces it_server/mcp/tools.py:_CANNED_ASSET_CATALOGUE;
+    catalogue data lives in store._ASSET_CATALOGUE and is reachable here.
+    """
+    return store.get_asset_catalogue(asset_type)
+
+
+def get_assigned_assets(employee_id: str) -> list:
+    """Return assets currently assigned to an employee (no pagination).
+
+    Sprint 4 S4.0: replaces _CANNED_ASSIGNED_ASSETS[sub] lookup in
+    it_server/mcp/tools.py. Employee_id keying is preserved here per
+    Stage 6.5 D8 — the rename to username is deferred to S4.2 (UC-12).
+    """
+    return store.get_assets_for_employee(employee_id)

@@ -64,3 +64,16 @@ Sprint 1 = orchestrator + 2 specialist agents + per-agent CIBA + serial fan-out 
 |---|---|---|---|---|
 | [UC-09](UC-09-logout-cascade.md) | User signs out (logout cascade) | Critical | Sprint 3 Act II | written; **Sprint 3 build** |
 | [UC-10](UC-10-admin-terminate.md) | Admin terminates user session via IS Console | High | Sprint 3 Act III | written; **Sprint 3B build**; gated on F-20 verification |
+
+## Sprint 4 UCs (business pivot)
+
+Stage 3 sprint plan: [`docs/architecture/sprint-4.md`](../architecture/sprint-4.md). Identity model: `username` + `email` claims (no `employee_id`, see sprint-4.md §7). Reporting data flow: orchestrator-proxied (sprint-4.md §8).
+
+| ID | Name | Priority | Build status | Status |
+|---|---|---|---|---|
+| [UC-11](UC-11-hr-admin-assigns-cubicle.md) | HR Admin assigns cubicle (multi-turn, 4 floors) | Critical | NEW (data model + 4 MCP tools + 1 new scope `hr_assets_write_rest`) | written |
+| [UC-12](UC-12-employee-self-service-asset-discovery.md) | Employee self-service asset discovery | Critical | NEW (1 new scope `it_assets_self_rest`) | written |
+| [UC-13](UC-13-employee-applies-for-leave.md) | Employee applies for leave | High | hybrid (backend Sprint 1; My Leaves panel NEW) | written |
+| [UC-14](UC-14-employee-checks-own-leave-status.md) | Employee checks own leave status | High | hybrid (backend Sprint 1; panel shared with UC-13) | written |
+| [UC-15](UC-15-hr-admin-pending-leaves-table.md) | HR Admin pending-leaves table | High | hybrid (backend exists, Reports tab NEW) | written |
+| [UC-16](UC-16-hr-admin-assignment-reporting-tables.md) | HR Admin cubicle + device reporting tables | High | NEW | written |

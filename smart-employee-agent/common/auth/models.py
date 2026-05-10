@@ -91,6 +91,11 @@ class JWTClaims:
     act: dict[str, Any] | None  # RFC 8693 actor claim; may be nested
     scope: str | None
     aut: str | None        # WSO2 IS application user type, e.g. "APPLICATION_USER"
+    # Sprint 4: identity surfaces for username/email-keyed business logic.
+    # Both nullable — internal/system tokens (e.g. client_credentials) carry
+    # neither; user-bearing tokens (token-A, token-C) should carry both.
+    username: str | None = None
+    email: str | None = None
 
     def act_chain(self) -> list[str]:
         """Return actor sub values from outermost to innermost by walking nested act claims.

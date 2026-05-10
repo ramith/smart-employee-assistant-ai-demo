@@ -110,7 +110,7 @@ build_it_mcp_router = _it_tools_mod.build_it_mcp_router
 ISSUER = "https://api.asgardeo.io/t/ddademo/oauth2/token"
 IT_AGENT_CLIENT_ID = "it_agent-oauth-client-uuid"
 IT_AGENT_UUID = "it_agent-identity-uuid-0001"
-SUBJECT = "probe.user"
+SUBJECT = "1042"  # Sprint 4 S4.0: matches store._SEED_ASSETS employee_id; 2 assigned
 JTI = "jti-it-mcp-test-001"
 REQUEST_ID = "req-test-uuid-it-001"
 
@@ -272,9 +272,11 @@ async def test_get_my_assets_returns_user_assets(rsa_keypair, sign_token, it_rea
     data = resp.json()
     assert data["employee_id"] == SUBJECT
     assert isinstance(data["assets"], list)
-    assert len(data["assets"]) == 2  # probe.user has 2 canned assets
+    assert len(data["assets"]) == 2  # employee 1042 has 2 seeded assets (laptop + phone)
     asset_ids = {a["asset_id"] for a in data["assets"]}
-    assert "MBP-14-002" in asset_ids
+    assert "AST-12345" in asset_ids
+    # Sprint 4 S4.0: shape now carries status (was assigned_since pre-S4.0)
+    assert all("status" in a for a in data["assets"])
 
 
 # ---------------------------------------------------------------------------
@@ -472,18 +474,19 @@ async def test_get_my_assets_explicit_employee_id(rsa_keypair, sign_token, it_re
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
 
-    # user-uuid-abc123 has 1 canned asset (MBP-16-002)
+    # Sprint 4 S4.0: store seed has employee 2017 with 2 assets (laptop AST-22001 + monitor AST-22002).
     resp = client.post(
         "/mcp/tools/get_my_assets",
-        json={"employee_id": "user-uuid-abc123"},
+        json={"employee_id": "2017"},
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["employee_id"] == "user-uuid-abc123"
-    assert len(data["assets"]) == 1
-    assert data["assets"][0]["asset_id"] == "MBP-16-002"
+    assert data["employee_id"] == "2017"
+    assert len(data["assets"]) == 2
+    asset_ids = {a["asset_id"] for a in data["assets"]}
+    assert "AST-22001" in asset_ids
 
 
 # ---------------------------------------------------------------------------

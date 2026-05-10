@@ -1,9 +1,10 @@
-"""IT-server MCP tool endpoints — Sprint 1 Wave 6.
+"""IT-server MCP tool endpoints — Sprint 1 Wave 6 (Sprint 4 S4.0 reconciliation).
 
-Exposes two FastAPI POST endpoints under ``/mcp/tools/``:
+Exposes FastAPI POST endpoints under ``/mcp/tools/``:
 
     POST /mcp/tools/list_available_assets   scope: it_assets_read_rest
     POST /mcp/tools/get_my_assets           scope: it_assets_read_rest
+    POST /mcp/tools/issue_asset             scope: it_assets_write_rest
 
 Each handler:
   1. Extracts a Bearer token from the ``Authorization`` header.
@@ -13,10 +14,13 @@ Each handler:
      the full F-04 six-step check (sig, iss, exp, aud, act.sub, scope).
   4. On ``JWTValidationError``, ``PeerTrustError``, or ``ScopeError``: raises
      ``HTTPException(401)`` whose ``detail`` dict is ``{"error_id": ..., "request_id": ...}``.
-  5. On success: looks up canned data via ``claims.sub`` and returns a typed
-     Pydantic response.
+  5. On success: delegates into ``it_server.service.it_service`` and returns a
+     typed Pydantic response.
 
-Sprint 1 uses hardcoded canned data.  Sprint 2 may swap in a real ``ITDataStore``.
+Sprint 4 S4.0 (Stage 6.5 D1): the previous ``_CANNED_*`` dicts have been replaced
+by ``it_service.list_available_assets()`` / ``get_assigned_assets()`` so this
+module is no longer the source of truth for any data. The ``employee_id``-keyed
+shape is preserved per Stage 6.5 D8 — rename to ``username`` is deferred to S4.2.
 """
 
 from __future__ import annotations
@@ -55,44 +59,14 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Canned data (Sprint 1 — no DB)
+# Service delegation (Sprint 4 S4.0 — Stage 6.5 D1)
 # ---------------------------------------------------------------------------
-
-#: Asset catalogue available for request.
-_CANNED_ASSET_CATALOGUE: list[dict] = [
-    {"asset_id": "MBP-14-001", "model": "MacBook Pro 14", "type": "laptop", "available_count": 3},
-    {"asset_id": "MBP-16-001", "model": "MacBook Pro 16", "type": "laptop", "available_count": 1},
-    {"asset_id": "MON-LG-001", "model": "LG 27UK850", "type": "monitor", "available_count": 5},
-    {"asset_id": "MON-DEL-001", "model": "Dell UltraSharp 27", "type": "monitor", "available_count": 2},
-    {"asset_id": "PHN-IP15-001", "model": "iPhone 15 Pro", "type": "phone", "available_count": 4},
-]
-
-#: Assets assigned to each employee, keyed by ``sub``.
-_CANNED_ASSIGNED_ASSETS: dict[str, list[dict]] = {
-    "probe.user": [
-        {
-            "asset_id": "MBP-14-002",
-            "model": "MacBook Pro 14",
-            "type": "laptop",
-            "assigned_since": "2025-09-01",
-        },
-        {
-            "asset_id": "MON-LG-002",
-            "model": "LG 27UK850",
-            "type": "monitor",
-            "assigned_since": "2025-09-01",
-        },
-    ],
-    "user-uuid-abc123": [
-        {
-            "asset_id": "MBP-16-002",
-            "model": "MacBook Pro 16",
-            "type": "laptop",
-            "assigned_since": "2025-11-15",
-        },
-    ],
-    "default": [],
-}
+# The previous _CANNED_* dicts were inlined Sprint 1 stop-gaps. Sprint 4 routes
+# every read through it_server.service.it_service, which reads from
+# it_server.service.store. The store still keys by ``employee_id`` (rename to
+# ``username`` is deferred to S4.2 — Stage 6.5 D8), so the MCP tool args + this
+# module's request models keep ``employee_id`` for now.
+from it_server.service import it_service  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +113,17 @@ class GetMyAssetsArgs(BaseModel):
 
 
 class AssignedAsset(BaseModel):
-    """A single asset assigned to an employee."""
+    """A single asset assigned to an employee.
+
+    Sprint 4 S4.0: shape now matches ``it_server.service.store._SEED_ASSETS``:
+    ``{asset_id, type, model, status}``. The earlier Sprint 1 ``assigned_since``
+    field was a canned-data artefact; the seed store does not carry it.
+    """
 
     asset_id: str
     model: str
     type: str
-    assigned_since: str  # ISO-8601 date
+    status: str  # outstanding | returned
 
 
 class GetMyAssetsResult(BaseModel):
@@ -302,10 +281,7 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
             body.asset_type,
         )
 
-        catalogue = _CANNED_ASSET_CATALOGUE
-        if body.asset_type is not None:
-            catalogue = [a for a in catalogue if a["type"] == body.asset_type]
-
+        catalogue = it_service.list_available_assets(body.asset_type)
         return ListAvailableAssetsResult(
             assets=[AssetEntry(**a) for a in catalogue],
         )
@@ -366,13 +342,18 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         )
 
         employee_id = body.employee_id or claims.sub
-        raw_assets = (
-            _CANNED_ASSIGNED_ASSETS.get(employee_id)
-            or _CANNED_ASSIGNED_ASSETS["default"]
-        )
+        raw_assets = it_service.get_assigned_assets(employee_id)
         return GetMyAssetsResult(
             employee_id=employee_id,
-            assets=[AssignedAsset(**a) for a in raw_assets],
+            assets=[
+                AssignedAsset(
+                    asset_id=a["asset_id"],
+                    model=a["model"],
+                    type=a["type"],
+                    status=a["status"],
+                )
+                for a in raw_assets
+            ],
         )
 
     # ── issue_asset (HR Admin write path; D2.8) ────────────────────────────────

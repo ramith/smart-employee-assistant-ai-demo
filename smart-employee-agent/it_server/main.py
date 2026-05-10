@@ -33,9 +33,11 @@ from fastapi import FastAPI
 from common.logging.correlation import CorrelationIdMiddleware, install_logging
 from common.logging.redaction import RedactionFilter
 from common.revocation import RevocationState, build_internal_events_router
+from it_server.auth.jwt_validator import build_validator_from_config
 from it_server.auth.validators import ITServerTokenValidator
 from it_server.config import ITServerConfig
 from it_server.mcp.tools import ITMcpToolRouterDeps, build_it_mcp_router
+from it_server.rest_api.server import ITRestRouterDeps, build_rest_router
 
 __all__ = ["create_app", "main"]
 
@@ -111,6 +113,14 @@ def create_app(config: ITServerConfig | None = None) -> FastAPI:
         build_it_mcp_router(ITMcpToolRouterDeps(validator=validator)),
         prefix="/mcp/tools",
     )
+
+    # Sprint 4 S4.0: REST router. Distinct validator instance — REST tokens
+    # carry SPA / orchestrator-MCP audiences (audience-list capable, capped
+    # at ≤3 entries by F-01); MCP-tool path stays strict on the existing
+    # ITServerTokenValidator above. Audience list logged at INFO during
+    # build_validator_from_config().
+    rest_validator = build_validator_from_config(cfg)
+    app.include_router(build_rest_router(ITRestRouterDeps(validator=rest_validator)))
 
     # 3A.2: /internal/events receiver. Servers don't need a per-jti cache
     # eviction callback (no _CachedToken on the server), so on_revoke=None.

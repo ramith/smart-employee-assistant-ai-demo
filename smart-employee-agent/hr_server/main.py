@@ -1,21 +1,39 @@
-"""HR-server FastAPI application entry point — Sprint 1 Wave 8.
+"""HR-server FastAPI application entry point — Sprint 1 Wave 8 / Sprint 4 S4.0.
 
 Wires together:
   - ``HRServerConfig``       (Wave 4) — env-var driven frozen config.
-  - ``HRServerTokenValidator`` (Wave 5) — F-04 six-step token validation.
+  - ``HRServerTokenValidator`` (Wave 5) — F-04 six-step token validation
+    (MCP-tool path; strict single-aud).
+  - ``JWTValidator``         (Sprint 4 S4.0 Track B) — REST-path validator
+    that accepts a configurable audience list (capped at <=3 per security
+    audit F-01); used by ``/api/...`` endpoints from the SPA + reporting
+    proxies.
   - ``build_hr_mcp_router``  (Wave 6) — three MCP tool endpoints.
+  - ``build_rest_router``    (Sprint 4 S4.0 Track B) — REST surfaces.
   - ``CorrelationIdMiddleware`` / ``install_logging`` (common) — F-13 / F-16.
   - ``RedactionFilter``      (common) — F-11 log redaction.
 
 Route inventory (all under /mcp/tools/):
-  POST /mcp/tools/get_leave_balance    scope: hr.read
-  POST /mcp/tools/get_leave_history    scope: hr.read
-  POST /mcp/tools/approve_leave        scope: hr.write
+  POST /mcp/tools/get_leave_balance    scope: hr_self_rest
+  POST /mcp/tools/get_leave_history    scope: hr_self_rest
+  POST /mcp/tools/approve_leave        scope: hr_approve_rest
   GET  /healthz                        unauthenticated liveness probe
+
+REST surfaces (delivered by ``rest_api.server.build_rest_router``):
+  GET  /api/holidays                   scope: hr_basic_rest
+  GET  /api/leave-policy               scope: hr_basic_rest
+  GET  /api/leave-balance              scope: hr_self_rest
+  GET  /api/leaves                     scope: hr_self_rest|hr_read_rest
+  GET  /api/leaves/{id}                scope: hr_self_rest|hr_read_rest
+  POST /api/leaves                     scope: hr_self_rest
+  POST /api/leaves/{id}/approve        scope: hr_approve_rest
+  POST /api/leaves/{id}/reject         scope: hr_approve_rest
+  POST /reset                          scope: hr_approve_rest|hr_approve_mcp
 
 F-15 / N28: ``validator.log_startup_assertion()`` fires during ``create_app()``
 so the ``expected_aud`` value is visible in the startup log before any token
-arrives.
+arrives. Sprint 4 S4.0 adds a parallel REST validator startup log enumerating
+the configured audience list (security audit F-01 transparency).
 """
 
 from __future__ import annotations
@@ -31,11 +49,65 @@ from fastapi import FastAPI
 from common.logging.correlation import CorrelationIdMiddleware, install_logging
 from common.logging.redaction import RedactionFilter
 from common.revocation import RevocationState, build_internal_events_router
+from hr_server.auth.jwt_validator import JWTValidator
 from hr_server.auth.validators import HRServerTokenValidator
 from hr_server.config import HRServerConfig
 from hr_server.mcp.tools import HRMcpToolRouterDeps, build_hr_mcp_router
+from hr_server.rest_api.server import RestApiDeps, build_rest_router
 
 __all__ = ["create_app", "main"]
+
+# Sprint 4 S4.0 (Track B, security audit F-01): the REST validator's audience
+# list is capped at this many entries. Three is enough for the demo's
+# expected pattern: HR-server's own client ID + orchestrator client ID + SPA
+# client ID. Anything beyond that is a misconfiguration and is failed-closed.
+_MAX_REST_AUDIENCES = 3
+
+
+def _resolve_rest_audiences(cfg: HRServerConfig, environ: dict[str, str] | None = None) -> list[str]:
+    """Build the audience list for the REST validator with cap enforcement.
+
+    Reads ``HR_SERVER_REST_VALID_AUDIENCES`` (comma-separated). Default is
+    ``[cfg.expected_aud]``. Extra entries are appended in order; duplicates
+    against ``cfg.expected_aud`` are de-duplicated. The list is capped at
+    ``_MAX_REST_AUDIENCES`` — exceeding the cap raises at startup so a
+    misconfigured env var can never silently widen token acceptance.
+
+    Args:
+        cfg: Validated HR Server config (gives ``expected_aud`` floor).
+        environ: Optional override for tests; falls back to ``os.environ``.
+
+    Returns:
+        The deduplicated, capped audience list ready for ``JWTValidator``.
+
+    Raises:
+        ValueError: When the resolved list exceeds the cap (F-01).
+    """
+    env = environ if environ is not None else dict(os.environ)
+    raw = env.get("HR_SERVER_REST_VALID_AUDIENCES", "").strip()
+    extras = [piece.strip() for piece in raw.split(",") if piece.strip()] if raw else []
+
+    audiences: list[str] = [cfg.expected_aud]
+    for extra in extras:
+        if extra not in audiences:
+            audiences.append(extra)
+
+    if len(audiences) > _MAX_REST_AUDIENCES:
+        # F-01 fail-closed: log + raise. The startup log surface this as ERROR
+        # so SIEM has a single grep target.
+        logging.getLogger(__name__).error(
+            "rest_validator.startup audience_cap_exceeded count=%d cap=%d audiences=%r",
+            len(audiences),
+            _MAX_REST_AUDIENCES,
+            audiences,
+        )
+        raise ValueError(
+            f"HR_SERVER_REST_VALID_AUDIENCES would yield {len(audiences)} audiences "
+            f"(cap={_MAX_REST_AUDIENCES}). Refuse to start. "
+            "Reduce the env-var entries; security audit F-01 caps the list."
+        )
+
+    return audiences
 
 
 def create_app(config: HRServerConfig | None = None) -> FastAPI:
@@ -82,6 +154,23 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
     # target: "denylist_enforcement=off" → wiring regression.
     validator.log_startup_assertion()
 
+    # ── Sprint 4 S4.0 Track B: REST validator with audience-list cap. ────
+    rest_audiences = _resolve_rest_audiences(cfg)
+    rest_validator = JWTValidator(
+        jwks_url=cfg.is_jwks_url,
+        issuer=cfg.is_issuer,
+        audience=rest_audiences,
+        ssl_verify=not cfg.is_insecure_tls,
+    )
+    # F-01 transparency: emit one INFO line enumerating every accepted
+    # audience. SIEM grep target: "rest_validator.startup expected_audiences=".
+    logging.getLogger(__name__).info(
+        "rest_validator.startup expected_audiences=%r count=%d cap=%d",
+        rest_audiences,
+        len(rest_audiences),
+        _MAX_REST_AUDIENCES,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
         # Mid-sprint fix #3 (2026-05-09): pre-warm the JWKS cache so the first
@@ -111,6 +200,11 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
         build_hr_mcp_router(HRMcpToolRouterDeps(validator=validator)),
         prefix="/mcp/tools",
     )
+
+    # Sprint 4 S4.0 Track B: mount the REST surfaces. The router uses the
+    # audience-cap-aware validator so the SPA/orchestrator can call us with
+    # token-A or OBO tokens. Strict-aud MCP path stays on /mcp/tools/.
+    app.include_router(build_rest_router(RestApiDeps(validator=rest_validator)))
 
     # 3A.2: /internal/events receiver. Servers don't need a per-jti cache
     # eviction callback (no _CachedToken on the server), so on_revoke=None.

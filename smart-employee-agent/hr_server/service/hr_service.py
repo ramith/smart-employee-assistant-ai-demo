@@ -11,7 +11,11 @@
 from datetime import date as dt_date
 from typing import Dict, List, Optional
 
-from service import store
+# Sprint 4 S4.0 (Track B): runtime reconciliation. The previous orphan-state
+# `from service import store` only resolved when the cwd was hr_server/; under
+# proper package wiring (hr_server.main mounting the rest router), the
+# fully-qualified package path is required.
+from hr_server.service import store
 
 
 # ─── hr_basic ───────────────────────────────────────────────────────────────
