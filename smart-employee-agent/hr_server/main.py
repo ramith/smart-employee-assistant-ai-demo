@@ -65,9 +65,11 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
     install_logging(level="INFO")
     logging.getLogger().addFilter(RedactionFilter())
 
-    # Build validator; emit F-15 startup log (expected_aud + trusted_act_subs).
+    # Build validator. Startup assertion is deferred until AFTER
+    # ``attach_revocation()`` below so the F-15 line carries
+    # ``denylist_enforcement=on`` and the absence-warning fires here only if
+    # the wiring was somehow skipped.
     validator = HRServerTokenValidator.from_config(cfg)
-    validator.log_startup_assertion()  # F-15 / N28
 
     # 3A.2/3A.3: revocation state. The receiver (mounted below) populates
     # the denylist via /internal/events fan-out from the orchestrator's
@@ -75,6 +77,10 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
     # denylist on every MCP tool call as Step 7 of validate_token().
     revocation = RevocationState()
     validator.attach_revocation(revocation)
+
+    # F-15 / N28 — emitted now so denylist_enforcement is captured. SIEM grep
+    # target: "denylist_enforcement=off" → wiring regression.
+    validator.log_startup_assertion()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001

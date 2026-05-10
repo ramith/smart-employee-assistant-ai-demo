@@ -31,6 +31,7 @@ from common.auth.errors import JWTValidationError, PeerTrustError, ScopeError
 from common.auth.jwt_validator import JWKSCache, ValidatorConfig, validate
 from common.auth.models import JWTClaims
 from common.auth.peer_trust import validate_chain
+from common.revocation import RevocationState
 
 logger = logging.getLogger(__name__)
 
@@ -123,9 +124,9 @@ class HRServerTokenValidator:
         # Sprint 3 3A.3: revocation state (Step 7 denylist enforcement).
         # Wired in via ``attach_revocation()`` from hr_server/main.py lifespan.
         # ``None`` means denylist enforcement is a no-op (test fakes / pre-3A.3
-        # callers); production must call attach_revocation at startup.
-        from common.revocation import RevocationState as _RS  # avoid cycle
-        self._revocation: _RS | None = None
+        # callers); production must call attach_revocation at startup —
+        # ``log_startup_assertion()`` fails closed if it didn't.
+        self._revocation: RevocationState | None = None
         # Build the lower-level ValidatorConfig used by jwt_validator.validate().
         # Steps 1-4 (sig, iss, exp, aud) are enforced here; scope enforcement is
         # done separately in step 6 so we can raise the richer ScopeError.
@@ -139,7 +140,7 @@ class HRServerTokenValidator:
 
     # ── Sprint 3 3A.3: revocation hooks ───────────────────────────────────────
 
-    def attach_revocation(self, state) -> None:  # type: ignore[no-untyped-def]
+    def attach_revocation(self, state: RevocationState) -> None:
         """Wire a ``common.revocation.RevocationState`` into the validator.
 
         Called once from ``hr_server/main.py`` lifespan startup. After this,
@@ -333,15 +334,35 @@ class HRServerTokenValidator:
         Format::
 
             token_validator.startup expected_aud=<...> trusted_act_subs=<...>
+            denylist_enforcement=<on|off>
 
         This log line is emitted during service startup so that operators can
         immediately verify the loaded ``expected_aud`` matches the env var
         ``HR_AGENT_OAUTH_CLIENT_ID`` without needing to intercept a live
         token.  When the loaded value diverges from the env var the discrepancy
         is visible in the startup log before any token arrives.
+
+        Sprint 3 3A.3 addendum: also surface whether ``attach_revocation()``
+        was called before startup. ``denylist_enforcement=off`` in production
+        means token-B replay after sign-out is silently allowed — see
+        ``project_introspection_deferred.md`` for why this is the only
+        revocation primitive on the OBO path. The line emits regardless of
+        wiring; the explicit ``on`` / ``off`` is the alarmable signal.
         """
+        denylist_enforcement = "on" if self._revocation is not None else "off"
         logger.info(
-            _STARTUP_LOG_FORMAT,
+            _STARTUP_LOG_FORMAT + " denylist_enforcement=%s",
             self._config.expected_aud,
             self._config.trusted_act_subs,
+            denylist_enforcement,
         )
+        if self._revocation is None:
+            # Production path attaches revocation before this is called; if it
+            # didn't, captured token-B replay after sign-out goes through —
+            # the demo wedge is broken. SIEM should alert on this line.
+            logger.warning(
+                "token_validator.startup denylist_enforcement=off — "
+                "captured-token replay after sign-out will NOT be rejected. "
+                "attach_revocation() was not invoked before log_startup_assertion(). "
+                "Expected only in unit-test environments."
+            )
