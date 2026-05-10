@@ -14,8 +14,33 @@ event end-to-end:
      ``/backchannel-logout`` endpoint.
 
 This is a manual-verify aid only. It is NOT a production substitute
-for IS firing the event itself; it just proves our receiver and cascade
-work for an audience.
+for IS firing the event itself; it just proves our **receiver primitive**
+works (validator + dedup + sub/sid resolution + cascade ordering). It
+does NOT prove IS-side session-walk fan-out — that gap is documented in
+the demo runbook so the audience doesn't infer end-to-end IS→cascade.
+
+──────────────────────────────────────────────────────────────────────
+SECURITY — read before extracting the key
+──────────────────────────────────────────────────────────────────────
+The PEM you extract below is the **same key that signs every JWT WSO2
+IS issues** — id_tokens, access_tokens, logout_tokens, all of them.
+Leakage = full IdP key compromise, not just BCL-scoped.
+
+  * Storage: write only to ``./_local/`` (gitignored) or ``/tmp/`` with
+    mode 0600. Never elsewhere in the repo.
+  * Lifetime: delete after the demo session ends, not at end of sprint.
+    Run ``scripts/scrub-bcl-key.sh`` for a multi-pass overwrite +
+    unlink. There is no operational reason to persist this PEM.
+  * Logging: this script never echoes PEM content; ``--print-only`` only
+    prints the *signed token*, not the key. Even the token is
+    short-lived but live-signed — don't paste output into chat tools
+    without redaction.
+  * Transport: ``scp`` only. Never email / Slack / clipboard managers
+    that sync.
+  * Rotation if leaked: treat as full IdP key compromise. On the IS VM,
+    rotate ``wso2carbon`` keystore (``keytool -genkeypair``), restart
+    IS, re-prewarm JWKS on every receiver, force re-login of every
+    user. Do not treat this as a casual demo artefact.
 
 How to extract the IS signing key from the AWS VM keystore::
 
@@ -28,13 +53,20 @@ How to extract the IS signing key from the AWS VM keystore::
         -destkeypass wso2carbon
     openssl pkcs12 -in wso2carbon.p12 -nodes -nocerts \\
         -out /tmp/wso2_private.pem -passin pass:wso2carbon
+    chmod 600 /tmp/wso2_private.pem
 
-    # scp /tmp/wso2_private.pem to your laptop, then:
+    # scp /tmp/wso2_private.pem to your laptop's gitignored ./_local/, then:
+
+    mkdir -p ./_local && chmod 700 ./_local
+    scp aws-vm:/tmp/wso2_private.pem ./_local/wso2_private.pem
+    chmod 600 ./_local/wso2_private.pem
 
     python3 scripts/synth-bcl.py \\
-        --key wso2_private.pem \\
-        --sub <user-uuid-from-token-b> \\
-        --orchestrator http://localhost:8090
+        --key ./_local/wso2_private.pem \\
+        --sub <user-uuid-from-token-b>
+
+    # When done with the demo:
+    ./scripts/scrub-bcl-key.sh
 
 Defaults match the POC config (issuer, aud, orchestrator URL); override
 via flags for any environment.
