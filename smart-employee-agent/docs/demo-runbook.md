@@ -181,6 +181,101 @@ For the demo, point the audience at one IS audit row and the matching
 
 ---
 
+## UC-09 — User-initiated sign-out cascade (Sprint 3 D3.1)
+
+**Story:** "Captured token-B works while you're signed in. The moment you sign out, the orchestrator cancels in-flight consents, revokes token-A at IS, and pushes the jti to a denylist on every receiver. Replay the same captured token-B at hr_server — 401 ERR-MCP-002. The cascade is the only revocation primitive that fires for OBO tokens; F-21 confirmed at IS source that revoke-at-IS doesn't propagate to children." (See `docs/spikes/sprint-3-is-source-analysis.md` for the source-code receipts.)
+
+**Wall-clock target:** <90 seconds end-to-end including IS consent screen.
+
+### Pre-flight (do this once, before demo opens)
+
+```bash
+# 1. All five services on the same INTERNAL_REVOKE_SHARED_SECRET. Stale values
+#    from a prior shell session are the #1 cause of phantom fan-out failures.
+for s in orchestrator hr_agent hr_server it_agent it_server; do
+  echo -n "$s: "; docker compose exec $s printenv INTERNAL_REVOKE_SHARED_SECRET | head -c 8; echo
+done
+# All five 8-char prefixes MUST match. If they don't, see "secret drift" below.
+
+# 2. Both MCP servers report denylist_enforcement=on at startup.
+docker compose logs hr_server it_server | grep "denylist_enforcement="
+# Expected: "...denylist_enforcement=on" on both.
+# "denylist_enforcement=off" → wiring regression; do NOT demo.
+
+# 3. IS reachable.
+curl -skI https://13.60.190.47:9443/ | head -1
+# Expected: "HTTP/1.1 401" (root requires auth — TLS+server is up, that's all we need).
+```
+
+### Walkthrough
+
+| Step | Audience sees | Operator action |
+|---|---|---|
+| 1 | Sign-in page | Open `http://localhost:8090/`, click Sign in, complete IS auth |
+| 2 | Empty chat | Type *"What's my leave balance?"*, press Enter |
+| 3 | Consent widget on phone/authenticator | Approve |
+| 4 | "Your leave balance is 14 days." | (audience now believes the system works) |
+| 5 | "Signed out. Agent sessions cleared." banner | Click **Sign out** → IS consent → confirm |
+| 6 | (terminal — see below) | Operator runs the captured-token replay |
+| 7 | (terminal — see below) | Operator shows the rid trace across services |
+
+### Step 6 — captured-token replay (the wedge)
+
+Pre-stage this in a second terminal *before* the demo opens. Drop a stale token-B into `/tmp/tokenb.txt`. Or capture one live by setting `DEBUG_DUMP_TOKEN_B=1` on `hr_agent` (gated env var the dispatcher checks; see Sprint 3 internal). For the talking-track moment, all that matters is that it's a real token-B previously minted for this user.
+
+```bash
+# Same captured token used in Step 4 above. Audience knows it just worked.
+TOKEN_B=$(cat /tmp/tokenb.txt)
+curl -i -X POST http://127.0.0.1:8000/mcp/tools/get_leave_balance \
+  -H "Authorization: Bearer $TOKEN_B" \
+  -H "Content-Type: application/json" \
+  -H "X-Request-ID: r-logout-5-demo" \
+  -d '{"employee_id":"<sub-from-token>"}'
+```
+
+**Expected:**
+```
+HTTP/1.1 401 Unauthorized
+{"detail":{"error_id":"ERR-MCP-002","request_id":"r-logout-5-demo"}}
+```
+
+**The talking point:** 401 with `ERR-MCP-002` reason `denylist_hit`. The token is structurally valid — F-04 steps 1–6 all pass — but Step 7 (denylist) rejects it. Confirm in logs:
+
+```bash
+docker compose logs --since 30s hr_server | grep "denylist_hit"
+# Expected: "hr_validator_denylist_hit jti=<...> sub=<...> — rejecting (Sprint 3 3A.3)"
+```
+
+### Step 7 — show the trace
+
+For Q&A: prove the cascade actually went out to all four receivers using the same `rid`.
+
+```bash
+# List recent logout rids:
+./tools/grep-trace.sh
+
+# Pick the one from your sign-out (most recent), then:
+./tools/grep-trace.sh logout-<id>
+# Output ends with a hop-coverage table — all five rows (orchestrator + 4
+# receivers) should be ✓.
+```
+
+### Failure modes and what to say
+
+| Symptom | Likely cause | Operator move |
+|---|---|---|
+| `denylist_enforcement=off` at startup | `attach_revocation()` regression | Stop. Don't demo this build. |
+| Cascade `logout_fanout_partial` with `body='{"detail":"invalid_secret"}'` on some legs | Secret drift across containers | Recreate all five containers in one pass: `docker compose up -d --force-recreate orchestrator hr_agent hr_server it_agent it_server`. Re-verify with the pre-flight loop. |
+| Replay returns 200 instead of 401 | Cascade fan-out skipped (e.g. orchestrator session had no `completed_ciba_log` because cache served the request without minting) | Restart `hr_agent` to wipe its in-memory token cache, re-do the chat to force a real CIBA, retry the cascade. |
+| Replay returns 401 with a different `error_id` (e.g. `ERR-AUTH-006`) | Token-B expired or signature key rotated since capture | Re-capture a fresh token-B and retry. Talking point still works — the demo just isn't showing the *denylist* wedge specifically. |
+| `SECURITY-DEGRADED` line in orchestrator logs | All-legs fan-out failure | Acknowledge it: "this is the row that fires when the orchestrator can't reach any receiver — same as a network partition. The receivers themselves never lower their guard, the cascade just couldn't push the new revocation. We log + alert; see `R-LOGOUT-7b`." |
+
+### Why the GUI is intentionally minimal
+
+The audience for this demo is IAM-literate. The SPA shows one tasteful confirmation (*"Signed out. Agent sessions cleared."*) — no fan-out animation, no jti display, no `denylist_enforcement=on` indicator. The technical receipts (curl 401, `grep-trace.sh` hop coverage) live in operator terminal where they belong. That's the design: informative without narrating.
+
+---
+
 ## Tear down
 
 ```bash

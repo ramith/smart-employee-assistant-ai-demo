@@ -21,7 +21,7 @@ const COPY = {
   signinHelper: "You will be redirected to your identity provider.",
   signinCertHint: 'First time? Your browser may show a certificate warning for the development identity server. Choose "Advanced" then "Proceed".',
   sessionExpired: "Your session has expired. Sign in again to continue.",
-  signedOut: "You have been signed out.",
+  signedOut: "Signed out. Agent sessions cleared.",  // 3A.4: confirms the cascade ran without listing receivers / jtis
   consentDeniedAtIs: "You did not approve the delegation. Sign in and approve to continue, or contact your administrator.",
   stateMismatch: "The sign-in flow could not be completed. Please try again.",
   configError: "Sign-in is temporarily unavailable. Please contact your administrator.",
@@ -500,6 +500,9 @@ function showSigninNotice(text, autoDismiss = false) {
   const el = $("signin-notice");
   el.textContent = text;
   el.hidden = false;
+  // 3A.4 NIT-8: announce on the polite live region so screen readers pick up
+  // sign-out / session-expired banners that otherwise appear silently.
+  announce(text, "polite");
   if (autoDismiss) {
     setTimeout(() => { el.hidden = true; }, 5000);
   }

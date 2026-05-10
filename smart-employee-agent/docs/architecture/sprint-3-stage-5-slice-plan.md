@@ -144,20 +144,28 @@ This is the implementation-ready slice plan. After Stage 5 lock, Stage 6 impleme
 
 ### 3A.4 — UC-09 demo polish (½ day, Day 5 morning)
 
-**Goal:** the 90-second demo storyboard runs cleanly. UC-09 fully green.
+**Locked 2026-05-10 with reframed scope** — this POC will not ship to production any time soon, and the audience is IAM-literate. Goal is therefore to be **informative without being patronising or noisy**: GUI carries one tasteful confirmation, the technical receipts (captured-token replay, rid trace) live in operator terminal during the demo. No production-mode plumbing.
 
-**Files touched:**
-- [`client/app.js`](../../client/app.js) / [`client/styles.css`](../../client/styles.css) — trace panel `DEMO_MODE` env gate (NIT-7); `aria-live` regions on spinner + login banner (NIT-8); polish.
-- [`docs/demo-runbook.md`](../demo-runbook.md) — append UC-09 walkthrough section. Storyboard narration with Salesloft Drift framing (NIT-9). Operator-action note for SECURITY-DEGRADED row IF F-21 FAIL.
-- [`tools/grep-trace.sh`](../../tools/grep-trace.sh) — verify it reconstructs the logout rid chain across orchestrator + 4 receivers.
+**Goal:** a 90-second walkthrough where the wedge is *visible* but the GUI doesn't oversell it. Audience sees: working flow → clean sign-out → cascade happened → captured token now rejected. They do NOT see jtis, fan-out animation play-by-play, `denylist_enforcement=on` in the footer, or "what just happened?" explainers.
 
-**Tests added:**
-- N-test: R-LOGOUT-6 (logout during active consent widget → `CIBATimeoutError(reason="cancelled")`).
-- N-test: R-LOGOUT-8 (rid trace covers all hops).
+**In scope:**
+- [`client/app.js`](../../client/app.js) / [`client/styles.css`](../../client/styles.css) / [`client/index.html`](../../client/index.html) — spinner copy aligned to copy-deck rows 8.5/8.9/8.10/8.11; `aria-live="polite"` on spinner + sign-out banner (NIT-8); one-line post-signout banner *"Signed out. Agent sessions cleared."* on `/?reason=signed_out` (no counter, no jtis, no receiver list).
+- [`docs/demo-runbook.md`](../demo-runbook.md) — new UC-09 section: pre-flight checklist (incl. the secret-alignment gotcha caught 2026-05-10), step-by-step storyboard with timing targets, post-signout operator curl that replays the captured token-B and shows the 401 ERR-MCP-002 in the terminal. Operator-action note for the SECURITY-DEGRADED row IF F-21 FAIL.
+- [`tools/grep-trace.sh`](../../tools/grep-trace.sh) — verify (and fix if needed) that it reconstructs the full logout rid chain across orchestrator + 4 receivers. This is the operator's "let me show you the trace" lever during Q&A.
+
+**Out of scope (deliberate):**
+- Trace panel in the SPA showing fan-out legs / cascade animation. NIT-7 (`DEMO_MODE` env gate) is **dropped** along with the panel itself — adds noise; the runbook + terminal does the job better.
+- Inline "what just happened?" explainer. Audience is IAM-literate; would be patronising.
+- Visible `denylist_enforcement=on` indicator in the footer. Smart audience reads logs if they care; SIEM watches it via grep.
+- Any production-mode plumbing (`DEMO_MODE` gate, secret-management UX, etc.) — never going to prod soon, dead weight today.
+
+**Tests added (small, regression-pinning only):**
+- N-test: R-LOGOUT-6 (logout during active consent widget → `CIBATimeoutError(reason="cancelled")`). Pins the BLOCK-F barrier already implemented.
+- N-test: R-LOGOUT-8 (rid end-to-end coverage — assert the request-id from `/auth/logout` shows up on every fan-out leg + receiver log line). Pins what `grep-trace.sh` relies on.
 
 **Exit criteria:**
 - `tools/run-tests.sh` green.
-- Manual: full UC-09 walkthrough in <90 s wall-clock. Trace panel cascade visible in DEMO_MODE; hidden in production mode.
+- Manual: full UC-09 walkthrough in <90 s wall-clock following the runbook. Captured-token-replay terminal moment lands cleanly.
 - Sign-off: D3.1 acceptance criteria 1–6 from Stage 1 §7 all checkable in one run.
 
 ---
