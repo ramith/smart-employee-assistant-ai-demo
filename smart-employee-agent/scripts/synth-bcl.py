@@ -46,6 +46,11 @@ How to extract the IS signing key from the AWS VM keystore::
 
     # On the IS VM (default keystore path + creds; adjust if customised):
     cd /opt/wso2is-7.3.0/repository/resources/security
+    # umask 077 BEFORE any file write so the intermediate .p12 / .pem land
+    # mode 0600 from the moment they exist — closes a brief window where a
+    # colocated process could read a default-umask 0644 file before the
+    # explicit chmod runs (security-retro corner finding).
+    umask 077
     keytool -importkeystore \\
         -srckeystore wso2carbon.jks -srcstorepass wso2carbon \\
         -destkeystore wso2carbon.p12 -deststoretype PKCS12 \\
@@ -53,7 +58,7 @@ How to extract the IS signing key from the AWS VM keystore::
         -destkeypass wso2carbon
     openssl pkcs12 -in wso2carbon.p12 -nodes -nocerts \\
         -out /tmp/wso2_private.pem -passin pass:wso2carbon
-    chmod 600 /tmp/wso2_private.pem
+    chmod 600 /tmp/wso2_private.pem  # belt-and-suspenders even with umask
 
     # scp /tmp/wso2_private.pem to your laptop's gitignored ./_local/, then:
 
