@@ -235,12 +235,34 @@ async def validate_logout_token(
     if alg != "RS256":
         raise BCLValidationError("alg_not_allowed", details={"alg": alg})
 
-    # Check #3 — typ MUST be "logout+jwt". Without this guard ANY RS256-signed
-    # JWT for the same aud (id_token, access_token) could be replayed as a
-    # logout_token. Critical.
+    # Check #3 — typ. Spec (OIDC BCL §2.4) REQUIRES ``logout+jwt``. Empirical
+    # finding 2026-05-10 against WSO2 IS 7.x RC: the BCL emission omits the
+    # typ header entirely (only x5t#S256, kid, alg are present). Other
+    # OIDC libraries (Spring Security, Curity samples) accommodate this
+    # by soft-checking — accept absent OR exact match; reject any other
+    # value. We do the same here.
+    #
+    # Why this is acceptable defense-wise: the categorical separation
+    # between logout_tokens and other JWTs (id_token, access_token) is
+    # carried by Check #7 (the ``events`` claim must contain the BCL
+    # URI). Neither id_tokens nor access_tokens carry that claim, so
+    # they cannot be replayed as logout_tokens regardless of typ. The
+    # typ check is defense in depth, not the load-bearing piece.
     typ = header.get("typ")
-    if typ != LOGOUT_TOKEN_TYP:
-        raise BCLValidationError("typ_not_logout_jwt", details={"typ": typ})
+    if typ is not None and typ != LOGOUT_TOKEN_TYP:
+        raise BCLValidationError(
+            "typ_not_logout_jwt",
+            details={"typ": typ, "header": header},
+        )
+    if typ is None:
+        # Surface the deviation so SIEM / ops can audit it; this is the
+        # WSO2 IS RC behaviour, not an attack.
+        logger.warning(
+            "bcl_typ_header_absent | header=%s — accepting per WSO2 IS"
+            " RC accommodation; events-claim check (#7) remains the"
+            " categorical separator from non-BCL JWTs",
+            header,
+        )
 
     kid = header.get("kid", "")
     if not kid:

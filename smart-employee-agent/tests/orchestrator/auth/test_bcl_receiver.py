@@ -237,8 +237,15 @@ async def test_check_2_alg_not_rs256_rejected(rsa_keypair, jwks_cache):
 
 
 @pytest.mark.asyncio
-async def test_check_3_typ_not_logout_jwt_rejected(rsa_keypair, jwks_cache):
-    """Check #3 — typ MUST be ``logout+jwt``. Critical replay-defence."""
+async def test_check_3_typ_wrong_value_rejected(rsa_keypair, jwks_cache):
+    """Check #3 — typ that's present but wrong (e.g. "JWT") is rejected.
+
+    WSO2 IS RC accommodation (2026-05-10) means we accept *absent* typ as
+    well as the spec-exact ``logout+jwt``. A typ that's present and
+    wrong remains a hard reject — that's how an id_token replay attempt
+    would surface (id_tokens carry typ=JWT). Defence remains layered:
+    Check #7 (events claim) is the categorical separator.
+    """
     priv, _ = rsa_keypair
     token = _sign(priv, _valid_payload(), typ="JWT")
     with pytest.raises(BCLValidationError) as exc:
@@ -246,6 +253,50 @@ async def test_check_3_typ_not_logout_jwt_rejected(rsa_keypair, jwks_cache):
             token, expected_iss=ISSUER, expected_aud=AUDIENCE, jwks_cache=jwks_cache
         )
     assert exc.value.reason == "typ_not_logout_jwt"
+
+
+@pytest.mark.asyncio
+async def test_check_3_typ_absent_accepted_wso2_is_accommodation(
+    rsa_keypair, jwks_cache, caplog
+):
+    """Check #3 — absent typ header is accepted with a structured warning.
+
+    Pins the 2026-05-10 WSO2 IS 7.x RC accommodation. If a future IS
+    upgrade starts emitting typ=logout+jwt, this test should still pass
+    (absent is one of two acceptable values). The categorical separator
+    between BCL and non-BCL JWTs is Check #7 (events claim), not typ.
+    """
+    import base64  # noqa: PLC0415
+    priv, _ = rsa_keypair
+    # PyJWT auto-injects typ=JWT even when omitted from headers, so to
+    # simulate WSO2 IS we sign normally then re-encode the header
+    # without the typ field. This produces an unsigned-header-tampered
+    # JWT whose body signature is still valid (header is part of the
+    # signing input, so we must re-sign over the new header).
+    payload = _valid_payload()
+    # Sign with a known set of headers, then take the underlying JWS and
+    # re-encode header sans typ. Easiest: build the JWS manually.
+    from cryptography.hazmat.primitives import hashes, serialization  # noqa: PLC0415
+    from cryptography.hazmat.primitives.asymmetric import padding  # noqa: PLC0415
+
+    header_no_typ = {"alg": "RS256", "kid": "bcl-test-key-1"}
+    header_b64 = base64.urlsafe_b64encode(
+        json.dumps(header_no_typ, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+    payload_b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+    sig = priv.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    sig_b64 = base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
+    token = f"{header_b64}.{payload_b64}.{sig_b64}"
+    import logging  # noqa: PLC0415
+    with caplog.at_level(logging.WARNING, logger="orchestrator.auth.bcl_receiver"):
+        claims = await validate_logout_token(
+            token, expected_iss=ISSUER, expected_aud=AUDIENCE, jwks_cache=jwks_cache
+        )
+    assert claims.sub == USER_SUB
+    assert any("bcl_typ_header_absent" in rec.message for rec in caplog.records)
 
 
 @pytest.mark.asyncio
