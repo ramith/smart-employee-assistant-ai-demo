@@ -61,9 +61,11 @@ The script audits the **full system topology** in nine sections:
 6. **Scopes per resource** — full Sprint 1-4 inventory (HR: 6 scopes; IT: 3 scopes) registered.
 7. **Demo users (SCIM2)** — `employee_user` + `hr_admin_user` exist.
 8. **Demo roles (SCIM2 v2)** — `Employee` + `HR Admin` exist.
-9. **Sample-token claim audit** — access token issued via `client_credentials` against `IS_ADMIN_CLIENT_*` carries `username` + `email`.
+9. **Sample-token claim audit** — issues a **user-bearing** access token via the password grant (ROPC) against `employee_user` using the existing `orchestrator-mcp-client` credentials, decodes the JWT payload, and asserts `username` + `email` are present. (`client_credentials` is intentionally NOT used — it returns app identity, not user identity, so it can't verify the Sprint 4 plumbing requirement.)
 
-The script is **stdlib-only Python** (no extra deps). It sources expected client IDs from `orchestrator/.env` automatically; override with env vars if needed. Sections 4–9 fail closed if Section 3 (admin auth) fails — fix admin creds first.
+The script is **stdlib-only Python** (no extra deps). It sources expected client IDs + secret from `orchestrator/.env` automatically. Sections 4–9 fail closed if Section 3 (admin auth) fails — fix admin creds first.
+
+**Section 9 prerequisite:** the `orchestrator-mcp-client` app must have **Password** grant enabled (Console → Applications → orchestrator-mcp-client → Protocol → Allowed Grant Types → check "Password"). If not enabled, Section 9 emits a WARN with the exact remediation. `DEMO_PASSWORD` defaults to `NewsMax@1234` per `wso2-is-setup.md` §7; override via env if rotated.
 
 ### 1.5 Verify both demo accounts are alive
 

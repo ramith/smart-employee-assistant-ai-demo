@@ -35,18 +35,28 @@ Env-var overrides (all optional; defaults sourced from orchestrator/.env
 when present):
 
     IS_BASE_URL                  https://13.60.190.47:9443
-    IS_ADMIN_USER                admin
+    IS_ADMIN_USER                admin                # for SCIM2 + Mgmt API
     IS_ADMIN_PASS                admin
-    IS_ADMIN_CLIENT_ID           (no default — token-claims check skipped if unset)
-    IS_ADMIN_CLIENT_SECRET       (no default — token-claims check skipped if unset)
 
-    ORCHESTRATOR_MCP_CLIENT_ID   sourced from orchestrator/.env
-    ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID    same
-    HR_AGENT_OAUTH_CLIENT_ID     same
-    IT_AGENT_OAUTH_CLIENT_ID     same
+    ORCHESTRATOR_MCP_CLIENT_ID       sourced from orchestrator/.env
+    ORCHESTRATOR_MCP_CLIENT_SECRET   same
+    ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID    sourced
+    HR_AGENT_OAUTH_CLIENT_ID         sourced
+    IT_AGENT_OAUTH_CLIENT_ID         sourced
 
-    HR_API_RESOURCE_NAME         hr_server-api  (override if your Console uses a different name)
+    DEMO_USERNAME                employee_user        # ROPC user for §9
+    DEMO_PASSWORD                NewsMax@1234         # per wso2-is-setup.md
+
+    HR_API_RESOURCE_NAME         hr_server-api  (override if Console uses a different name)
     IT_API_RESOURCE_NAME         it_server-api
+
+Section 9 (claim audit) uses the **password grant** against the demo
+user — `client_credentials` returns an app-identity token without
+`username`/`email`, so it can't verify the Sprint 4 plumbing. The
+ROPC path mints a real user-bearing token and we decode that.
+
+If ROPC isn't enabled on `orchestrator-mcp-client`, Section 9 emits a
+WARN with the IS Console path to enable it.
 """
 
 from __future__ import annotations
@@ -382,21 +392,54 @@ def check_roles(base_url: str, auth_hdr: str) -> None:
             warn(f"role '{role}'", f"GET /scim2/v2/Roles returned {code} — check manually")
 
 
-def check_token_claims(base_url: str, client_id: str, client_secret: str) -> None:
-    hdr("Section 9 — Sample-token claim audit")
-    if not client_id or not client_secret:
+def check_token_claims(
+    base_url: str,
+    *,
+    mcp_client_id: str,
+    mcp_client_secret: str,
+    demo_username: str,
+    demo_password: str,
+) -> None:
+    """Section 9 — verify a USER-BEARING token carries username + email.
+
+    Uses the password grant (ROPC) against the demo user with the
+    existing orchestrator-mcp-client as the OAuth client. client_credentials
+    won't work here — that grant returns an app-identity token with no
+    user claims, which can't verify the Sprint 4 plumbing requirement
+    that hr_server / it_server validate_token reads claims.username
+    from a user-bearing access token.
+    """
+    hdr("Section 9 — Sample-token claim audit (ROPC)")
+    if not mcp_client_id or not mcp_client_secret:
         warn(
             "sample token",
-            "IS_ADMIN_CLIENT_ID / IS_ADMIN_CLIENT_SECRET unset — set both and re-run to audit username/email claims",
+            "ORCHESTRATOR_MCP_CLIENT_ID / _SECRET not in orchestrator/.env — skipping",
         )
         return
     code, body = http_post_form(
         f"{base_url}/oauth2/token",
-        data={"grant_type": "client_credentials"},
-        headers={"Authorization": _basic_auth_header(client_id, client_secret)},
+        data={
+            "grant_type": "password",
+            "username": demo_username,
+            "password": demo_password,
+            "scope": "openid profile email",
+        },
+        headers={"Authorization": _basic_auth_header(mcp_client_id, mcp_client_secret)},
     )
     if code != 200:
-        bad("sample token issuance", f"POST /oauth2/token returned {code} — body: {body[:200]}")
+        # Two common causes: (a) password grant not enabled on the
+        # orchestrator-mcp-client app; (b) demo password rotated. Surface
+        # both with a clear remediation hint.
+        warn(
+            "sample token issuance",
+            f"POST /oauth2/token returned {code}. Common causes: "
+            "(1) Password grant not enabled on orchestrator-mcp-client — "
+            "enable in IS Console → Applications → orchestrator-mcp-client → "
+            "Protocol tab → Allowed Grant Types → check 'Password'. "
+            "(2) DEMO_PASSWORD env var doesn't match the demo user's actual "
+            f"password (default per wso2-is-setup.md is NewsMax@1234). "
+            f"Body excerpt: {body[:160]}",
+        )
         return
     try:
         access_token = json.loads(body).get("access_token") or ""
@@ -405,15 +448,21 @@ def check_token_claims(base_url: str, client_id: str, client_secret: str) -> Non
         return
     payload = b64url_decode_payload(access_token)
     if not payload:
-        bad("sample token format", "could not decode JWT payload (opaque token?)")
+        bad(
+            "sample token format",
+            "could not decode JWT payload (opaque token? — switch the app to JWT access tokens "
+            "in IS Console → orchestrator-mcp-client → Protocol → Access Token Type = JWT)",
+        )
         return
     missing = [c for c in REQUIRED_CLAIMS if c not in payload]
     if not missing:
-        ok("access token carries username + email claims")
+        ok(f"user-bearing token for '{demo_username}' carries username + email claims")
     else:
         bad(
             "sample token claims",
-            f"missing: {', '.join(missing)} — map them into the access-token claim set in IS Console → API Resources → Properties",
+            f"missing: {', '.join(missing)} — map them into the access-token claim set in "
+            "IS Console → API Resources → (your resource) → Scopes / OIDC, ensure the "
+            "OAuth app's requested scopes include 'profile email', and re-issue.",
         )
 
 
@@ -437,14 +486,17 @@ def main(argv: list[str] | None = None) -> int:
     base_url = args.base_url or os.environ.get("IS_BASE_URL") or "https://13.60.190.47:9443"
     admin_user = os.environ.get("IS_ADMIN_USER", "admin")
     admin_pass = os.environ.get("IS_ADMIN_PASS", "admin")
-    admin_client_id = os.environ.get("IS_ADMIN_CLIENT_ID", "")
-    admin_client_secret = os.environ.get("IS_ADMIN_CLIENT_SECRET", "")
 
     hr_name = os.environ.get("HR_API_RESOURCE_NAME", "hr_server-api")
     it_name = os.environ.get("IT_API_RESOURCE_NAME", "it_server-api")
 
+    mcp_client_id = _resolved("ORCHESTRATOR_MCP_CLIENT_ID", env_file)
+    mcp_client_secret = _resolved("ORCHESTRATOR_MCP_CLIENT_SECRET", env_file)
+    demo_username = os.environ.get("DEMO_USERNAME", "employee_user")
+    demo_password = os.environ.get("DEMO_PASSWORD", "NewsMax@1234")
+
     expected_client_ids = {
-        "orchestrator-mcp-client": _resolved("ORCHESTRATOR_MCP_CLIENT_ID", env_file),
+        "orchestrator-mcp-client": mcp_client_id,
         "orchestrator-agent-oauth": _resolved("ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID", env_file),
         "hr_agent OAuth App": _resolved("HR_AGENT_OAUTH_CLIENT_ID", env_file),
         "it_agent OAuth App": _resolved("IT_AGENT_OAUTH_CLIENT_ID", env_file),
@@ -460,7 +512,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if not check_mgmt_api_auth(base_url, auth_hdr):
         # Skip downstream sections that depend on Mgmt API; still try token check.
-        check_token_claims(base_url, admin_client_id, admin_client_secret)
+        check_token_claims(
+            base_url,
+            mcp_client_id=mcp_client_id,
+            mcp_client_secret=mcp_client_secret,
+            demo_username=demo_username,
+            demo_password=demo_password,
+        )
         _summarise()
         return 1
 
@@ -469,7 +527,13 @@ def main(argv: list[str] | None = None) -> int:
     check_scopes(base_url, auth_hdr, resources, hr_name, it_name)
     check_users(base_url, auth_hdr)
     check_roles(base_url, auth_hdr)
-    check_token_claims(base_url, admin_client_id, admin_client_secret)
+    check_token_claims(
+        base_url,
+        mcp_client_id=mcp_client_id,
+        mcp_client_secret=mcp_client_secret,
+        demo_username=demo_username,
+        demo_password=demo_password,
+    )
 
     return _summarise()
 
