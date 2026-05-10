@@ -81,6 +81,15 @@ _PASSWORD_PATTERN = re.compile(
     r"(?i)(password[\"'=:\s]+)\S+"
 )
 
+# Sprint 3 hardening (security retro): defensive add for the
+# ``X-Internal-Auth`` header used to authenticate orchestrator → receiver
+# fan-out (common/revocation/internal_events.py). Today no log line emits
+# the headers dict directly, but if a future debug-log change does, this
+# pattern catches it. Same key=value shape as the actor_token pattern.
+_INTERNAL_AUTH_PATTERN = re.compile(
+    r"(?i)(x-internal-auth[\"'=:\s]+)\S+"
+)
+
 # Master list — evaluated in the order below.
 #
 # Ordering rationale:
@@ -99,6 +108,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (_AUTH_REQ_ID_PATTERN,   r"\1<REDACTED>"),
     (_ACTOR_TOKEN_PATTERN,   r"\1<REDACTED>"),
     (_CLIENT_SECRET_PATTERN, r"\1<REDACTED>"),
+    (_INTERNAL_AUTH_PATTERN, r"\1<REDACTED>"),
     (_PASSWORD_PATTERN,      r"\1<REDACTED>"),
     (_JWT_PATTERN,           "<JWT>"),
 ]

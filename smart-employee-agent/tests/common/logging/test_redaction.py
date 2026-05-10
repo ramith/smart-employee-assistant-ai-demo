@@ -361,3 +361,27 @@ class TestInstallRedactionFilter:
 
         # caplog captures the formatted message
         assert SAMPLE_JWT not in caplog.text
+
+
+class TestInternalAuthRedaction:
+    """Hardening: X-Internal-Auth header value must be stripped if ever logged."""
+
+    def test_x_internal_auth_value_stripped_from_log_line(self) -> None:
+        """A log line containing 'X-Internal-Auth: <secret>' has the value redacted."""
+        from common.logging.redaction import redact
+
+        line = "outbound headers: X-Internal-Auth: 04e3fcde75749022af1327497937fb1343890610 ; other=ok"
+        out = redact(line)
+        assert "04e3fcde75749022af1327497937fb1343890610" not in out
+        assert "<REDACTED>" in out
+        # Header name must survive so the redaction is auditable.
+        assert "X-Internal-Auth" in out or "x-internal-auth" in out.lower()
+
+    def test_x_internal_auth_in_dict_repr_stripped(self) -> None:
+        """Dict-repr style: {'X-Internal-Auth': 'shhh'} has the value redacted."""
+        from common.logging.redaction import redact
+
+        line = "headers={'X-Internal-Auth': 'shared-secret-here', 'Content-Type': 'json'}"
+        out = redact(line)
+        assert "shared-secret-here" not in out
+        assert "<REDACTED>" in out
