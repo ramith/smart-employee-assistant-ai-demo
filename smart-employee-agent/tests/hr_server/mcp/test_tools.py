@@ -751,6 +751,50 @@ async def test_lookup_employee_with_hr_read_rest(rsa_keypair, sign_token, hr_rea
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Sprint 4 EC4-6 — cross-scope replay block
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hr_assets_write_token_cannot_call_self_endpoint(rsa_keypair, sign_token):
+    """EC4-6: token-C minted for hr_assets_write_rest cannot be replayed
+    at a hr_self_rest endpoint (get_my_cubicle). Validators reject with
+    ERR-MCP-003 (scope mismatch). Mirrors Sprint 3 cross-scope replay
+    infrastructure for the new write scope.
+    """
+    _, public_jwk = rsa_keypair
+    now = int(time.time())
+    write_only_payload = {
+        "iss": ISSUER,
+        "sub": SUBJECT,
+        "aud": HR_AGENT_CLIENT_ID,
+        "exp": now + 300,
+        "iat": now,
+        "jti": JTI + "-write-only",
+        # Critically: ONLY hr_assets_write_rest. No hr_self_rest, no
+        # hr_read_rest. The validator's required_scopes check on
+        # /mcp/tools/get_my_cubicle (hr_self_rest) must reject this.
+        "scope": "openid hr_assets_write_rest",
+        "act": {"sub": HR_AGENT_UUID},
+        "username": "Probe",
+        "email": "probe@example.com",
+    }
+    token = sign_token(write_only_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_my_cubicle",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 401
+    body = resp.json()
+    detail = body.get("detail", body)
+    assert detail["error_id"] == "ERR-MCP-003"
+
+
 @pytest.mark.asyncio
 async def test_reject_leave_with_hr_approve_rest(rsa_keypair, sign_token, hr_write_payload):
     """T-HR-MCP-S44-01: reject_leave routes through hr_service.reject_leave_request."""
