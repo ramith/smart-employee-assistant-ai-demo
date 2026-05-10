@@ -28,9 +28,9 @@ Raises:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from common.auth.errors import JWTValidationError, PeerTrustError, ScopeError
+from common.auth.errors import ScopeError
 from common.auth.jwt_validator import JWKSCache, ValidatorConfig, validate
 from common.auth.models import JWTClaims
 from common.auth.peer_trust import validate_chain

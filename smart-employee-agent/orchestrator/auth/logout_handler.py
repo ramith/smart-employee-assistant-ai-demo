@@ -263,7 +263,6 @@ class LogoutHandler:
             await self._cancel_pending_ciba(pending_list, request_id)
 
             # Step 5: revoke token-A at IS (per session — best-effort).
-            # Step 5: revoke token-A at IS (best-effort).
             try:
                 await self.revoke_client.revoke_access_token(
                     token_a_access, request_id=request_id
