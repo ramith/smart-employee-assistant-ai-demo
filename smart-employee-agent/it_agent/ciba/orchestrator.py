@@ -89,10 +89,10 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         None,
     ),
     "it.get_my_assets": (
-        "View your assigned IT assets",
+        "View your assigned IT equipment",
         "get_my_assets",
-        lambda args: {"employee_id": args.get("employee_id")},
-        None,
+        lambda args: {},
+        "openid it_assets_self_rest",
     ),
     "it.issue_asset": (
         "Issue an IT asset to an employee",

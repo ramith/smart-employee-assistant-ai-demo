@@ -150,6 +150,13 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         lambda args: {"username_or_email": args.get("name", "")},
         None,
     ),
+    # ── Sprint 4 S4.2 cubicle self-service (UC-12 HR leg) ─────────────────────
+    "hr.cubicle_lookup_self": (
+        "View your cubicle assignment",
+        "get_my_cubicle",
+        lambda args: {},
+        None,
+    ),
 }
 
 

@@ -287,7 +287,7 @@ async def test_post_sends_content_type_json(
     httpx_mock.add_response(
         method="POST",
         url=f"{_BASE_URL}/mcp/tools/get_my_assets",
-        json={"employee_id": "u1", "assets": []},
+        json={"assets": [], "total": 0},
     )
 
     async with httpx.AsyncClient() as http:
@@ -359,30 +359,34 @@ async def test_independent_calls_do_not_bleed_state(
     assert req2.headers["x-request-id"] == "it-rid-second"
 
 
-# ── Additional: get_my_assets passes employee_id when provided ────────────────
+# ── Sprint 4 S4.2 — get_my_assets posts empty body, parses {assets,total} ───
 
 @pytest.mark.asyncio
-async def test_get_my_assets_sends_employee_id(
+async def test_get_my_assets_posts_empty_body(
     httpx_mock: HTTPXMock, config: Any
 ) -> None:
-    """get_my_assets must include employee_id in body when provided."""
+    """Sprint 4 S4.2: get_my_assets carries no employee_id arg — identity is
+    derived server-side from the validated token's ``username`` claim. The
+    body is an empty JSON object; the response is ``{assets, total}``.
+    """
     token_b = _make_token()
     httpx_mock.add_response(
         method="POST",
         url=f"{_BASE_URL}/mcp/tools/get_my_assets",
-        json={"employee_id": "emp-77", "assets": []},
+        json={"assets": [], "total": 0},
     )
 
     async with httpx.AsyncClient() as http:
         client = ITMcpClient(config, http=http)
         result = await client.get_my_assets(
-            token_b=token_b, employee_id="emp-77", request_id="test-rid"
+            token_b=token_b, request_id="test-rid"
         )
 
     req = _last_request(httpx_mock)
     body = json.loads(req.content)
-    assert body["employee_id"] == "emp-77"
-    assert result["employee_id"] == "emp-77"
+    assert body == {}
+    assert result["total"] == 0
+    assert result["assets"] == []
 
 
 # ── Additional: list_available_assets passes asset_type filter ────────────────

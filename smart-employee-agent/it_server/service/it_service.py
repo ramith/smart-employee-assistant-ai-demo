@@ -1,76 +1,72 @@
 """IT Service — read-side query logic.
 
-Mirrors hr_server/service/hr_service.py shape. Sprint 0 scaffold; Sprint 1
-fills in pagination + cursor + the full it.get_employee_assets / it.get_asset_by_id
-tool implementations.
+Mirrors hr_server/service/hr_service.py shape. Sprint 4 S4.2 (UC-12):
+the legacy ``get_employee_assets(employee_id)`` is gone; the seed is
+rekeyed by ``username``. New functions:
+
+  - ``get_my_assets(username)``           — UC-12 self-service IT leg
+  - ``get_all_asset_assignments()``       — UC-16 Devices report (lands here
+                                            for completeness; consumed in S4.5)
+  - ``list_available_assets(asset_type)`` — kept; reads asset catalogue
 """
-import base64
-import json
 import logging
-from typing import Optional, Tuple
+from typing import Optional
 
 from . import store
 
 logger = logging.getLogger(__name__)
 
 
-def encode_cursor(offset: int) -> str:
-    return base64.urlsafe_b64encode(json.dumps({"o": offset}).encode()).decode()
-
-
-def decode_cursor(cursor: Optional[str]) -> int:
-    if not cursor:
-        return 0
-    try:
-        data = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
-        return int(data.get("o", 0))
-    except Exception:
-        return 0
-
-
-def get_employee_assets(
-    employee_id: str,
-    asset_category: Optional[str] = None,
-    limit: int = 50,
-    cursor: Optional[str] = None,
-) -> dict:
-    """Return paginated assets for an employee.
-
-    Pagination envelope per docs/milestone-plan.md §3.4 task 21.
-    """
-    limit = max(1, min(limit, 200))  # POC clamps
-    offset = decode_cursor(cursor)
-
-    all_matches = store.get_assets_for_employee(employee_id, asset_category)
-    total = len(all_matches)
-    page = all_matches[offset : offset + limit]
-    next_cursor = encode_cursor(offset + limit) if offset + limit < total else None
-
-    logger.info(
-        "[IT QUERY] employee_id=%s category=%s limit=%d offset=%d returned=%d total=%d",
-        employee_id, asset_category, limit, offset, len(page), total,
-    )
-    return {"assets": page, "total": total, "next_cursor": next_cursor}
-
-
-def get_asset_by_id(asset_id: str) -> Optional[dict]:
-    return store.get_asset_by_id(asset_id)
-
-
 def list_available_assets(asset_type: Optional[str] = None) -> list:
     """Return the asset catalogue, optionally filtered by type.
 
-    Sprint 4 S4.0: replaces it_server/mcp/tools.py:_CANNED_ASSET_CATALOGUE;
-    catalogue data lives in store._ASSET_CATALOGUE and is reachable here.
+    Sprint 4 S4.0: catalogue lives in ``store._ASSET_CATALOGUE``; this is a
+    thin pass-through. The catalogue is not user-keyed.
     """
     return store.get_asset_catalogue(asset_type)
 
 
-def get_assigned_assets(employee_id: str) -> list:
-    """Return assets currently assigned to an employee (no pagination).
+def get_my_assets(username: str) -> dict:
+    """Return assets assigned to *username* (UC-12 IT leg).
 
-    Sprint 4 S4.0: replaces _CANNED_ASSIGNED_ASSETS[sub] lookup in
-    it_server/mcp/tools.py. Employee_id keying is preserved here per
-    Stage 6.5 D8 — the rename to username is deferred to S4.2 (UC-12).
+    Sprint 4 S4.2: replaces ``get_employee_assets(employee_id)`` /
+    ``get_assigned_assets(employee_id)`` from Sprint 1. Identity is now
+    keyed by ``username`` per sprint-4.md §7.
+
+    Returns ``{assets, total}`` with an empty list when no rows match.
     """
-    return store.get_assets_for_employee(employee_id)
+    rows = store.get_assets_for_username(username)
+    logger.info(
+        "[IT QUERY] get_my_assets username=%s returned=%d",
+        username, len(rows),
+    )
+    return {"assets": rows, "total": len(rows)}
+
+
+def get_all_asset_assignments() -> list[dict]:
+    """Return all asset rows joined with the user's email — UC-16 Devices report.
+
+    Output rows: ``{username, email, asset_id, type, model, status}``.
+    The ``sub`` field is *never* surfaced (sprint-4.md §7 identity model).
+    Lands here in S4.2 for completeness; the REST surface that consumes it
+    is built in S4.5 (UC-16).
+    """
+    rows: list[dict] = []
+    for asset in store.assets:
+        username = asset.get("username", "")
+        record = store.lookup_user_by_username(username) if username else None
+        email = (record or {}).get("email", "")
+        rows.append({
+            "username": username,
+            "email": email,
+            "asset_id": asset["asset_id"],
+            "type": asset["type"],
+            "model": asset["model"],
+            "status": asset["status"],
+        })
+    rows.sort(key=lambda r: (r["username"], r["asset_id"]))
+    return rows
+
+
+def get_asset_by_id(asset_id: str) -> Optional[dict]:
+    return store.get_asset_by_id(asset_id)

@@ -350,3 +350,38 @@ def test_route_cubicle_assign_extracts_id_and_username() -> None:
     assert hr_calls[0].tool_id == "hr.cubicle_assign"
     assert hr_calls[0].args.get("cubicle_id") == "C-027"
     assert hr_calls[0].args.get("employee_username") == "jane.doe"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 S4.2 — UC-12 cubicle.lookup_self + IT self-service
+# ---------------------------------------------------------------------------
+
+
+def test_route_cubicle_lookup_self_intent() -> None:
+    """'where is my cubicle' must route to hr.cubicle_lookup_self.
+
+    Sprint 4 S4.2 (UC-12). The lookup_self rule precedes cubicle_summary so
+    the self-service phrase doesn't fall through to the admin-only summary.
+    """
+    router = KeywordRouter()
+    result = router.route("where is my cubicle")
+    assert len(result) == 1
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.cubicle_lookup_self"
+
+
+def test_route_dual_agent_self_service_uc12() -> None:
+    """UC-12 canonical query produces both hr.cubicle_lookup_self and it.get_my_assets.
+
+    'where is my cubicle and what laptop do I have' is the dual-agent demo
+    line. The HR rule fires for the cubicle leg; the IT self-service rule
+    fires for the laptop leg. Order: HR first, IT second (rule-table order).
+    """
+    router = KeywordRouter()
+    result = router.route("where is my cubicle and what laptop do I have")
+    assert len(result) == 2
+    # HR comes first by rule-table order.
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.cubicle_lookup_self"
+    assert result[1].agent_id == "it_agent"
+    assert result[1].tool_id == "it.get_my_assets"

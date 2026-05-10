@@ -171,7 +171,7 @@ def mcp_client() -> MagicMock:
         return_value={"assets": [{"asset_id": "MBP-14", "model": "MacBook Pro 14"}]}
     )
     client.get_my_assets = AsyncMock(
-        return_value={"employee_id": "emp-001", "assets": []}
+        return_value={"assets": [], "total": 0}
     )
     return client
 

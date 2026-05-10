@@ -103,6 +103,15 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
     # "show me vacant cubicles" doesn't fall through to the generic leave
     # rule, and "assign C-027 to jane.doe" doesn't trigger the IT issue rule
     # (which also has "assign" as a keyword).
+    #
+    # Sprint 4 S4.2 (UC-12): cubicle.lookup_self comes before cubicle_summary
+    # so "where is my cubicle" routes to the self-service tool, not the
+    # admin-only summary read.
+    KeywordRule(
+        keywords=("where is my cubicle", "my cubicle", "show my cubicle"),
+        agent_id="hr_agent",
+        tool_id="hr.cubicle_lookup_self",
+    ),
     KeywordRule(
         keywords=("vacant cubicle", "vacant cubicles", "show cubicles", "cubicle summary"),
         agent_id="hr_agent",
@@ -132,6 +141,14 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         keywords=("leave", "vacation", "time off", "pto"),
         agent_id="hr_agent",
         tool_id="hr.read_balance",
+    ),
+    # Sprint 4 S4.2 (UC-12): IT self-service. First-person possessive phrases
+    # route to it.get_my_assets; the legacy laptop rule below still handles
+    # "show me available laptops" (Sprint 1 admin-grade browse path).
+    KeywordRule(
+        keywords=("what laptop do i have", "my laptop", "my assets", "my equipment", "my devices"),
+        agent_id="it_agent",
+        tool_id="it.get_my_assets",
     ),
     KeywordRule(
         keywords=("laptop", "asset", "equipment", "hardware", "computer"),

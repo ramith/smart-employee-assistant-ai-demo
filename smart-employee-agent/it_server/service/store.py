@@ -1,8 +1,17 @@
 """In-Memory IT Asset Store.
 
 Mirrors hr_server/service/store.py — same shape, same auto-registration
-pattern, same logging style. Asset data keyed by employee_id (server-derived
-from JWT sub).
+pattern, same logging style.
+
+Sprint 4 S4.2 (UC-12): one-shot data migration. The legacy ``employee_id``
+field has been dropped and the seed is rekeyed by ``username`` (per
+sprint-4.md §7 identity model). Asset rows now look like
+``{asset_id, username, type, model, status}``. The ``users`` dict is also
+pre-seeded with the four named demo users (``employee_user``,
+``hr_admin_user``, ``jane.doe``, ``bob.smith``) — same shape as
+``hr_server/service/store.py`` so ``it_service.get_my_assets`` and the
+joined reporting helper can resolve username → email without an extra
+lookup.
 """
 import copy
 import logging
@@ -12,14 +21,51 @@ from typing import Dict, List
 logger = logging.getLogger(__name__)
 
 # ─── Global Seed Data (sample assets — for demo) ─────────────────────────────
+#
+# Sprint 4 S4.2: rekeyed by ``username`` (Sprint 1's numeric ``employee_id``
+# is gone). The four demo users mirror the HR seed (``hr_server/service/store.py``):
+#   - ``employee_user``  : 1 laptop (outstanding) + 1 phone (returned)
+#   - ``hr_admin_user``  : 1 laptop (outstanding)
+#   - ``jane.doe``       : 1 laptop (outstanding)
+#   - ``bob.smith``      : 1 laptop (outstanding)
 
 _SEED_ASSETS: List[Dict] = [
-    {"asset_id": "AST-12345", "employee_id": "1042", "type": "laptop", "model": "MBP 14 M3", "status": "outstanding"},
-    {"asset_id": "AST-12346", "employee_id": "1042", "type": "phone", "model": "iPhone 15", "status": "returned"},
-    {"asset_id": "AST-22001", "employee_id": "2017", "type": "laptop", "model": "Dell XPS 13", "status": "outstanding"},
-    {"asset_id": "AST-22002", "employee_id": "2017", "type": "monitor", "model": "Dell U2723QE", "status": "outstanding"},
-    {"asset_id": "AST-30115", "employee_id": "3110", "type": "laptop", "model": "MBP 16 M3", "status": "outstanding"},
-    {"asset_id": "AST-30116", "employee_id": "3110", "type": "headset", "model": "AirPods Pro 2", "status": "returned"},
+    {"asset_id": "AST-12345", "username": "employee_user", "type": "laptop", "model": "MBP 14 M3", "status": "outstanding"},
+    {"asset_id": "AST-12346", "username": "employee_user", "type": "phone", "model": "iPhone 15", "status": "returned"},
+    {"asset_id": "AST-22001", "username": "hr_admin_user", "type": "laptop", "model": "Dell XPS 13", "status": "outstanding"},
+    {"asset_id": "AST-30115", "username": "jane.doe", "type": "laptop", "model": "MBP 16 M3", "status": "outstanding"},
+    {"asset_id": "AST-40220", "username": "bob.smith", "type": "laptop", "model": "ThinkPad X1 Carbon", "status": "outstanding"},
+]
+
+# Sprint 4 S4.2 — pre-seeded named demo users; mirror hr_server/service/store.py.
+# Keys are JWT sub (UUID-shaped) so a future ``ensure_user(sub, ...)`` path
+# (analogous to HR's) can look up by sub. The reporting helper joins on
+# ``username``, so the value dict carries both.
+_SEED_USERS = [
+    {
+        "username": "employee_user",
+        "email": "employee.user@example.com",
+        "sub": "employee_user-sub-uuid-0001",
+        "name": "Employee User",
+    },
+    {
+        "username": "hr_admin_user",
+        "email": "hr.admin.user@example.com",
+        "sub": "hr_admin_user-sub-uuid-0002",
+        "name": "HR Admin User",
+    },
+    {
+        "username": "jane.doe",
+        "email": "jane.doe@example.com",
+        "sub": "jane.doe-sub-uuid-0003",
+        "name": "Jane Doe",
+    },
+    {
+        "username": "bob.smith",
+        "email": "bob.smith@example.com",
+        "sub": "bob.smith-sub-uuid-0004",
+        "name": "Bob Smith",
+    },
 ]
 
 # ─── Asset Catalogue (demo: assets available for issuance) ──────────────────
@@ -46,15 +92,27 @@ def get_asset_catalogue(asset_type: str | None = None) -> List[Dict]:
 # ─── Mutable In-Memory Stores ────────────────────────────────────────────────
 
 assets: List[Dict] = []
-users: Dict[str, Dict] = {}  # sub -> {first_seen, name}
+# Sprint 4 S4.2: pre-seeded by reset_data(); keyed by sub (UUID). Each value
+# is ``{username, email, sub, name, first_seen}``. ``ensure_user`` continues
+# to upsert by sub at runtime if a fresh sub appears (auto-register pattern).
+users: Dict[str, Dict] = {}
 
 
 def reset_data() -> None:
-    """Reset all stores. Asset seed re-applied; user records cleared."""
+    """Reset all stores. Asset seed re-applied; named-user seed re-applied."""
     global assets, users
     prior_users = len(users) if users else 0
     assets = copy.deepcopy(_SEED_ASSETS)
     users = {}
+    for entry in _SEED_USERS:
+        sub = entry["sub"]
+        users[sub] = {
+            "username": entry["username"],
+            "email": entry["email"],
+            "sub": sub,
+            "name": entry["name"],
+            "first_seen": str(dt_date.today()),
+        }
     if prior_users:
         logger.warning(
             "[STORE RESET] IT data reset — cleared %d user(s); seed assets re-applied",
@@ -65,14 +123,16 @@ def reset_data() -> None:
 def ensure_user(sub: str, first_name: str = "", last_name: str = "") -> Dict:
     """Ensure a user record exists. Mirrors hr_server's pattern.
 
-    Returns the user record. (IT data is keyed by employee_id, derived
-    server-side from sub at the tool layer; this is just a lightweight
-    audit log of who has hit the service.)
+    Returns the user record. Auto-registers a sub seen for the first time;
+    the named-user seed (``_SEED_USERS``) is loaded by ``reset_data`` so
+    callers that hit a pre-seeded user just get the existing record back.
     """
     full_name = f"{first_name} {last_name}".strip()
     if sub not in users:
         users[sub] = {
             "sub": sub,
+            "username": "",
+            "email": "",
             "name": full_name,
             "first_seen": str(dt_date.today()),
         }
@@ -83,18 +143,36 @@ def ensure_user(sub: str, first_name: str = "", last_name: str = "") -> Dict:
     return users[sub]
 
 
-def get_assets_for_employee(employee_id: str, asset_category: str | None = None) -> List[Dict]:
-    """Return all assets currently assigned to an employee, optionally filtered by type."""
-    matches = [a for a in assets if a["employee_id"] == employee_id]
-    if asset_category:
-        matches = [a for a in matches if a["type"] == asset_category]
-    return matches
+def get_assets_for_username(username: str) -> List[Dict]:
+    """Return all assets currently assigned to *username*.
+
+    Sprint 4 S4.2: replaces the legacy ``get_assets_for_employee(employee_id)``
+    helper. Match is case-sensitive (usernames are pre-normalised in the seed).
+    """
+    if not username:
+        return []
+    return [a for a in assets if a["username"] == username]
 
 
 def get_asset_by_id(asset_id: str) -> Dict | None:
     for a in assets:
         if a["asset_id"] == asset_id:
             return a
+    return None
+
+
+def lookup_user_by_username(username: str) -> Dict | None:
+    """Return the user record whose ``username`` matches, or ``None``.
+
+    Used by ``it_service.get_all_asset_assignments`` to surface ``email``
+    alongside ``username`` in the report rows. The store carries both as
+    soon as the named-user seed loads.
+    """
+    if not username:
+        return None
+    for record in users.values():
+        if record.get("username") == username:
+            return record
     return None
 
 

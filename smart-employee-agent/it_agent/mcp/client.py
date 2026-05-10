@@ -192,38 +192,35 @@ class ITMcpClient:
         self,
         *,
         token_b: OAuthToken,
-        employee_id: str | None = None,
         request_id: str | None = None,
     ) -> dict:
         """Call ``POST {base_url}/mcp/tools/get_my_assets`` with Bearer token-B.
 
-        Required scope on token-B: ``it.read`` (enforced by it_server).
-        Returns assets assigned to the requesting user (``token_b.sub``) or to
-        ``employee_id`` when the caller is a manager.
+        Required scope on token-B: ``it_assets_self_rest`` (enforced by it_server,
+        NEW in Sprint 4 — sprint-4.md §6).
+
+        Sprint 4 S4.2 (UC-12): identity is implicit — it_server reads the
+        ``username`` claim from the validated token and looks up that user's
+        assets. No ``employee_id`` argument; admin-grade cross-user lookups
+        go through a separate ``it_assets_read_rest`` path.
 
         Args:
             token_b: The user-OBO token.
-            employee_id: Optional employee UUID override. When *None* the
-                         it_server defaults to ``token_b.sub`` (self-service).
             request_id: Optional ``X-Request-ID`` propagation override.
 
         Returns:
             Tool result body, e.g.
-            ``{"employee_id": "...", "assets":
-               [{"asset_id": "MBP-14", "model": "MacBook Pro 14",
-                 "type": "laptop", "assigned_since": "2025-01-15"}]}``.
+            ``{"assets": [{"asset_id": "AST-12345", "model": "MBP 14 M3",
+               "type": "laptop", "status": "outstanding"}], "total": 1}``.
 
         Raises:
             httpx.HTTPStatusError: On non-2xx response.
         """
-        body: dict = {}
-        if employee_id is not None:
-            body["employee_id"] = employee_id
         return await self._post(
             "/mcp/tools/get_my_assets",
             token_b=token_b,
             request_id=request_id,
-            body=body,
+            body={},
         )
 
     async def issue_asset(

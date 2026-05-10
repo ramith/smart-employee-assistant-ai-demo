@@ -110,7 +110,7 @@ build_it_mcp_router = _it_tools_mod.build_it_mcp_router
 ISSUER = "https://api.asgardeo.io/t/ddademo/oauth2/token"
 IT_AGENT_CLIENT_ID = "it_agent-oauth-client-uuid"
 IT_AGENT_UUID = "it_agent-identity-uuid-0001"
-SUBJECT = "1042"  # Sprint 4 S4.0: matches store._SEED_ASSETS employee_id; 2 assigned
+SUBJECT = "employee_user-sub-uuid-0001"  # Sprint 4 S4.2: store keys by username now
 JTI = "jti-it-mcp-test-001"
 REQUEST_ID = "req-test-uuid-it-001"
 
@@ -157,7 +157,7 @@ def sign_token(rsa_keypair):
 
 @pytest.fixture
 def it_read_payload() -> dict[str, Any]:
-    """Valid JWT payload with it.read scope."""
+    """Valid JWT payload with it_assets_read_rest scope."""
     now = int(time.time())
     return {
         "iss": ISSUER,
@@ -168,6 +168,23 @@ def it_read_payload() -> dict[str, Any]:
         "jti": JTI,
         "scope": "openid it_assets_read_rest",
         "act": {"sub": IT_AGENT_UUID},
+    }
+
+
+@pytest.fixture
+def it_self_payload() -> dict[str, Any]:
+    """Sprint 4 S4.2: payload with it_assets_self_rest scope + username claim."""
+    now = int(time.time())
+    return {
+        "iss": ISSUER,
+        "sub": SUBJECT,
+        "aud": IT_AGENT_CLIENT_ID,
+        "exp": now + 300,
+        "iat": now,
+        "jti": JTI + "-self",
+        "scope": "openid it_assets_self_rest",
+        "act": {"sub": IT_AGENT_UUID},
+        "username": "employee_user",
     }
 
 
@@ -255,10 +272,12 @@ async def test_list_available_assets_with_type_filter(rsa_keypair, sign_token, i
 
 
 @pytest.mark.asyncio
-async def test_get_my_assets_returns_user_assets(rsa_keypair, sign_token, it_read_payload):
-    """T-IT-MCP-03: Valid token returns assets assigned to token.sub (probe.user)."""
+async def test_get_my_assets_returns_user_assets(rsa_keypair, sign_token, it_self_payload):
+    """T-IT-MCP-03: Sprint 4 S4.2 — valid it_assets_self_rest + username claim
+    returns the user's assets keyed by username.
+    """
     _, public_jwk = rsa_keypair
-    token = sign_token(it_read_payload)
+    token = sign_token(it_self_payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
 
@@ -270,12 +289,12 @@ async def test_get_my_assets_returns_user_assets(rsa_keypair, sign_token, it_rea
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["employee_id"] == SUBJECT
-    assert isinstance(data["assets"], list)
-    assert len(data["assets"]) == 2  # employee 1042 has 2 seeded assets (laptop + phone)
+    # Sprint 4 S4.2: shape changed to {assets, total} — no employee_id field.
+    assert "assets" in data
+    assert "total" in data
+    assert data["total"] == 2  # employee_user has 2 seeded assets (laptop + phone)
     asset_ids = {a["asset_id"] for a in data["assets"]}
     assert "AST-12345" in asset_ids
-    # Sprint 4 S4.0: shape now carries status (was assigned_since pre-S4.0)
     assert all("status" in a for a in data["assets"])
 
 
@@ -462,31 +481,94 @@ async def test_list_available_assets_invalid_body_type_returns_422(
 
 
 # ---------------------------------------------------------------------------
-# T-IT-MCP-10: explicit employee_id overrides token.sub
+# T-IT-MCP-10: Sprint 4 S4.2 — username claim drives the lookup
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_my_assets_explicit_employee_id(rsa_keypair, sign_token, it_read_payload):
-    """T-IT-MCP-10: Passing employee_id in body overrides token.sub lookup."""
+async def test_get_my_assets_username_drives_lookup(rsa_keypair, sign_token, it_self_payload):
+    """T-IT-MCP-10: Sprint 4 S4.2 — different username claim returns different rows.
+
+    Sprint 4 dropped the ``employee_id`` body argument — the tool reads
+    ``claims.username`` from the validated token. Switching the username
+    claim should switch the returned rows.
+    """
     _, public_jwk = rsa_keypair
-    token = sign_token(it_read_payload)
+    payload = dict(it_self_payload, username="hr_admin_user")
+    token = sign_token(payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
 
-    # Sprint 4 S4.0: store seed has employee 2017 with 2 assets (laptop AST-22001 + monitor AST-22002).
     resp = client.post(
         "/mcp/tools/get_my_assets",
-        json={"employee_id": "2017"},
+        json={},
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["employee_id"] == "2017"
-    assert len(data["assets"]) == 2
+    assert data["total"] == 1
     asset_ids = {a["asset_id"] for a in data["assets"]}
     assert "AST-22001" in asset_ids
+
+
+# ---------------------------------------------------------------------------
+# T-IT-MCP-13: Sprint 4 S4.2 — get_my_assets without it_assets_self_rest → 401
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_my_assets_missing_self_scope_returns_401(rsa_keypair, sign_token, it_read_payload):
+    """T-IT-MCP-13: a token carrying only it_assets_read_rest cannot hit the
+    self-service endpoint — Sprint 4 sprint-4.md §6 distinguishes admin-grade
+    read from self-service read.
+    """
+    _, public_jwk = rsa_keypair
+    # it_read_payload carries it_assets_read_rest only.
+    token = sign_token(it_read_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_my_assets",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+
+    assert resp.status_code == 401
+    body = resp.json()
+    detail = body.get("detail", body)
+    assert detail["error_id"] == "ERR-MCP-003"
+
+
+# ---------------------------------------------------------------------------
+# T-IT-MCP-14: Sprint 4 S4.2 — username claim absent → fail-closed 401
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_my_assets_missing_username_claim_returns_401(rsa_keypair, sign_token, it_self_payload):
+    """T-IT-MCP-14: Sprint 4 S4.2 — username claim required by Stage 5 §E1.
+
+    No fallback to ``sub`` (deliberately fail-closed per the design lock).
+    """
+    _, public_jwk = rsa_keypair
+    payload = dict(it_self_payload)
+    payload.pop("username")
+    token = sign_token(payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_my_assets",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+
+    assert resp.status_code == 401
+    body = resp.json()
+    detail = body.get("detail", body)
+    assert detail["error_id"] == "ERR-AUTH-007"
 
 
 # ---------------------------------------------------------------------------

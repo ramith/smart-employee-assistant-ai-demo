@@ -1,9 +1,9 @@
-"""IT-server MCP tool endpoints — Sprint 1 Wave 6 (Sprint 4 S4.0 reconciliation).
+"""IT-server MCP tool endpoints — Sprint 1 Wave 6 (Sprint 4 S4.0/S4.2 reconciliation).
 
 Exposes FastAPI POST endpoints under ``/mcp/tools/``:
 
     POST /mcp/tools/list_available_assets   scope: it_assets_read_rest
-    POST /mcp/tools/get_my_assets           scope: it_assets_read_rest
+    POST /mcp/tools/get_my_assets           scope: it_assets_self_rest  (NEW S4.2)
     POST /mcp/tools/issue_asset             scope: it_assets_write_rest
 
 Each handler:
@@ -18,9 +18,13 @@ Each handler:
      typed Pydantic response.
 
 Sprint 4 S4.0 (Stage 6.5 D1): the previous ``_CANNED_*`` dicts have been replaced
-by ``it_service.list_available_assets()`` / ``get_assigned_assets()`` so this
-module is no longer the source of truth for any data. The ``employee_id``-keyed
-shape is preserved per Stage 6.5 D8 — rename to ``username`` is deferred to S4.2.
+by ``it_service`` calls; this module no longer carries hardcoded data.
+
+Sprint 4 S4.2 (Stage 6.5 D8): the IT seed is rekeyed by ``username`` and
+the ``employee_id`` arg on ``get_my_assets`` is dropped — the tool reads
+``claims.username`` from the validated token (Track A plumbing) and calls
+``it_service.get_my_assets(username)``. Scope guard is the new
+``it_assets_self_rest`` (sprint-4.md §6 scope lock).
 """
 
 from __future__ import annotations
@@ -59,13 +63,8 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Service delegation (Sprint 4 S4.0 — Stage 6.5 D1)
+# Service delegation (Sprint 4 S4.0 — Stage 6.5 D1; S4.2 — Stage 6.5 D8)
 # ---------------------------------------------------------------------------
-# The previous _CANNED_* dicts were inlined Sprint 1 stop-gaps. Sprint 4 routes
-# every read through it_server.service.it_service, which reads from
-# it_server.service.store. The store still keys by ``employee_id`` (rename to
-# ``username`` is deferred to S4.2 — Stage 6.5 D8), so the MCP tool args + this
-# module's request models keep ``employee_id`` for now.
 from it_server.service import it_service  # noqa: E402
 
 
@@ -104,20 +103,19 @@ class ListAvailableAssetsResult(BaseModel):
 class GetMyAssetsArgs(BaseModel):
     """Request body for ``get_my_assets``.
 
-    ``employee_id`` defaults to ``token.sub`` (self-service).  Managers may
-    supply an explicit id when they have ``it.read`` and are acting for a
-    subordinate.
+    Sprint 4 S4.2: takes no args. The caller's identity is derived from
+    ``claims.username`` (Track A plumbing); admin-grade lookups for other
+    users go through the separate ``it_assets_read_rest`` path (UC-16).
     """
 
-    employee_id: str | None = Field(default=None, description="Defaults to token.sub")
+    pass
 
 
 class AssignedAsset(BaseModel):
     """A single asset assigned to an employee.
 
     Sprint 4 S4.0: shape now matches ``it_server.service.store._SEED_ASSETS``:
-    ``{asset_id, type, model, status}``. The earlier Sprint 1 ``assigned_since``
-    field was a canned-data artefact; the seed store does not carry it.
+    ``{asset_id, type, model, status}``.
     """
 
     asset_id: str
@@ -127,10 +125,14 @@ class AssignedAsset(BaseModel):
 
 
 class GetMyAssetsResult(BaseModel):
-    """Response for ``get_my_assets``."""
+    """Response for ``get_my_assets``.
 
-    employee_id: str
+    Sprint 4 S4.2: shape changed from ``{employee_id, assets}`` to
+    ``{assets, total}`` per Stage 5 §E1. Identity is implicit (token-bound).
+    """
+
     assets: list[AssignedAsset]
+    total: int
 
 
 class IssueAssetArgs(BaseModel):
@@ -164,10 +166,6 @@ class ITMcpToolRouterDeps:
 
     Attributes:
         validator: Wave 5 token validator that enforces the F-04 six-step check.
-
-    Sprint 2 addition::
-
-        data_store: ITDataStore  # non-canned persistence layer
     """
 
     validator: ITServerTokenValidator  # type: ignore[valid-type]
@@ -212,14 +210,14 @@ def _get_rid(request: Request) -> str:
 
 
 def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
-    """Return a FastAPI ``APIRouter`` with two IT tool endpoints.
+    """Return a FastAPI ``APIRouter`` with three IT tool endpoints.
 
     All endpoints are mounted under the prefix supplied by the caller (typically
     ``/mcp/tools``).  Each handler validates the inbound token via
-    ``deps.validator.validate_token()`` before accessing canned data.
+    ``deps.validator.validate_token()`` before accessing data.
 
     Args:
-        deps: Injected validator (and future data_store in Sprint 2).
+        deps: Injected validator.
 
     Returns:
         Configured ``APIRouter`` ready to be included in the it_server FastAPI app.
@@ -236,8 +234,8 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         """Return asset catalogue, optionally filtered by ``asset_type``.
 
         Required scope: ``it_assets_read_rest``.
-        Not user-specific; ``employee_id`` from the token is not used for
-        the catalogue lookup, but the token is still fully validated.
+        Not user-specific; the catalogue is global. Token is still fully
+        validated.
         """
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
@@ -286,18 +284,20 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
             assets=[AssetEntry(**a) for a in catalogue],
         )
 
-    # ── get_my_assets ─────────────────────────────────────────────────────────
+    # ── get_my_assets (E1 — UC-12 self-service) ───────────────────────────────
 
     @router.post("/get_my_assets", response_model=GetMyAssetsResult)
     async def get_my_assets(
-        body: GetMyAssetsArgs,
+        body: GetMyAssetsArgs,  # noqa: ARG001 — empty body
         request: Request,
     ) -> GetMyAssetsResult:
-        """Return assets assigned to the requesting user (or to ``body.employee_id``).
+        """Return assets assigned to the authenticated user (UC-12 IT leg).
 
-        Required scope: ``it_assets_read_rest``.
-        Defaults to ``token.sub`` for self-service; managers may pass an explicit
-        ``employee_id``.
+        Required scope: ``it_assets_self_rest`` (NEW in Sprint 4 — sprint-4.md §6).
+        Identity is derived from ``claims.username`` (Track A); admin-grade
+        cross-user lookups are not permitted on this path.
+
+        Fail-closed: missing ``username`` claim → 401 ``ERR-AUTH-007``.
         """
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
@@ -313,13 +313,13 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         logger.debug(
             "get_my_assets tool_entry rid=%s required_scopes=%s",
             rid,
-            ["it_assets_read_rest"],
+            ["it_assets_self_rest"],
         )
 
         try:
             claims = await deps.validator.validate_token(
                 token_str,
-                required_scopes=frozenset({"it_assets_read_rest"}),
+                required_scopes=frozenset({"it_assets_self_rest"}),
             )
         except (JWTValidationError, PeerTrustError, ScopeError) as exc:
             logger.warning(
@@ -334,17 +334,28 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
 
+        username = getattr(claims, "username", None)
+        if not username:
+            logger.warning(
+                "get_my_assets username_claim_absent rid=%s sub=%s",
+                rid,
+                claims.sub,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-007", "request_id": rid},
+            )
+
         logger.debug(
-            "get_my_assets validation_ok rid=%s sub=%s jti=%s",
+            "get_my_assets validation_ok rid=%s sub=%s jti=%s username=%s",
             rid,
             claims.sub,
             claims.jti,
+            username,
         )
 
-        employee_id = body.employee_id or claims.sub
-        raw_assets = it_service.get_assigned_assets(employee_id)
+        result = it_service.get_my_assets(username)
         return GetMyAssetsResult(
-            employee_id=employee_id,
             assets=[
                 AssignedAsset(
                     asset_id=a["asset_id"],
@@ -352,8 +363,9 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
                     type=a["type"],
                     status=a["status"],
                 )
-                for a in raw_assets
+                for a in result["assets"]
             ],
+            total=result["total"],
         )
 
     # ── issue_asset (HR Admin write path; D2.8) ────────────────────────────────
