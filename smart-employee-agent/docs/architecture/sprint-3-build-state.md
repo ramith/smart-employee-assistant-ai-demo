@@ -1,9 +1,9 @@
 # Sprint 3 — build state (in-progress)
 
-**Last updated:** 2026-05-10 — **3A.3 (denylist enforcement) implemented; pending manual captured-token verify.**
-**Branch:** `sprint-3-build` (3A.3 commit pending).
-**Tests:** 850 / 46 files green (per `tools/run-tests.sh`). +4 over last log: V-HR-11/12, V-IT-11/12 (denylist hit/miss).
-**Stack:** all 5 services healthy with shared secret + `LOG_LEVEL=DEBUG` injected via gitignored `.env`. Cascade wall-clock 898 ms sequential, no anomalies. **3A.3 ships denylist-only — introspection deferred to Sprint 4 per the 2026-05-10 lock (see `project_introspection_deferred.md`).**
+**Last updated:** 2026-05-10 — **3A.3 closed: denylist enforcement live + R-LOGOUT-5 manual walk green end-to-end.**
+**Branch:** `sprint-3-build` @ `25cc01e` (3A.3 + reviewer follow-up patches).
+**Tests:** 850 / 46 files green (per `tools/run-tests.sh`).
+**Stack:** all 5 services healthy with `denylist_enforcement=on` startup line on both MCP servers. Cascade fan-out clean (4/4 receivers acked). Captured token-B replay → 401 ERR-MCP-002 with `reason=denylist_hit`. **3A.3 ships denylist-only — introspection deferred to Sprint 4 per the 2026-05-10 lock (see `project_introspection_deferred.md`).**
 
 This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tracks an **in-progress** sprint so the repo always reflects ship-status without requiring memory consultation.
 
@@ -25,7 +25,7 @@ This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tra
 | 3A.2.3 observability pass | ✓ done | `7f2719d` + `380b4ad` | ~38 DEBUG lines across 12 files (validators / MCP tools / CIBA dispatchers / fan-out / BCL / auth-exchange) plus tightened catch-block logging (`str(exc)` + `details=`). `LOG_LEVEL` env override on `install_logging`. |
 | 3A.2.4 jti decode + #1/#3/#4 | ✓ done | `8f15189` + `1d84112` | jti decoded from token-B JWT (OAuthToken has no jti field — fan-out + cache eviction were broken without this). X-Request-ID on `/auth/exchange` relay. JWKS prewarm at lifespan startup. httpx INFO muted at non-DEBUG. |
 | **Live-walk #5 (full UC-09 + UC-02)** | ✓ all-green | — | 2026-05-09 10:41. Cascade wall-clock 898 ms sequential. All 4 receivers acked. hr_agent cache evicted. Zero anomalies. JWKS prewarm shaved ~1 s off first chat request. |
-| 3A.3 MCP server enforcement | ◐ code done, awaiting manual verify | (commit pending) | **Denylist check only** (Step 7). Introspection deferred to Sprint 4 — F-21 confirmed at source means revoke-at-IS doesn't propagate to OBO. Implemented: `attach_revocation()` + Step 7 in both validators; wired in both `main.py` lifespans. Tests: V-HR-11/12 + V-IT-11/12 green. R-LOGOUT-5 (captured token-B → 401 ERR-MCP-002) pending manual walkthrough. |
+| 3A.3 MCP server enforcement | ✓ done | `69e0e8e` + `25cc01e` | **Denylist check only** (Step 7). Introspection deferred to Sprint 4 — F-21 confirmed at source means revoke-at-IS doesn't propagate to OBO. `attach_revocation()` + Step 7 in both validators; wired in both `main.py` lifespans. F-15 startup line carries `denylist_enforcement=on` (warns on `=off`). Tests: V-HR-11/12 + V-IT-11/12 green. **R-LOGOUT-5 manual walk: pre-signout 200 → 4-leg fan-out clean → captured token-B replay 401 ERR-MCP-002 reason=denylist_hit (jti `042ebb99…`).** |
 | 3A.4 demo polish + UC-09 walkthrough | ◯ pending | — | Trace panel `DEMO_MODE` gate, a11y, demo-runbook UC-09 section. |
 | 3B.1 admin-terminate (D3.2) | ◯ pending | — | Orchestrator BCL receiver with full 9-check spec validation. |
 | 3B.2 binding_message + carries | ◯ pending | — | Reason-branched binding_message; admin-terminate banner. |
