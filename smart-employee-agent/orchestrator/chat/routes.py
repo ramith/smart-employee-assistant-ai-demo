@@ -419,6 +419,10 @@ async def _run_serial_fan_out(
                 scope=consent.scope,
                 is_refresh=consent.is_refresh,
                 prior_consent_at=consent.prior_consent_at,
+                # 3B.2 FIX-17: forward the dispatcher's reason-aware
+                # binding_message so the SPA can surface it directly
+                # (WSO2 IS doesn't reliably show it on its consent UI).
+                binding_message=consent.binding_message,
             )
         )
 

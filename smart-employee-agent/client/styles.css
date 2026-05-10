@@ -618,6 +618,23 @@ textarea, input {
   color: var(--text-subtle);
 }
 
+/* 3B.2 FIX-17: reason-aware binding_message callout. Only renders when
+   the reason adds information ("Your previous session ended …" /
+   "ended by your administrator …"). Subtle warm tint so the user
+   notices but the routine FRESH path stays unaffected. */
+.cw-binding-message-row {
+  margin: 0 1.6rem 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: #fff8e6;
+  border-left: 3px solid #d97706;
+  border-radius: 4px;
+}
+
+.cw-binding-message-text {
+  font-size: 0.85rem;
+  color: #7c2d12;
+}
+
 .cw-footer-text {
   font-size: 0.78rem;
   color: var(--text-subtle);

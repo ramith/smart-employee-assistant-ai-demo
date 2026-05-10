@@ -736,6 +736,7 @@ function onCibaUrlEvent(event) {
     countdownInterval: null,
     expiresAt,
     actionText,
+    bindingMessage: event.binding_message || null,
   };
 
   renderWidget();
@@ -875,6 +876,21 @@ function renderWidget() {
   // Binding code (first 8 chars)
   const shortCode = (bindingCode || "").slice(0, 8);
   $("cw-binding-code").textContent = COPY.cwBindingLabel.replace("{code}", shortCode);
+
+  // 3B.2 FIX-17: reason-aware binding_message inline (WSO2 IS may not
+  // surface this on its consent screen). Only render when present and
+  // when the reason actually adds information beyond the routine FRESH
+  // copy — i.e. the message contains a "previous session" phrase.
+  const bindingMessage = cibaState.bindingMessage;
+  const messageRow = $("cw-binding-message-row");
+  const messageText = $("cw-binding-message-text");
+  if (bindingMessage && /previous session/i.test(bindingMessage)) {
+    messageText.textContent = bindingMessage;
+    messageRow.hidden = false;
+  } else {
+    messageRow.hidden = true;
+    messageText.textContent = "";
+  }
 
   // Show card, hide slim
   $("cw-card").hidden = false;

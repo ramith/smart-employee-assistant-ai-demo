@@ -162,6 +162,13 @@
             <span id="cw-binding-code" class="cw-binding-code"></span>
           </div>
 
+          <!-- 3B.2 FIX-17: surface the reason-aware binding_message inline so
+               the user sees why re-approval is being asked (WSO2 IS may not
+               render it on its consent screen). Hidden when null. -->
+          <div id="cw-binding-message-row" class="cw-binding-message-row" hidden>
+            <span id="cw-binding-message-text" class="cw-binding-message-text"></span>
+          </div>
+
           <div class="cw-footer-text" id="cw-footer-text">Each agent asks for its own approval. Your identity provider records every consent.</div>
 
           <!-- Expired body (hidden unless EXPIRED) -->

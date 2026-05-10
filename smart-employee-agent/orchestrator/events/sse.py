@@ -90,6 +90,14 @@ class CibaUrlEvent(BaseModel):
     scope: str
     is_refresh: bool = False
     prior_consent_at: datetime | None = None
+    # 3B.2 FIX-17 (visibility): the human-readable binding_message text the
+    # CIBA dispatcher built via select_template() — e.g.
+    # "Your previous session was ended by your administrator — re-approve
+    # HR Agent to View your leave balance — request abc12345". WSO2 IS
+    # may or may not surface this on its in-browser consent screen, so
+    # the SPA's consent widget renders it directly to guarantee the user
+    # sees the reason-aware copy.
+    binding_message: str | None = None
 
 
 class CibaStateChangeEvent(BaseModel):
