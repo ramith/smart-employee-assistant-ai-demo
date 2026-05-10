@@ -471,3 +471,55 @@ async def test_depth_2_act_chain_raises_peer_trust_error(
 
     # PeerTrustError default error_id
     assert exc_info.value.error_id == "ERR-AGENT-002"
+
+
+# ---------------------------------------------------------------------------
+# V-IT-11 / V-IT-12: Sprint 3 3A.3 — Step 7 denylist enforcement
+# ---------------------------------------------------------------------------
+#
+# Mirror of V-HR-11 / V-HR-12. Per the 2026-05-10 deferral lock, Sprint 3
+# 3A.3 ships denylist-only (introspection deferred to Sprint 4). Two cases:
+# (a) jti in denylist → ScopeError(ERR-MCP-002)
+# (b) jti absent → claims returned normally.
+
+
+@pytest.mark.asyncio
+async def test_denylist_hit_raises_err_mcp_002(
+    base_payload, base_validation_config, rsa_keypair, sign_token
+):
+    """V-IT-11: jti in denylist → ScopeError(ERR-MCP-002) with reason=denylist_hit."""
+    _, public_jwk = rsa_keypair
+    token = sign_token(base_payload)
+    validator = _make_validator(base_validation_config, public_jwk)
+
+    from common.revocation import RevocationState
+    revocation = RevocationState()
+    revocation.revoked_jtis.add(JTI, time.time() + 300)
+    validator.attach_revocation(revocation)
+
+    with pytest.raises(ScopeError) as exc_info:
+        await validator.validate_token(token)
+
+    assert exc_info.value.error_id == "ERR-MCP-002"
+    assert exc_info.value.details.get("jti") == JTI
+    assert exc_info.value.details.get("reason") == "denylist_hit"
+
+
+@pytest.mark.asyncio
+async def test_denylist_miss_passes_through(
+    base_payload, base_validation_config, rsa_keypair, sign_token
+):
+    """V-IT-12: jti not in denylist → claims returned normally (Step 7 no-op)."""
+    _, public_jwk = rsa_keypair
+    token = sign_token(base_payload)
+    validator = _make_validator(base_validation_config, public_jwk)
+
+    from common.revocation import RevocationState
+    revocation = RevocationState()
+    revocation.revoked_jtis.add("some-other-jti", time.time() + 300)
+    validator.attach_revocation(revocation)
+
+    claims = await validator.validate_token(token)
+
+    assert isinstance(claims, JWTClaims)
+    assert claims.jti == JTI

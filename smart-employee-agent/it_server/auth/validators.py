@@ -123,6 +123,12 @@ class ITServerTokenValidator:
             jwks_url=config.jwks_url,
             insecure_tls=config.insecure_tls,
         )
+        # Sprint 3 3A.3: revocation state (Step 7 denylist enforcement).
+        # Wired in via ``attach_revocation()`` from it_server/main.py lifespan.
+        # ``None`` means denylist enforcement is a no-op (test fakes / pre-3A.3
+        # callers); production must call attach_revocation at startup.
+        from common.revocation import RevocationState as _RS  # avoid cycle
+        self._revocation: _RS | None = None
         # Build the lower-level ValidatorConfig used by jwt_validator.validate().
         # Steps 1-4 (sig, iss, exp, aud) are enforced here; scope enforcement is
         # done separately in step 6 so we can raise the richer ScopeError.
@@ -133,6 +139,25 @@ class ITServerTokenValidator:
             required_scopes=frozenset(),   # step 6 handled separately below
             insecure_tls=config.insecure_tls,
         )
+
+    # ── Sprint 3 3A.3: revocation hooks ───────────────────────────────────────
+
+    def attach_revocation(self, state) -> None:  # type: ignore[no-untyped-def]
+        """Wire a ``common.revocation.RevocationState`` into the validator.
+
+        Called once from ``it_server/main.py`` lifespan startup. After this,
+        ``validate_token()`` consults ``state.revoked_jtis`` after F-04 steps
+        1–6 succeed (Step 7) and raises ``ScopeError(error_id="ERR-MCP-002")``
+        on hit. Without this call (test fakes), Step 7 is a no-op.
+
+        Introspection cache (Step 8 in tech-arch §4.2) is **deferred to
+        Sprint 4** per the 2026-05-10 deferral decision — F-21 confirmed at
+        source means revoke-at-IS doesn't propagate to OBO tokens, so
+        introspection of token-B returns active=true even when our
+        orchestrator wants it gone. Denylist is the only revocation primitive
+        that actually works.
+        """
+        self._revocation = state
 
     # ── Lifespan helpers ──────────────────────────────────────────────────────
 
@@ -274,6 +299,28 @@ class ITServerTokenValidator:
                         "present": sorted(token_scopes),
                         "missing": sorted(missing),
                     },
+                )
+
+        # Step 7 (Sprint 3 3A.3): denylist check.
+        # Placed AFTER F-04 steps 1-6 so we only consult the denylist for
+        # tokens whose signature, aud, scope, and act.sub are already proven
+        # legitimate — prevents accidental denylist pollution from forged
+        # jtis. The denylist is populated by the orchestrator's logout cascade
+        # via POST /internal/events (Sprint 3 3A.2). With F-21 confirming IS
+        # does not propagate token-A revoke to OBO tokens, this is the ONLY
+        # revocation primitive on this code path. Captured token-B replay
+        # after a fan-out lands here.
+        if self._revocation is not None and claims.jti:
+            if claims.jti in self._revocation.revoked_jtis:
+                logger.info(
+                    "it_validator_denylist_hit jti=%s sub=%s — rejecting (Sprint 3 3A.3)",
+                    claims.jti,
+                    claims.sub,
+                )
+                raise ScopeError(
+                    f"Token revoked: jti={claims.jti}",
+                    error_id="ERR-MCP-002",
+                    details={"jti": claims.jti, "reason": "denylist_hit"},
                 )
 
         return claims

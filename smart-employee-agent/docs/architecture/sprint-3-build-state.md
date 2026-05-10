@@ -1,9 +1,9 @@
 # Sprint 3 — build state (in-progress)
 
-**Last updated:** 2026-05-09 evening — **UC-09 cascade fully working end-to-end after 5 live-walks.**
-**Branch:** `sprint-3-build` @ commit `1d84112` (pushed to origin).
-**Tests:** 846 / 46 files green (per `tools/run-tests.sh`).
-**Stack:** all 5 services healthy with shared secret + `LOG_LEVEL=DEBUG` injected via gitignored `.env`. Cascade wall-clock 898 ms sequential, no anomalies. **Ready to start 3A.3.**
+**Last updated:** 2026-05-10 — **3A.3 (denylist enforcement) implemented; pending manual captured-token verify.**
+**Branch:** `sprint-3-build` (3A.3 commit pending).
+**Tests:** 850 / 46 files green (per `tools/run-tests.sh`). +4 over last log: V-HR-11/12, V-IT-11/12 (denylist hit/miss).
+**Stack:** all 5 services healthy with shared secret + `LOG_LEVEL=DEBUG` injected via gitignored `.env`. Cascade wall-clock 898 ms sequential, no anomalies. **3A.3 ships denylist-only — introspection deferred to Sprint 4 per the 2026-05-10 lock (see `project_introspection_deferred.md`).**
 
 This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tracks an **in-progress** sprint so the repo always reflects ship-status without requiring memory consultation.
 
@@ -25,7 +25,7 @@ This file mirrors `sprint-1-signoff.md` / `sprint-2-signoff.md` in shape but tra
 | 3A.2.3 observability pass | ✓ done | `7f2719d` + `380b4ad` | ~38 DEBUG lines across 12 files (validators / MCP tools / CIBA dispatchers / fan-out / BCL / auth-exchange) plus tightened catch-block logging (`str(exc)` + `details=`). `LOG_LEVEL` env override on `install_logging`. |
 | 3A.2.4 jti decode + #1/#3/#4 | ✓ done | `8f15189` + `1d84112` | jti decoded from token-B JWT (OAuthToken has no jti field — fan-out + cache eviction were broken without this). X-Request-ID on `/auth/exchange` relay. JWKS prewarm at lifespan startup. httpx INFO muted at non-DEBUG. |
 | **Live-walk #5 (full UC-09 + UC-02)** | ✓ all-green | — | 2026-05-09 10:41. Cascade wall-clock 898 ms sequential. All 4 receivers acked. hr_agent cache evicted. Zero anomalies. JWKS prewarm shaved ~1 s off first chat request. |
-| 3A.3 MCP server enforcement | ◯ next | — | **Denylist check only** (Step 7). Introspection deferred to Sprint 4 — F-21 confirmed at source means revoke-at-IS doesn't propagate to OBO, so the backstop story doesn't fire for the failure modes it was designed to catch. ~10 lines per validator. Tests: 2 cases (denylist hit/miss) + R-LOGOUT-5 (captured token-B → 401 ERR-MCP-002). |
+| 3A.3 MCP server enforcement | ◐ code done, awaiting manual verify | (commit pending) | **Denylist check only** (Step 7). Introspection deferred to Sprint 4 — F-21 confirmed at source means revoke-at-IS doesn't propagate to OBO. Implemented: `attach_revocation()` + Step 7 in both validators; wired in both `main.py` lifespans. Tests: V-HR-11/12 + V-IT-11/12 green. R-LOGOUT-5 (captured token-B → 401 ERR-MCP-002) pending manual walkthrough. |
 | 3A.4 demo polish + UC-09 walkthrough | ◯ pending | — | Trace panel `DEMO_MODE` gate, a11y, demo-runbook UC-09 section. |
 | 3B.1 admin-terminate (D3.2) | ◯ pending | — | Orchestrator BCL receiver with full 9-check spec validation. |
 | 3B.2 binding_message + carries | ◯ pending | — | Reason-branched binding_message; admin-terminate banner. |
@@ -43,10 +43,15 @@ End-to-end UC-09 partial walkthrough is wired:
 6. Concurrent UC-09 ↔ UC-10 races serialised by per-`user_sub` Lock (FIX-12).
 7. SECURITY_DEGRADED ERROR log emitted on all-legs fan-out failure (FIX-6 / R-LOGOUT-7b grep target).
 
-## What is NOT yet enforced (3A.3 land)
+## What 3A.3 changed (2026-05-10)
 
-- Captured token-B presented directly to `hr_server` after a logout still passes the validator. The denylist exists at the server but is not consulted on every request.
-- No `/oauth2/introspect` calls from the MCP servers (Sprint 2 had them feature-flagged off). 3A.3 introduces the introspection cache (20 s TTL per L-3) that consults IS for validation.
+- `hr_server/auth/validators.py` + `it_server/auth/validators.py`: added `_revocation: RevocationState | None` field, `attach_revocation()` method, and a Step 7 denylist check immediately after the existing F-04 steps 1–6. On hit: `ScopeError(error_id="ERR-MCP-002", details={"jti": ..., "reason": "denylist_hit"})`. Without `attach_revocation()` (test fakes), Step 7 is a no-op.
+- `hr_server/main.py` + `it_server/main.py`: added `validator.attach_revocation(revocation)` immediately after constructing the shared `RevocationState`, so the same denylist that the `/internal/events` receiver populates is the one the validator consults.
+- Tests: V-HR-11/12 + V-IT-11/12 (denylist hit / miss). Mock validators in `tests/{hr,it}_server/test_main.py` got a no-op `attach_revocation` stub so `create_app()` smoke tests still pass.
+
+## Deliberately NOT in 3A.3 (deferred to Sprint 4)
+
+- `/oauth2/introspect` cache + per-server confidential clients. F-21 (confirmed at IS source 2026-05-09) shows token-A revoke does not propagate to CIBA-issued OBO tokens, so introspection of token-B returns `active=true` even after the parent is revoked — the exact failure mode the backstop was designed to handle. Denylist is the only revocation primitive that actually works on this code path. Sprint 4 does a focused F-21 follow-up (source dive + IS-expert consult + production-roadmap design) before deciding whether introspection re-enters the picture. See `project_introspection_deferred.md`.
 
 ## Architectural verdicts captured this sprint
 

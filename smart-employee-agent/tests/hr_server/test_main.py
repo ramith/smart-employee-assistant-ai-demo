@@ -112,6 +112,10 @@ class _MockHRValidator:
             frozenset(),
         )
 
+    def attach_revocation(self, state) -> None:  # noqa: D401, ARG002 — Sprint 3 3A.3 stub
+        """No-op for create_app() smoke tests; real wiring is in validator."""
+        return None
+
 
 class _MockHRValidatorClass:
     """Mimics the HRServerTokenValidator class (from_config classmethod)."""

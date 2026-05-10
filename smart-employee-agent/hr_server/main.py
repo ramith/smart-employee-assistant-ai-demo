@@ -69,10 +69,12 @@ def create_app(config: HRServerConfig | None = None) -> FastAPI:
     validator = HRServerTokenValidator.from_config(cfg)
     validator.log_startup_assertion()  # F-15 / N28
 
-    # 3A.2: revocation state. Validator wires this in 3A.3 to enforce
-    # denylist on /mcp/tools/* requests; for now the receiver populates it
-    # so by 3A.3 the cache is non-empty when validators get the new check.
+    # 3A.2/3A.3: revocation state. The receiver (mounted below) populates
+    # the denylist via /internal/events fan-out from the orchestrator's
+    # logout cascade. The validator (Sprint 3 3A.3) consults the same
+    # denylist on every MCP tool call as Step 7 of validate_token().
     revocation = RevocationState()
+    validator.attach_revocation(revocation)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # noqa: ARG001
