@@ -17,6 +17,8 @@ Endpoints today:
     GET  /api/reports/leave-requests                     scope: hr_read_rest    [S4.4 A3]
     POST /api/reports/leave-requests/{request_id}/approve scope: hr_approve_rest [S4.4 A6]
     POST /api/reports/leave-requests/{request_id}/reject  scope: hr_approve_rest [S4.4 A7]
+    GET  /api/reports/cubicle-assignments                scope: hr_read_rest    [S4.5 A4]
+    GET  /api/reports/device-assignments                 scope: it_assets_read_rest [S4.5 A5]
 
 Design — A6 / A7 (Stage 5 Decision A):
     Approve / Reject are *not* chat plumbing. They are dedicated REST
@@ -69,9 +71,8 @@ class ReportsRouterDeps:
             ``cfg.session_cookie_name``).
         hr_server_url: Base URL for HR Server (e.g.
             ``http://hr_server:8000``). Trailing slash optional.
-        it_server_url: Base URL for IT Server. Currently unused — declared
-            for the S4.5 device-assignments endpoint that lands on the
-            same router.
+        it_server_url: Base URL for IT Server. Used by A5
+            ``/api/reports/device-assignments`` (S4.5 UC-16).
         a2a_clients: Mapping of agent_id → ``A2AClient``. Required by the
             A6 / A7 CIBA-driven REST handlers (they reuse the chat fan-out).
         agent_registry: Registry of loaded ``AgentCard`` records. Same
@@ -144,6 +145,7 @@ def build_reports_router(deps: ReportsRouterDeps) -> APIRouter:
     router = APIRouter(tags=["reports"])
 
     hr_base = deps.hr_server_url.rstrip("/")
+    it_base = deps.it_server_url.rstrip("/")
 
     # ── Session-and-XRID guard (shared by A6 / A7) ────────────────────────────
 
@@ -229,6 +231,48 @@ def build_reports_router(deps: ReportsRouterDeps) -> APIRouter:
             session_cookie_name=deps.session_cookie_name,
             target_url=target_url,
             required_scope="hr_read_rest",
+            http_client=deps.http_client,
+        )
+
+    # ── A4 / S4.5 — Cubicle assignments report ──────────────────────────────
+
+    @router.get("/api/reports/cubicle-assignments")
+    async def get_cubicle_assignments(request: Request) -> JSONResponse:
+        """Proxy the Cubicle assignments report fetch to HR Server (UC-16).
+
+        Cookie auth → pre-flight ``hr_read_rest`` → Bearer token-A →
+        upstream returns ``{data: [...], count: N}`` with one row per
+        currently-assigned cubicle (username + email + cubicle_id + floor +
+        assigned_at). Identity surface is ``username`` + ``email``; ``sub``
+        and ``employee_id`` are never returned (sprint-4.md §7).
+        """
+        return await forward_with_token_a(
+            request,
+            session_store=deps.session_store,
+            session_cookie_name=deps.session_cookie_name,
+            target_url=f"{hr_base}/api/reports/cubicle-assignments",
+            required_scope="hr_read_rest",
+            http_client=deps.http_client,
+        )
+
+    # ── A5 / S4.5 — Device assignments report ───────────────────────────────
+
+    @router.get("/api/reports/device-assignments")
+    async def get_device_assignments(request: Request) -> JSONResponse:
+        """Proxy the Device assignments report fetch to IT Server (UC-16).
+
+        Cookie auth → pre-flight ``it_assets_read_rest`` → Bearer token-A →
+        upstream returns ``{data: [...], count: N}`` with one row per
+        seeded asset (username + email + asset_id + type + model + status).
+        Identity surface is ``username`` + ``email``; ``sub`` and
+        ``employee_id`` are never returned (sprint-4.md §7).
+        """
+        return await forward_with_token_a(
+            request,
+            session_store=deps.session_store,
+            session_cookie_name=deps.session_cookie_name,
+            target_url=f"{it_base}/api/reports/device-assignments",
+            required_scope="it_assets_read_rest",
             http_client=deps.http_client,
         )
 

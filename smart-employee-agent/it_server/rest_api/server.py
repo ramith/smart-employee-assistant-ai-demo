@@ -6,8 +6,7 @@ REST tokens (``aud == orchestrator MCP client_id``) land here; the strict
 single-aud MCP-tool validator stays on ``it_server/auth/validators.py``.
 
 S4.0 lands the validator + auth machinery + an empty router (only ``/health``).
-Subsequent slices (S4.2 / S4.5) add the business endpoints (E1
-``GET /api/me/assets``; C1 ``GET /api/reports/device-assignments``).
+Sprint 4 S4.5 lands C1 ``GET /api/reports/device-assignments`` (UC-16 IT leg).
 
 Mirrors ``hr_server/rest_api/server.py`` for ``_AuthContext`` / ``_authenticate``
 / ``_require_scope`` shape; uses FastAPI ``APIRouter`` so the router slots
@@ -22,6 +21,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
 from it_server.auth.jwt_validator import JWTValidator, TokenError
+from it_server.service import it_service
 
 logger = logging.getLogger(__name__)
 
@@ -194,5 +194,26 @@ def build_rest_router(deps: ITRestRouterDeps) -> APIRouter:
         per-router signal.
         """
         return {"status": "ok"}
+
+    @router.get("/api/reports/device-assignments")
+    async def get_device_assignments(request: Request):
+        """Sprint 4 S4.5 (UC-16 C1) — Device (IT asset) assignments report.
+
+        Bearer token-A; scope ``it_assets_read_rest`` (existing; HR Admin
+        role already holds it per ``docs/scope-policy.md``). Calls
+        ``it_service.get_all_asset_assignments()`` which projects each row to
+        ``{username, email, asset_id, type, model, status}``. ``sub`` is
+        *never* surfaced (sprint-4.md §7 identity model).
+
+        Response envelope (Stage 5 §5): ``{data: [...], count: N}``.
+        """
+        ctx = await _authenticate(request, deps.validator)
+        if isinstance(ctx, JSONResponse):
+            return ctx
+        err = _require_scope(ctx, "it_assets_read_rest")
+        if err:
+            return err
+        rows = it_service.get_all_asset_assignments()
+        return JSONResponse({"data": rows, "count": len(rows)})
 
     return router

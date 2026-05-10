@@ -745,16 +745,253 @@ function wireReportsView() {
   const tabCu = $("tab-cubicles");
   const tabDe = $("tab-devices");
   if (tabPL) tabPL.addEventListener("click", () => { selectReportsTab("pending-leaves"); loadPendingLeaves(); });
-  if (tabCu) tabCu.addEventListener("click", () => selectReportsTab("cubicles"));
-  if (tabDe) tabDe.addEventListener("click", () => selectReportsTab("devices"));
+  if (tabCu) tabCu.addEventListener("click", () => { selectReportsTab("cubicles"); loadCubicleAssignments(); });
+  if (tabDe) tabDe.addEventListener("click", () => { selectReportsTab("devices"); loadDeviceAssignments(); });
 
   const refresh = $("pending-leaves-refresh");
   if (refresh) refresh.addEventListener("click", loadPendingLeaves);
+
+  const cuRefresh = $("cubicles-refresh");
+  if (cuRefresh) cuRefresh.addEventListener("click", loadCubicleAssignments);
+
+  const deRefresh = $("devices-refresh");
+  if (deRefresh) deRefresh.addEventListener("click", loadDeviceAssignments);
+
+  const deFilter = $("devices-type-filter");
+  if (deFilter) deFilter.addEventListener("change", _renderDevicesTable);
 
   const confirmBtn = $("reject-reason-confirm");
   const cancelBtn = $("reject-reason-cancel");
   if (confirmBtn) confirmBtn.addEventListener("click", _submitReject);
   if (cancelBtn) cancelBtn.addEventListener("click", _cancelReject);
+}
+
+// ─── UC-16 / S4.5 — Cubicles tab ─────────────────────────────────────────────
+
+let _cubicleRows = [];
+
+async function loadCubicleAssignments() {
+  const status = $("cubicles-status");
+  const empty = $("cubicles-empty");
+  const table = $("cubicles-table");
+  const tbody = $("cubicles-tbody");
+  if (!table || !tbody) return;
+  if (status) { status.textContent = "Loading…"; }
+  try {
+    const resp = await fetch("/api/reports/cubicle-assignments", {
+      credentials: "include",
+    });
+    if (resp.status === 401) {
+      if (status) status.textContent = "Sign in to view reports.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    if (resp.status === 403) {
+      if (status) status.textContent = "You do not have permission to view this report.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    if (!resp.ok) {
+      if (status) status.textContent = "Could not load report.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    const body = await resp.json();
+    _cubicleRows = Array.isArray(body.data) ? body.data : [];
+    if (status) status.textContent = "";
+    if (_cubicleRows.length === 0) {
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    empty.hidden = true;
+    table.hidden = false;
+    tbody.innerHTML = "";
+    for (const row of _cubicleRows) {
+      const tr = document.createElement("tr");
+      const cells = [
+        row.username, row.email, row.cubicle_id,
+        row.floor == null ? "" : String(row.floor),
+        row.assigned_at,
+      ];
+      for (const c of cells) {
+        const td = document.createElement("td");
+        td.textContent = c == null ? "" : String(c);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    logErr("[reports]", "loadCubicleAssignments error:", e);
+    if (status) status.textContent = "Could not load report.";
+  }
+}
+
+// ─── UC-16 / S4.5 — Devices tab (filter + drilldown) ─────────────────────────
+
+let _deviceRows = [];
+let _expandedDeviceUsernames = new Set();
+
+async function loadDeviceAssignments() {
+  const status = $("devices-status");
+  const empty = $("devices-empty");
+  const table = $("devices-table");
+  const tbody = $("devices-tbody");
+  if (!table || !tbody) return;
+  if (status) { status.textContent = "Loading…"; }
+  try {
+    const resp = await fetch("/api/reports/device-assignments", {
+      credentials: "include",
+    });
+    if (resp.status === 401) {
+      if (status) status.textContent = "Sign in to view reports.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    if (resp.status === 403) {
+      if (status) status.textContent = "You do not have permission to view this report.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    if (!resp.ok) {
+      if (status) status.textContent = "Could not load report.";
+      empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+      return;
+    }
+    const body = await resp.json();
+    _deviceRows = Array.isArray(body.data) ? body.data : [];
+    _expandedDeviceUsernames = new Set();
+    if (status) status.textContent = "";
+    _populateDeviceTypeFilter();
+    _renderDevicesTable();
+  } catch (e) {
+    logErr("[reports]", "loadDeviceAssignments error:", e);
+    if (status) status.textContent = "Could not load report.";
+  }
+}
+
+function _populateDeviceTypeFilter() {
+  const sel = $("devices-type-filter");
+  if (!sel) return;
+  const prev = sel.value || "";
+  const types = Array.from(new Set(_deviceRows.map(r => r.type).filter(Boolean))).sort();
+  // Rebuild option list: keep "All" plus distinct types.
+  sel.innerHTML = "";
+  const allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = "All";
+  sel.appendChild(allOpt);
+  for (const t of types) {
+    const opt = document.createElement("option");
+    opt.value = t;
+    opt.textContent = t;
+    sel.appendChild(opt);
+  }
+  // Restore previous selection if still valid.
+  if (prev && types.includes(prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = "";
+  }
+}
+
+function _renderDevicesTable() {
+  const empty = $("devices-empty");
+  const table = $("devices-table");
+  const tbody = $("devices-tbody");
+  const sel = $("devices-type-filter");
+  if (!table || !tbody) return;
+  const filterType = (sel && sel.value) || "";
+  const filtered = filterType
+    ? _deviceRows.filter(r => r.type === filterType)
+    : _deviceRows.slice();
+  if (filtered.length === 0) {
+    empty.hidden = false; table.hidden = true; tbody.innerHTML = "";
+    return;
+  }
+  empty.hidden = true;
+  table.hidden = false;
+  tbody.innerHTML = "";
+  for (const row of filtered) {
+    const tr = document.createElement("tr");
+    tr.dataset.username = row.username || "";
+    const cells = [
+      { key: "username", value: row.username, clickable: true },
+      { key: "email", value: row.email },
+      { key: "asset_id", value: row.asset_id },
+      { key: "type", value: row.type },
+      { key: "model", value: row.model },
+      { key: "status", value: row.status },
+    ];
+    for (const c of cells) {
+      const td = document.createElement("td");
+      td.textContent = c.value == null ? "" : String(c.value);
+      if (c.clickable && row.username) {
+        td.className = "devices-username-cell";
+        td.addEventListener("click", () => _toggleDrilldown(row.username));
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+    if (row.username && _expandedDeviceUsernames.has(row.username)) {
+      const drill = _buildDrilldownRow(row.username);
+      // Only insert one drilldown per username — guard against duplicates
+      // when the same username has multiple rows in the filtered set.
+      if (!tbody.querySelector(`tr.drilldown-row[data-for="${cssEscape(row.username)}"]`)) {
+        tbody.appendChild(drill);
+      }
+    }
+  }
+}
+
+function cssEscape(s) {
+  // Minimal CSS attribute selector escape — usernames are tame
+  // (alphanumerics + dot + underscore) per the demo seed.
+  return String(s).replace(/["\\]/g, "\\$&");
+}
+
+function _toggleDrilldown(username) {
+  if (!username) return;
+  if (_expandedDeviceUsernames.has(username)) {
+    _expandedDeviceUsernames.delete(username);
+  } else {
+    _expandedDeviceUsernames.add(username);
+  }
+  _renderDevicesTable();
+}
+
+function _buildDrilldownRow(username) {
+  const tr = document.createElement("tr");
+  tr.className = "drilldown-row";
+  tr.setAttribute("data-for", username);
+  const td = document.createElement("td");
+  td.colSpan = 6;
+  const wrap = document.createElement("div");
+  wrap.className = "drilldown-wrap";
+  const heading = document.createElement("div");
+  heading.className = "drilldown-heading";
+  heading.textContent = `All assets for ${username}:`;
+  wrap.appendChild(heading);
+  const nested = document.createElement("table");
+  nested.className = "drilldown-table";
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>Asset ID</th><th>Type</th><th>Model</th><th>Status</th></tr>";
+  nested.appendChild(thead);
+  const nb = document.createElement("tbody");
+  const rows = _deviceRows.filter(r => r.username === username);
+  for (const r of rows) {
+    const ntr = document.createElement("tr");
+    for (const v of [r.asset_id, r.type, r.model, r.status]) {
+      const ntd = document.createElement("td");
+      ntd.textContent = v == null ? "" : String(v);
+      ntr.appendChild(ntd);
+    }
+    nb.appendChild(ntr);
+  }
+  nested.appendChild(nb);
+  wrap.appendChild(nested);
+  td.appendChild(wrap);
+  tr.appendChild(td);
+  return tr;
 }
 
 function showSigninNotice(text, autoDismiss = false) {

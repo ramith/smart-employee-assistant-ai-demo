@@ -316,11 +316,54 @@
       </section>
 
       <section id="tabpanel-cubicles" class="reports-tabpanel" role="tabpanel" aria-labelledby="tab-cubicles" hidden>
-        <p class="reports-empty">Cubicles report — lands in S4.5 (UC-16).</p>
+        <div class="reports-toolbar">
+          <span class="reports-status" id="cubicles-status" aria-live="polite"></span>
+          <button class="btn-ghost btn-sm" id="cubicles-refresh">Refresh</button>
+        </div>
+        <div id="cubicles-body">
+          <p id="cubicles-empty" class="reports-empty">No cubicles assigned yet.</p>
+          <table id="cubicles-table" class="reports-table" hidden>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Cubicle ID</th>
+                <th>Floor</th>
+                <th>Assigned At</th>
+              </tr>
+            </thead>
+            <tbody id="cubicles-tbody"></tbody>
+          </table>
+        </div>
       </section>
 
       <section id="tabpanel-devices" class="reports-tabpanel" role="tabpanel" aria-labelledby="tab-devices" hidden>
-        <p class="reports-empty">Devices report — lands in S4.5 (UC-16).</p>
+        <div class="reports-toolbar">
+          <span class="reports-status" id="devices-status" aria-live="polite"></span>
+          <label class="reports-filter">
+            Type:
+            <select id="devices-type-filter">
+              <option value="">All</option>
+            </select>
+          </label>
+          <button class="btn-ghost btn-sm" id="devices-refresh">Refresh</button>
+        </div>
+        <div id="devices-body">
+          <p id="devices-empty" class="reports-empty">No IT assets assigned yet.</p>
+          <table id="devices-table" class="reports-table" hidden>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Asset ID</th>
+                <th>Type</th>
+                <th>Model</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="devices-tbody"></tbody>
+          </table>
+        </div>
       </section>
 
       <!-- Reject reason prompt (inline, simple) -->

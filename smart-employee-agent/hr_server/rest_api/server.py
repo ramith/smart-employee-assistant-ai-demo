@@ -9,14 +9,14 @@
   (S4.3), `/api/reports/...` (S4.4 / S4.5), approve/reject (S4.4) — land on a
   router that's already authenticated and store-backed.
 
-  Endpoints (Sprint 4 S4.3 added GET /api/me/leaves; B2 + approve/reject in
-  S4.4):
-    GET  /api/holidays               (hr_basic_rest)
-    GET  /api/leave-policy           (hr_basic_rest)
-    GET  /api/leave-balance          (hr_self_rest)
-    GET  /api/me/leaves              (hr_self_rest)                  [S4.3]
-    GET  /api/reports/leave-requests (hr_read_rest)                  [S4.4 B2]
-    GET  /api/leaves                 (hr_self_rest | hr_read_rest)
+  Endpoints (Sprint 4 S4.5 adds B3 cubicle-assignments report):
+    GET  /api/holidays                       (hr_basic_rest)
+    GET  /api/leave-policy                   (hr_basic_rest)
+    GET  /api/leave-balance                  (hr_self_rest)
+    GET  /api/me/leaves                      (hr_self_rest)              [S4.3]
+    GET  /api/reports/leave-requests         (hr_read_rest)               [S4.4 B2]
+    GET  /api/reports/cubicle-assignments    (hr_read_rest)               [S4.5 B3]
+    GET  /api/leaves                         (hr_self_rest | hr_read_rest)
     GET  /api/leaves/{id}            (hr_self_rest for own | hr_read_rest)
     POST /api/leaves                 (hr_self_rest)
     POST /api/leaves/{id}/approve    (hr_approve_rest)
@@ -285,6 +285,27 @@ def build_rest_router(deps: RestApiDeps) -> APIRouter:
                 "status": row["status"],
             })
         return JSONResponse({"data": out, "count": len(out)})
+
+    @router.get("/api/reports/cubicle-assignments")
+    async def get_cubicle_assignments(request: Request):
+        """Sprint 4 S4.5 (UC-16 B3) — Cubicle assignments report.
+
+        Bearer token-A; scope ``hr_read_rest``. Calls
+        ``hr_service.get_all_cubicle_assignments()`` which projects the
+        store rows to the locked report shape (``username``, ``email``,
+        ``cubicle_id``, ``floor``, ``assigned_at``). ``sub`` is *never*
+        returned (sprint-4.md §7 identity model).
+
+        Response envelope (Stage 5 §5): ``{data: [...], count: N}``.
+        """
+        ctx = await authenticate(request)
+        if isinstance(ctx, JSONResponse):
+            return ctx
+        err = _require_scope(ctx, "hr_read_rest")
+        if err:
+            return err
+        rows = await hr_service.get_all_cubicle_assignments()
+        return JSONResponse({"data": rows, "count": len(rows)})
 
     @router.get("/api/leaves")
     async def get_leaves(request: Request):
