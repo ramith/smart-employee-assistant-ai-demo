@@ -119,8 +119,13 @@ async def test_persistent_failure_records_in_failures() -> None:
 
 
 @pytest.mark.asyncio
-async def test_security_degraded_log_emitted_on_all_legs_failure(caplog) -> None:
-    """FIX-6 / R-LOGOUT-7b: all-legs-failure must emit SECURITY_DEGRADED label."""
+async def test_r_logout_7b_security_degraded_log_emitted_on_all_legs_failure(caplog) -> None:
+    """R-LOGOUT-7b (FIX-6): all-legs-failure must emit SECURITY_DEGRADED label.
+
+    SIEM grep target. The exact string ``logout_fanout_total_failure
+    SECURITY_DEGRADED`` is what an alert pipeline keys on. Any future
+    rename of either token must propagate to ops dashboards in lockstep.
+    """
     import logging
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -146,7 +151,21 @@ async def test_security_degraded_log_emitted_on_all_legs_failure(caplog) -> None
 
 
 @pytest.mark.asyncio
-async def test_partial_failure_logs_warning_per_target(caplog) -> None:
+async def test_r_logout_7_partial_failure_logs_warning_per_target(caplog) -> None:
+    """R-LOGOUT-7: half fan-out — IT receiver returns 503; HR succeeds.
+
+    Pins the partial-failure semantics:
+      * ``report.successes`` carries the labels that ack'd 200.
+      * ``report.failures`` carries (label, err) tuples for the rest.
+      * One ``logout_fanout_partial`` WARN per failed leg — these are
+        the per-target diagnostic lines an operator greps.
+
+    No SECURITY_DEGRADED ERROR is emitted (R-LOGOUT-7b's territory).
+    Confirms the cascade does NOT short-circuit on a single failed leg —
+    the legs that DID succeed still propagate the denylist push, so
+    captured-token replay against those receivers is rejected as
+    designed.
+    """
     state = {"hr": 0, "it": 0}
 
     async def handler(request: httpx.Request) -> httpx.Response:

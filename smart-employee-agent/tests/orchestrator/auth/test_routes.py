@@ -231,7 +231,6 @@ def _make_config() -> OrchestratorConfig:
         is_insecure_tls=False,
         is_issuer="https://is.example.com/oauth2/token",
         is_jwks_url="https://is.example.com/oauth2/jwks",
-        spa_client_id="orchestrator-app-client-id",
         mcp_client_id="orchestrator-mcp-client-id",
         mcp_client_secret="mcp-secret",
         mcp_redirect_uri="http://localhost:8090/agent-callback",
@@ -326,11 +325,10 @@ def test_login_redirects_to_is_authorize() -> None:
 
     assert parsed.scheme + "://" + parsed.netloc == "https://is.example.com"
     assert parsed.path == "/oauth2/authorize"
-    # 3B.1 finding (project_orchestrator_app_vestigial.md): Pattern C login
-    # uses mcp_client_id (the confidential MCP-template app), not the
-    # vestigial SPA-template orchestrator-app. routes.py line 292 passes
-    # mcp_client_id to build_authorize_url despite the misleading kwarg
-    # name "spa_client_id".
+    # Pattern C login uses mcp_client_id (the confidential MCP-template app).
+    # The legacy spa_client_id kwarg was renamed to client_id and the
+    # vestigial orchestrator-app config field/env var was dropped in 3B.3
+    # (memory: project_orchestrator_app_vestigial.md).
     assert params["client_id"] == "orchestrator-mcp-client-id"
     assert params["response_type"] == "code"
     assert params["redirect_uri"] == "http://localhost:8090/agent-callback"

@@ -329,7 +329,7 @@ def test_build_authorize_url_contains_all_required_params() -> None:
 
     url, code_challenge = build_authorize_url(
         is_authorize_endpoint=_AUTHORIZE_ENDPOINT,
-        spa_client_id=_SPA_CLIENT_ID,
+        client_id=_SPA_CLIENT_ID,
         redirect_uri=_REDIRECT_URI,
         scope=_SCOPE,
         requested_actor=_ORCHESTRATOR_AGENT_ID,
@@ -367,7 +367,7 @@ def test_build_authorize_url_encodes_special_chars() -> None:
     verifier, _ = make_pkce()
     url, _ = build_authorize_url(
         is_authorize_endpoint=_AUTHORIZE_ENDPOINT,
-        spa_client_id=_SPA_CLIENT_ID,
+        client_id=_SPA_CLIENT_ID,
         redirect_uri="http://localhost:3001/call back",  # space in path (edge case)
         scope="openid orchestrate profile",
         requested_actor=_ORCHESTRATOR_AGENT_ID,

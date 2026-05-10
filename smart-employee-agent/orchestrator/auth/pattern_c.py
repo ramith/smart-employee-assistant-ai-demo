@@ -88,7 +88,7 @@ def make_pkce() -> tuple[str, str]:
 def build_authorize_url(
     *,
     is_authorize_endpoint: str,
-    spa_client_id: str,
+    client_id: str,
     redirect_uri: str,
     scope: str,
     requested_actor: str,
@@ -104,9 +104,19 @@ def build_authorize_url(
     so that the challenge in the URL and the verifier submitted in the token exchange
     are provably related.
 
+    Sprint 3 3B.3: this kwarg was previously named ``spa_client_id`` in
+    a v3 RFC 8693 dual-client world (orchestrator-app + orchestrator-mcp-client).
+    The v4 CIBA pivot collapsed onto the confidential MCP client, so the
+    misleading name was renamed to ``client_id``. See memory
+    ``project_orchestrator_app_vestigial.md``.
+
     Args:
         is_authorize_endpoint: Full URL of the IS ``/oauth2/authorize`` endpoint.
-        spa_client_id: OAuth Client ID of the SPA-facing app (``orchestrator-app``).
+        client_id: OAuth Client ID of the orchestrator's confidential MCP
+            client app (``orchestrator-mcp-client``). Used for both
+            ``/authorize`` and the subsequent ``/token`` exchange — IS rejects
+            cross-client code redemption, so the same client_id MUST be on
+            both calls.
         redirect_uri: The SPA callback URI registered on the IS application.
         scope: Space-separated scope string (e.g. ``"openid orchestrate"``).
         requested_actor: UUID of the orchestrator-agent; tells IS which agent to embed
@@ -127,8 +137,8 @@ def build_authorize_url(
         verifier, _ = make_pkce()
         url, challenge = build_authorize_url(
             is_authorize_endpoint="https://is.example.com/oauth2/authorize",
-            spa_client_id="orchestrator-app-id",
-            redirect_uri="http://localhost:3001/callback",
+            client_id="orchestrator-mcp-client-id",
+            redirect_uri="http://localhost:8090/agent-callback",
             scope="openid orchestrate",
             requested_actor="<orchestrator-agent-uuid>",
             state=secrets.token_urlsafe(16),
@@ -139,7 +149,7 @@ def build_authorize_url(
     code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
     params: dict[str, str] = {
-        "client_id": spa_client_id,
+        "client_id": client_id,
         "response_type": "code",
         "redirect_uri": redirect_uri,
         "scope": scope,

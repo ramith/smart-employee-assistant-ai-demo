@@ -75,8 +75,13 @@ class OrchestratorConfig:
         is_insecure_tls: Disable TLS verification (dev only).
         is_issuer: Token issuer claim value (typically ``{is_base_url}/oauth2/token``).
         is_jwks_url: JWKS endpoint URL.
-        spa_client_id: SPA/public PKCE client (used for /authorize redirect).
-        mcp_client_id: Confidential MCP-client client_id (code exchange backend).
+        mcp_client_id: Confidential MCP-client client_id (used for both
+            ``/authorize`` redirect AND ``/token`` code exchange — IS
+            rejects cross-client code redemption). Sprint 3 3B.3 dropped
+            the legacy ``spa_client_id`` field and the
+            ``ORCHESTRATOR_APP_CLIENT_ID`` env var; both were vestigial v3
+            dual-client cruft. See memory
+            ``project_orchestrator_app_vestigial.md``.
         mcp_client_secret: Corresponding secret.
         mcp_redirect_uri: Registered redirect URI for the MCP client.
         orchestrator_agent: 4-value agent identity for actor_token in Pattern C.
@@ -102,10 +107,8 @@ class OrchestratorConfig:
     is_issuer: str
     is_jwks_url: str
 
-    # SPA public client (PKCE — browser redirect only)
-    spa_client_id: str
-
-    # Confidential MCP backend client (code exchange / Pattern C)
+    # Confidential MCP backend client (code exchange / Pattern C +
+    # /authorize redirect — same client_id required on both per IS).
     mcp_client_id: str
     mcp_client_secret: str
     mcp_redirect_uri: str
@@ -195,10 +198,8 @@ class OrchestratorConfig:
         is_issuer = env.get("WSO2_IS_ISSUER", "").strip() or f"{is_base_url}/oauth2/token"
         is_jwks_url = env.get("WSO2_IS_JWKS_URL", "").strip() or f"{is_base_url}/oauth2/jwks"
 
-        # SPA public client
-        spa_client_id = _require(env, "ORCHESTRATOR_APP_CLIENT_ID")
-
-        # Confidential MCP backend client
+        # Confidential MCP backend client (also drives /authorize redirect
+        # — same client_id on /authorize and /token per IS requirement).
         mcp_client_id = _require(env, "ORCHESTRATOR_MCP_CLIENT_ID")
         mcp_client_secret = _require(env, "ORCHESTRATOR_MCP_CLIENT_SECRET")
         mcp_redirect_uri = env.get(
@@ -298,7 +299,6 @@ class OrchestratorConfig:
             is_insecure_tls=is_insecure_tls,
             is_issuer=is_issuer,
             is_jwks_url=is_jwks_url,
-            spa_client_id=spa_client_id,
             mcp_client_id=mcp_client_id,
             mcp_client_secret=mcp_client_secret,
             mcp_redirect_uri=mcp_redirect_uri,

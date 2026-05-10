@@ -86,7 +86,6 @@ def _base_env() -> dict[str, str]:
     return {
         "WSO2_IS_BASE_URL": "https://is.example.com:9443",
         "IDP_INSECURE_TLS": "1",
-        "ORCHESTRATOR_APP_CLIENT_ID": "spa-client-id",
         "ORCHESTRATOR_MCP_CLIENT_ID": "mcp-client-id",
         "ORCHESTRATOR_MCP_CLIENT_SECRET": "mcp-client-secret",
         "ORCHESTRATOR_AGENT_ID": "orch-agent-uuid",
@@ -108,7 +107,6 @@ class TestSuccessfulConstruction:
         cfg = OrchestratorConfig.from_env(_base_env())
         assert cfg.is_base_url == "https://is.example.com:9443"
         assert cfg.is_insecure_tls is True
-        assert cfg.spa_client_id == "spa-client-id"
         assert cfg.mcp_client_id == "mcp-client-id"
         assert cfg.mcp_client_secret == "mcp-client-secret"
         assert cfg.hr_agent_url == "http://hr_agent:8001"
@@ -177,7 +175,6 @@ class TestMissingRequiredVars:
 
     REQUIRED = [
         "WSO2_IS_BASE_URL",
-        "ORCHESTRATOR_APP_CLIENT_ID",
         "ORCHESTRATOR_MCP_CLIENT_ID",
         "ORCHESTRATOR_MCP_CLIENT_SECRET",
         "ORCHESTRATOR_AGENT_ID",
