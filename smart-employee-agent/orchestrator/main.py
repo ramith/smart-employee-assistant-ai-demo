@@ -54,6 +54,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+import httpx
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -82,6 +84,7 @@ from orchestrator.chat.keyword_fallback import KeywordRouter
 from orchestrator.chat.routes import ChatRouterDeps, build_chat_router
 from orchestrator.config import OrchestratorConfig
 from orchestrator.events.sse_router import SseRouterDeps, build_sse_router
+from orchestrator.reports.routes import ReportsRouterDeps, build_reports_router
 
 __all__ = ["create_app", "main"]
 
@@ -230,6 +233,12 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         is_client_cfg = cfg.is_client_config()
         is_client = WSO2ISClient(config=is_client_cfg)
 
+        # Sprint 4 S4.3: long-lived httpx client for the reports proxy primitive.
+        # Owned by the lifespan so it shares the event loop and is drained
+        # cleanly on shutdown alongside is_client / a2a_clients.
+        reports_http_client = httpx.AsyncClient(timeout=10.0)
+        _app.state.reports_http_client = reports_http_client
+
         jwks_cache = JWKSCache(
             jwks_url=cfg.is_jwks_url,
             insecure_tls=cfg.is_insecure_tls,
@@ -296,6 +305,7 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         except asyncio.CancelledError:
             pass
         await is_client.aclose()
+        await reports_http_client.aclose()
         for agent_id, client in a2a_clients.items():
             await client.aclose()
             logger.debug("a2a_client_closed | agent_id=%s", agent_id)
@@ -367,6 +377,7 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
     async def _patching_lifespan(_app: FastAPI) -> AsyncIterator[None]:
         async with original_lifespan(_app):
             _pattern_c_cell[0] = _app.state.pattern_c
+            _reports_http_cell[0] = _app.state.reports_http_client
             yield
 
     # Re-assign the app lifespan with the patching wrapper.
@@ -448,6 +459,44 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
             )
         )
     )
+    # ── Reports router (Sprint 4 S4.3) ────────────────────────────────────────
+    # Cookie-auth REST surfaces (`/api/me/leaves` today; `/api/reports/...` in
+    # S4.4 / S4.5). The router uses the lifespan-owned `reports_http_client`
+    # via a thin late-binding proxy — same shape as `_LateBindingPatternC`
+    # above. Building the dataclass here lets us mount the router at app
+    # construction time while the actual httpx client is created when the
+    # event loop is up.
+    _reports_http_cell: list["httpx.AsyncClient | None"] = [None]
+
+    class _LateBindingHttpClient:
+        """Thin proxy that forwards `.get(...)` to the real httpx client.
+
+        The lifespan replaces the cell's first element before any request
+        arrives; the proxy is what `forward_with_token_a` actually receives.
+        """
+
+        async def get(self, url: str, *, headers: dict[str, str] | None = None):  # type: ignore[no-untyped-def]
+            real = _reports_http_cell[0]
+            if real is None:
+                raise RuntimeError(
+                    "reports_http_client not yet initialised (lifespan has not started)"
+                )
+            return await real.get(url, headers=headers)
+
+    proxy_reports_http = _LateBindingHttpClient()
+
+    app.include_router(
+        build_reports_router(
+            ReportsRouterDeps(
+                session_store=session_store,
+                http_client=proxy_reports_http,  # type: ignore[arg-type]
+                session_cookie_name=cfg.session_cookie_name,
+                hr_server_url=cfg.hr_server_url,
+                it_server_url=cfg.it_server_url,
+            )
+        )
+    )
+
 
     # ── SSE router ────────────────────────────────────────────────────────────
     # On SSE disconnect (browser-closed / network drop), cancel any in-flight

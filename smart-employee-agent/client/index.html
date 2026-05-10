@@ -242,6 +242,37 @@
         </div>
       </div>
 
+      <!-- ── My Leaves panel (Sprint 4 S4.3 — UC-13/14) ────────────────── -->
+      <!--
+        Visible to any logged-in user immediately after sign-in. Fetches
+        GET /api/me/leaves on first paint; re-fetches on every settled
+        chat_message SSE event so chat-applied leaves appear without reload.
+        Empty-state copy: see app.js renderMyLeavesPanel().
+      -->
+      <section id="my-leaves-panel" class="my-leaves-panel" aria-label="My leave requests" hidden>
+        <header class="my-leaves-header">
+          <h3 class="my-leaves-title">My Leave Requests</h3>
+          <span id="my-leaves-status" class="my-leaves-status" hidden></span>
+        </header>
+        <div id="my-leaves-body" class="my-leaves-body">
+          <!-- Empty state shown initially; replaced by table once data arrives. -->
+          <p id="my-leaves-empty" class="my-leaves-empty">You have no leave requests yet. Ask the HR agent to apply for one.</p>
+          <table id="my-leaves-table" class="my-leaves-table" hidden>
+            <thead>
+              <tr>
+                <th data-sort="request_id">Request ID</th>
+                <th data-sort="type">Type</th>
+                <th data-sort="start_date">Start</th>
+                <th data-sort="end_date">End</th>
+                <th data-sort="days_requested">Days</th>
+                <th data-sort="status">Status</th>
+              </tr>
+            </thead>
+            <tbody id="my-leaves-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
     </main>
 
   </div>

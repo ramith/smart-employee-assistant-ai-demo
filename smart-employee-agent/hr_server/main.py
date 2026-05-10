@@ -23,6 +23,7 @@ REST surfaces (delivered by ``rest_api.server.build_rest_router``):
   GET  /api/holidays                   scope: hr_basic_rest
   GET  /api/leave-policy               scope: hr_basic_rest
   GET  /api/leave-balance              scope: hr_self_rest
+  GET  /api/me/leaves                  scope: hr_self_rest          [S4.3]
   GET  /api/leaves                     scope: hr_self_rest|hr_read_rest
   GET  /api/leaves/{id}                scope: hr_self_rest|hr_read_rest
   POST /api/leaves                     scope: hr_self_rest

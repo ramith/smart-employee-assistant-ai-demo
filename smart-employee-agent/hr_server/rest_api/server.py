@@ -9,11 +9,12 @@
   (S4.3), `/api/reports/...` (S4.4 / S4.5), approve/reject (S4.4) — land on a
   router that's already authenticated and store-backed.
 
-  Endpoints (existing handlers preserved from the orphan; B1/B2 new endpoints
-  arrive in S4.3+):
+  Endpoints (Sprint 4 S4.3 added GET /api/me/leaves; B2 + approve/reject in
+  S4.4):
     GET  /api/holidays               (hr_basic_rest)
     GET  /api/leave-policy           (hr_basic_rest)
     GET  /api/leave-balance          (hr_self_rest)
+    GET  /api/me/leaves              (hr_self_rest)                  [S4.3]
     GET  /api/leaves                 (hr_self_rest | hr_read_rest)
     GET  /api/leaves/{id}            (hr_self_rest for own | hr_read_rest)
     POST /api/leaves                 (hr_self_rest)
@@ -213,6 +214,28 @@ def build_rest_router(deps: RestApiDeps) -> APIRouter:
         return JSONResponse(
             await hr_service.get_my_leave_balance(ctx.sub, ctx.first_name, ctx.last_name)
         )
+
+    @router.get("/api/me/leaves")
+    async def get_my_leaves(request: Request):
+        """Return the authenticated user's own leave requests.
+
+        Sprint 4 S4.3 (UC-13/14 — My Leaves panel). Bearer token-A; scope
+        ``hr_self_rest``. Identity is derived from ``claims.sub`` only — no
+        ``user_sub`` query parameter is honoured (Stage 5 OQ-1: never leak
+        ``sub`` in the URL).
+
+        Response envelope is locked at Stage 5 §5: ``{data: [...], count: N}``.
+        """
+        ctx = await authenticate(request)
+        if isinstance(ctx, JSONResponse):
+            return ctx
+        err = _require_scope(ctx, "hr_self_rest")
+        if err:
+            return err
+        leaves = await hr_service.get_my_leave_requests(
+            ctx.sub, ctx.first_name, ctx.last_name
+        )
+        return JSONResponse({"data": leaves, "count": len(leaves)})
 
     @router.get("/api/leaves")
     async def get_leaves(request: Request):

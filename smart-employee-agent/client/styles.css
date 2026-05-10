@@ -1123,3 +1123,106 @@ textarea, input {
   .trace-row > summary { grid-template-columns: auto 1fr auto; }
   .trace-rid { display: none; }   /* hide on narrow; user can expand to see */
 }
+
+
+/* ── My Leaves panel (Sprint 4 S4.3 — UC-13/14) ────────────────────────────── */
+
+.my-leaves-panel {
+  margin: 0.75rem auto 1.25rem;
+  padding: 0.85rem 1rem 1rem;
+  max-width: 880px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.my-leaves-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
+.my-leaves-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.my-leaves-status {
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+}
+
+.my-leaves-status--error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.my-leaves-empty {
+  margin: 0.5rem 0 0.25rem;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.88rem;
+}
+
+.my-leaves-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.my-leaves-table thead th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.5rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.my-leaves-table thead th:hover {
+  background: var(--surface-alt);
+}
+
+.my-leaves-table tbody td {
+  padding: 0.5rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.my-leaves-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.leave-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.leave-status--pending {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
+.leave-status--approved {
+  background: var(--success-soft);
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+.leave-status--rejected {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}

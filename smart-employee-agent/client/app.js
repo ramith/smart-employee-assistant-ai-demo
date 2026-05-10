@@ -506,6 +506,9 @@ function showAppShell() {
   $("app-shell").hidden = false;
   $("user-display-name").textContent = userDisplayName.slice(0, 24) + (userDisplayName.length > 24 ? "…" : "");
   setComposerEnabled(true);
+  // Sprint 4 S4.3: My Leaves panel — wire sort handlers once, then fetch.
+  wireMyLeavesPanel();
+  fetchMyLeaves();
 }
 
 function showSigninNotice(text, autoDismiss = false) {
@@ -799,6 +802,10 @@ function onChatMessageEvent(event) {
   requestInFlight = false;
   routingCount = 0;
   setComposerEnabled(true);
+  // Sprint 4 S4.3: refresh My Leaves so chat-applied leaves appear without
+  // a manual reload. Conservative: re-fetch on EVERY settled chat_message
+  // (demo scale; performance not a concern).
+  fetchMyLeaves();
 }
 
 // ─── SSE: error event ────────────────────────────────────────────────────────
@@ -1545,6 +1552,143 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+// ─── My Leaves panel (Sprint 4 S4.3 — UC-13/14) ──────────────────────────────
+//
+// Calls GET /api/me/leaves through the orchestrator-proxy primitive (cookie
+// session → token-A → hr_server). Renders a sortable table; on every settled
+// chat_message SSE event we re-fetch so chat-applied leaves appear without
+// page reload. Defensive: 401/403 hide the panel; 503 shows an error pill.
+//
+// Demo scale: ≤ a handful of rows, no virtualisation, no pagination.
+
+const LEAVE_STATUS_CLASS = {
+  pending:  "leave-status--pending",
+  approved: "leave-status--approved",
+  rejected: "leave-status--rejected",
+};
+
+let _myLeavesSort = { key: "start_date", asc: false };  // default: most recent first
+let _myLeavesRows = [];
+let _myLeavesFetching = false;
+
+function setMyLeavesStatus(text, kind) {
+  const el = $("my-leaves-status");
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = "";
+    el.className = "my-leaves-status";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  el.className = "my-leaves-status" + (kind ? " my-leaves-status--" + kind : "");
+}
+
+async function fetchMyLeaves() {
+  const panel = $("my-leaves-panel");
+  if (!panel) return;
+  if (_myLeavesFetching) return;  // simple in-flight guard
+  _myLeavesFetching = true;
+  try {
+    const resp = await fetch("/api/me/leaves", {
+      method: "GET",
+      credentials: "include",
+      headers: { "Accept": "application/json" },
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      // Panel is silent on auth/scope failures — log + hide so the screen
+      // doesn't accuse the user of something they can't fix.
+      log("[my-leaves]", "hidden", { status: resp.status });
+      panel.hidden = true;
+      return;
+    }
+    if (resp.status >= 500 || resp.status === 503) {
+      panel.hidden = false;
+      setMyLeavesStatus("Could not load leave requests. Try again later.", "error");
+      return;
+    }
+    const body = await resp.json().catch(() => null);
+    if (!body || !Array.isArray(body.data)) {
+      panel.hidden = false;
+      setMyLeavesStatus("Could not load leave requests. Try again later.", "error");
+      return;
+    }
+    _myLeavesRows = body.data;
+    panel.hidden = false;
+    setMyLeavesStatus("");
+    renderMyLeavesPanel(_myLeavesRows);
+  } catch (err) {
+    logWarn("[my-leaves]", "fetch failed", err);
+    panel.hidden = false;
+    setMyLeavesStatus("Could not load leave requests. Try again later.", "error");
+  } finally {
+    _myLeavesFetching = false;
+  }
+}
+
+function _sortMyLeavesRows(rows) {
+  const { key, asc } = _myLeavesSort;
+  const sorted = rows.slice();
+  sorted.sort((a, b) => {
+    const av = a[key]; const bv = b[key];
+    if (av === bv) return 0;
+    if (av === undefined || av === null) return 1;
+    if (bv === undefined || bv === null) return -1;
+    if (typeof av === "number" && typeof bv === "number") {
+      return asc ? av - bv : bv - av;
+    }
+    return asc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+  return sorted;
+}
+
+function renderMyLeavesPanel(rows) {
+  const tbody = $("my-leaves-tbody");
+  const table = $("my-leaves-table");
+  const empty = $("my-leaves-empty");
+  if (!tbody || !table || !empty) return;
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    tbody.innerHTML = "";
+    table.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+
+  empty.hidden = true;
+  table.hidden = false;
+  const sorted = _sortMyLeavesRows(rows);
+  tbody.innerHTML = sorted.map((r) => {
+    const status = String(r.status || "");
+    const cls = LEAVE_STATUS_CLASS[status.toLowerCase()] || "leave-status--pending";
+    return "<tr>"
+      + "<td>" + escapeHtml(r.request_id || "") + "</td>"
+      + "<td>" + escapeHtml(r.type || "") + "</td>"
+      + "<td>" + escapeHtml(r.start_date || "") + "</td>"
+      + "<td>" + escapeHtml(r.end_date || "") + "</td>"
+      + "<td>" + escapeHtml(String(r.days_requested ?? "")) + "</td>"
+      + "<td><span class='leave-status " + cls + "'>" + escapeHtml(status) + "</span></td>"
+      + "</tr>";
+  }).join("");
+}
+
+function wireMyLeavesPanel() {
+  const table = $("my-leaves-table");
+  if (!table) return;
+  table.querySelectorAll("thead th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      if (_myLeavesSort.key === key) {
+        _myLeavesSort.asc = !_myLeavesSort.asc;
+      } else {
+        _myLeavesSort = { key, asc: true };
+      }
+      renderMyLeavesPanel(_myLeavesRows);
+    });
+  });
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
