@@ -423,6 +423,9 @@ async def _run_serial_fan_out(
                 # binding_message so the SPA can surface it directly
                 # (WSO2 IS doesn't reliably show it on its consent UI).
                 binding_message=consent.binding_message,
+                # Sprint 4 S4.1: forward the server-rendered action_text
+                # for parameterised admin-action copy.
+                action_text=consent.action_text,
             )
         )
 

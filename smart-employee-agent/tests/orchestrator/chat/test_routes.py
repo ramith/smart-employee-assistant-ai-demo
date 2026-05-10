@@ -980,3 +980,54 @@ def test_chat_routing_event_carries_total_tools_metadata() -> None:
     assert len(routing) == 1
     assert routing[0].total_tools == 1
     assert routing[0].tool_index == 0
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 S4.1 — action_text propagates from ConsentRequiredPayload through
+# the SSE CibaUrlEvent (UC-11). When the dispatcher constructs a
+# parameterised "Assign cubicle C-027 to jane.doe" string, the SPA must see
+# it verbatim on the ciba_url event.
+# ---------------------------------------------------------------------------
+
+
+def test_action_text_propagates_through_ciba_url_event() -> None:
+    """ConsentRequiredPayload(action_text=...) → CibaUrlEvent.action_text set."""
+    consent = ConsentRequiredPayload(
+        auth_req_id="auth-req-cube-001",
+        auth_url="https://is.example.com/consent?auth_req_id=auth-req-cube-001",
+        agent_label="HR Agent",
+        action="Assign cubicle to employee",
+        scope="openid hr_assets_write_rest",
+        binding_message="HR Agent wants to assign cubicle C-027 to jane.doe corr-id rid",
+        expires_in=300,
+        is_refresh=False,
+        prior_consent_at=None,
+        action_text="Assign cubicle C-027 to jane.doe",
+    )
+    result = _result_payload({"success": True, "cubicle_id": "C-027"})
+
+    hr_client = MagicMock()
+    hr_client.message_send = AsyncMock(return_value=consent)
+    hr_client.await_completion = AsyncMock(return_value=result)
+
+    tool_calls = [ToolCall(
+        agent_id="hr_agent",
+        tool_id="hr.cubicle_assign",
+        args={"cubicle_id": "C-027", "employee_username": "jane.doe"},
+    )]
+    app, session = _build_app(tool_calls=tool_calls, hr_a2a_client=hr_client)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "assign C-027 to jane.doe"},
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+
+    events = _drain_queue(session)
+    ciba_url = [e for e in events if isinstance(e, CibaUrlEvent)]
+    assert len(ciba_url) == 1
+    assert ciba_url[0].action_text == "Assign cubicle C-027 to jane.doe"
+    # Scope still carries the write-tier marker so SPA can apply amber tint.
+    assert "hr_assets_write_rest" in ciba_url[0].scope

@@ -7,6 +7,17 @@
   Users are auto-registered on first interaction from JWT claims.
   Global data (holidays, leave policy) is pre-populated seed data.
   User data (requests, balances) starts empty.
+
+  Sprint 4 S4.1: cubicles + named-user seed
+  ----------------------------------------------
+  - ``cubicles`` (NEW): 100 entries across 4 floors (25 per floor, IDs
+    ``C-001`` .. ``C-100``). Each row carries the assigned-to fields needed
+    by UC-11 ``assign_cubicle`` (username + email + sub + assigned_at).
+    ``assigned_to_sub`` is internal join data only — never returned by any
+    report endpoint (sprint-4.md §7).
+  - ``users`` (EXTENDED): pre-seeded with named demo users (``employee_user``,
+    ``hr_admin_user``, ``jane.doe``, ``bob.smith``) so ``lookup_employee`` has
+    deterministic data without depending on the auto-register code path.
 """
 
 import copy
@@ -55,22 +66,82 @@ _DEFAULT_LEAVE_BALANCE = {
     "personal": 5,
 }
 
+# Sprint 4 S4.1 — pre-seeded named demo users (lookup_employee fodder).
+# Keys are JWT sub (UUID-shaped); values include the human identifiers used
+# by UC-11. The auto-register path (ensure_user) still populates additional
+# users on first call from JWT claims; these entries are simply present from
+# module import so the demo has data without needing every user to first
+# touch a leave-balance call.
+_SEED_USERS = [
+    {
+        "username": "employee_user",
+        "email": "employee.user@example.com",
+        "sub": "employee_user-sub-uuid-0001",
+        "name": "Employee User",
+    },
+    {
+        "username": "hr_admin_user",
+        "email": "hr.admin.user@example.com",
+        "sub": "hr_admin_user-sub-uuid-0002",
+        "name": "HR Admin User",
+    },
+    {
+        "username": "jane.doe",
+        "email": "jane.doe@example.com",
+        "sub": "jane.doe-sub-uuid-0003",
+        "name": "Jane Doe",
+    },
+    {
+        "username": "bob.smith",
+        "email": "bob.smith@example.com",
+        "sub": "bob.smith-sub-uuid-0004",
+        "name": "Bob Smith",
+    },
+]
+
+
+def _seed_cubicles() -> List[Dict]:
+    """Build the 100-cubicle seed (4 floors, 25 each, all initially vacant).
+
+    Distribution: floor 1 → C-001..C-025, floor 2 → C-026..C-050,
+    floor 3 → C-051..C-075, floor 4 → C-076..C-100.
+    """
+    rows: List[Dict] = []
+    for n in range(1, 101):
+        floor = ((n - 1) // 25) + 1
+        rows.append(
+            {
+                "cubicle_id": f"C-{n:03d}",
+                "floor": floor,
+                "occupied": False,
+                "assigned_to_username": None,
+                "assigned_to_email": None,
+                "assigned_to_sub": None,
+                "assigned_at": None,
+            }
+        )
+    return rows
+
+
 # ─── Mutable In-Memory Stores ────────────────────────────────────────────────
 
 leave_policy: Dict = {}
 holidays: List = []
 
 # User data — keyed by JWT sub
-users: Dict[str, Dict] = {}            # sub -> {name, sub, first_seen}
+users: Dict[str, Dict] = {}            # sub -> {name, sub, first_seen, ...}
 leave_balances: Dict[str, Dict] = {}   # sub -> {annual, sick, personal}
 leave_requests: Dict[str, Dict] = {}   # request_id -> {user_sub, user_name, ...}
 leave_request_counter: int = 0
+
+# Sprint 4 S4.1 — flat list (100 rows). Lookups iterate; demo scale.
+cubicles: List[Dict] = []
 
 
 def reset_data() -> None:
     """Reset all stores. Global data re-seeded, user data cleared."""
     global leave_policy, holidays, users, leave_balances, leave_requests
-    global leave_request_counter
+    global leave_request_counter, cubicles
     prior_users = len(users) if users else 0
     prior_requests = len(leave_requests) if leave_requests else 0
     leave_policy = copy.deepcopy(_SEED_LEAVE_POLICY)
@@ -79,6 +150,20 @@ def reset_data() -> None:
     leave_balances = {}
     leave_requests = {}
     leave_request_counter = 0
+    # Sprint 4 S4.1 — re-seed cubicles + named users.
+    cubicles = _seed_cubicles()
+    for entry in _SEED_USERS:
+        sub = entry["sub"]
+        users[sub] = {
+            "username": entry["username"],
+            "email": entry["email"],
+            "sub": sub,
+            "name": entry["name"],
+            "first_name": entry["name"].split()[0] if entry["name"] else "",
+            "last_name": " ".join(entry["name"].split()[1:]) if entry["name"] else "",
+            "first_seen": str(dt_date.today()),
+        }
+        leave_balances[sub] = copy.deepcopy(_DEFAULT_LEAVE_BALANCE)
     if prior_users or prior_requests:
         logger.warning(
             "[STORE RESET] HR data reset — cleared %d user(s) and %d leave request(s); seed data re-applied",

@@ -549,3 +549,198 @@ async def test_get_leave_balance_auto_registers_user(rsa_keypair, sign_token, hr
     data = resp.json()
     assert data["employee"] == "Probe"
     assert _hr_store_mod.users[SUBJECT]["name"] == "Probe"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 S4.1 cubicle scope-guard tests (UC-11)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hr_read_rest_payload() -> dict[str, Any]:
+    """Valid JWT payload with hr_read_rest scope (HR Admin read tier)."""
+    now = int(time.time())
+    return {
+        "iss": ISSUER,
+        "sub": SUBJECT,
+        "aud": HR_AGENT_CLIENT_ID,
+        "exp": now + 300,
+        "iat": now,
+        "jti": JTI + "-r",
+        "scope": "openid hr_read_rest",
+        "act": {"sub": HR_AGENT_UUID},
+        "username": "Probe",
+        "email": "probe.user@example.com",
+    }
+
+
+@pytest.fixture
+def hr_assets_write_payload() -> dict[str, Any]:
+    """Valid JWT payload with hr_assets_write_rest scope (admin write tier)."""
+    now = int(time.time())
+    return {
+        "iss": ISSUER,
+        "sub": SUBJECT,
+        "aud": HR_AGENT_CLIENT_ID,
+        "exp": now + 300,
+        "iat": now,
+        "jti": JTI + "-aw",
+        "scope": "openid hr_assets_write_rest",
+        "act": {"sub": HR_AGENT_UUID},
+        "username": "Probe",
+        "email": "probe.user@example.com",
+    }
+
+
+# T-HR-MCP-CUBE-01: hr_read_rest token → get_cubicle_summary returns 200.
+
+
+@pytest.mark.asyncio
+async def test_cubicle_summary_with_hr_read_rest(rsa_keypair, sign_token, hr_read_rest_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_rest_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_cubicle_summary",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["floor_1"] == {"total": 25, "vacant": 25}
+    assert data["floor_4"] == {"total": 25, "vacant": 25}
+
+
+# T-HR-MCP-CUBE-02: hr_self_rest-only token → get_cubicle_summary rejected.
+
+
+@pytest.mark.asyncio
+async def test_cubicle_summary_rejects_hr_self_only(rsa_keypair, sign_token, hr_read_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)  # has hr_self_rest, not hr_read_rest
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_cubicle_summary",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error_id"] == "ERR-MCP-003"
+
+
+# T-HR-MCP-CUBE-03: hr_read_rest token → vacant_on_floor returns 200.
+
+
+@pytest.mark.asyncio
+async def test_vacant_floor_with_hr_read_rest(rsa_keypair, sign_token, hr_read_rest_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_rest_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_vacant_cubicles_on_floor",
+        json={"floor": 2},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["floor"] == 2
+    assert "C-027" in data["vacant"]
+
+
+# T-HR-MCP-CUBE-04: assign_cubicle requires hr_assets_write_rest (NEW scope).
+
+
+@pytest.mark.asyncio
+async def test_assign_cubicle_with_hr_assets_write(rsa_keypair, sign_token, hr_assets_write_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_assets_write_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/assign_cubicle",
+        json={
+            "cubicle_id": "C-027",
+            "employee_username": "jane.doe",
+            "employee_email": "jane.doe@example.com",
+        },
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is True
+    assert data["cubicle_id"] == "C-027"
+    assert data["floor"] == 2
+    assert data["assigned_to"]["username"] == "jane.doe"
+
+
+# T-HR-MCP-CUBE-05: hr_read_rest-only token CANNOT assign_cubicle.
+
+
+@pytest.mark.asyncio
+async def test_assign_cubicle_rejects_hr_read_only(rsa_keypair, sign_token, hr_read_rest_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_rest_payload)  # missing hr_assets_write_rest
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/assign_cubicle",
+        json={
+            "cubicle_id": "C-027",
+            "employee_username": "jane.doe",
+            "employee_email": "jane.doe@example.com",
+        },
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error_id"] == "ERR-MCP-003"
+
+
+# T-HR-MCP-CUBE-06: get_my_cubicle requires hr_self_rest.
+
+
+@pytest.mark.asyncio
+async def test_get_my_cubicle_with_hr_self_rest(rsa_keypair, sign_token, hr_read_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)  # hr_self_rest
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_my_cubicle",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    # The fixture user has no cubicle → assigned False.
+    assert data["assigned"] is False
+
+
+# T-HR-MCP-CUBE-07: lookup_employee requires hr_read_rest.
+
+
+@pytest.mark.asyncio
+async def test_lookup_employee_with_hr_read_rest(rsa_keypair, sign_token, hr_read_rest_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_rest_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/lookup_employee",
+        json={"username_or_email": "jane.doe"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["found"] is True
+    assert data["username"] == "jane.doe"
+    assert data["email"] == "jane.doe@example.com"

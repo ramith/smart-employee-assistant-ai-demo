@@ -98,6 +98,26 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
     # Specific verbs first; dedup-by-agent in route() means the first match
     # per agent wins. "approve my leave" therefore fires hr.approve_leave only,
     # not also hr.read_balance.
+    #
+    # Sprint 4 S4.1 (UC-11): cubicle intents are listed FIRST so that
+    # "show me vacant cubicles" doesn't fall through to the generic leave
+    # rule, and "assign C-027 to jane.doe" doesn't trigger the IT issue rule
+    # (which also has "assign" as a keyword).
+    KeywordRule(
+        keywords=("vacant cubicle", "vacant cubicles", "show cubicles", "cubicle summary"),
+        agent_id="hr_agent",
+        tool_id="hr.cubicle_summary",
+    ),
+    KeywordRule(
+        keywords=("floor", "show me floor"),
+        agent_id="hr_agent",
+        tool_id="hr.cubicle_list_floor",
+    ),
+    KeywordRule(
+        keywords=("assign cubicle", "assign c-"),
+        agent_id="hr_agent",
+        tool_id="hr.cubicle_assign",
+    ),
     KeywordRule(
         keywords=("approve", "approval"),
         agent_id="hr_agent",
@@ -146,6 +166,9 @@ _LEAVE_ID_RE = re.compile(r"\bLV-\d+\b", re.IGNORECASE)
 _ASSET_ID_RE = re.compile(r"\b[A-Z]{2,4}-[A-Z0-9]+-\d+\b", re.IGNORECASE)
 # "to <name>" — captures the next non-space token after "to" or "for".
 _RECIPIENT_RE = re.compile(r"\b(?:to|for)\s+(\S+)", re.IGNORECASE)
+# Sprint 4 S4.1 (UC-11): cubicle ID (C-027) + floor number.
+_CUBICLE_ID_RE = re.compile(r"\bC-\d{3}\b", re.IGNORECASE)
+_FLOOR_NUM_RE = re.compile(r"\bfloor\s+(\d+)\b", re.IGNORECASE)
 
 
 def _extract_inline_args(tool_id: str, message: str) -> dict:
@@ -171,6 +194,21 @@ def _extract_inline_args(tool_id: str, message: str) -> dict:
         if m_recip:
             out["employee_id"] = m_recip.group(1).rstrip(".,;:!?")
         return out
+    if tool_id == "hr.cubicle_list_floor":
+        m_floor = _FLOOR_NUM_RE.search(message)
+        if m_floor:
+            return {"floor": int(m_floor.group(1))}
+        return {}
+    if tool_id == "hr.cubicle_assign":
+        out2: dict = {}
+        m_cubicle = _CUBICLE_ID_RE.search(message)
+        if m_cubicle:
+            out2["cubicle_id"] = m_cubicle.group(0).upper()
+        m_recip2 = _RECIPIENT_RE.search(message)
+        if m_recip2:
+            # Strip trailing punctuation; the remainder is the username.
+            out2["employee_username"] = m_recip2.group(1).rstrip(".,;:!?")
+        return out2
     return {}
 
 

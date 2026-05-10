@@ -309,3 +309,44 @@ def test_route_multiple_it_keywords_fires_once() -> None:
     result = router.route("I need equipment for my computer")
     assert len(result) == 1
     assert result[0] == _it_call()
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 S4.1 — cubicle intents (UC-11)
+# ---------------------------------------------------------------------------
+
+
+def test_route_cubicle_summary_intent() -> None:
+    """'show me vacant cubicles' must route to hr.cubicle_summary."""
+    router = KeywordRouter()
+    result = router.route("show me vacant cubicles")
+    assert len(result) == 1
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.cubicle_summary"
+
+
+def test_route_cubicle_list_floor_extracts_number() -> None:
+    """'show me floor 2' must route to hr.cubicle_list_floor with floor=2."""
+    router = KeywordRouter()
+    result = router.route("show me floor 2")
+    assert len(result) == 1
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.cubicle_list_floor"
+    assert result[0].args == {"floor": 2}
+
+
+def test_route_cubicle_assign_extracts_id_and_username() -> None:
+    """'assign C-027 to jane.doe' must route to hr.cubicle_assign with both fields.
+
+    The cubicle rule must fire first (rule-order discipline). The legacy IT
+    'assign' rule may also match the same message; rule-order ensures HR
+    cubicle is the first match for the hr_agent.
+    """
+    router = KeywordRouter()
+    result = router.route("assign C-027 to jane.doe")
+    # Find the HR call — must exist and must be the cubicle_assign tool.
+    hr_calls = [c for c in result if c.agent_id == "hr_agent"]
+    assert len(hr_calls) == 1
+    assert hr_calls[0].tool_id == "hr.cubicle_assign"
+    assert hr_calls[0].args.get("cubicle_id") == "C-027"
+    assert hr_calls[0].args.get("employee_username") == "jane.doe"

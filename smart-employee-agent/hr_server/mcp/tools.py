@@ -1,28 +1,26 @@
-"""HR-server MCP tool endpoints — Sprint 1 Wave 6 / Sprint 4 S4.0 (Track B).
+"""HR-server MCP tool endpoints — Sprint 1 Wave 6 / Sprint 4 S4.0 + S4.1.
 
-Exposes three FastAPI POST endpoints under ``/mcp/tools/``:
+Exposes FastAPI POST endpoints under ``/mcp/tools/``:
 
-    POST /mcp/tools/get_leave_balance   scope: hr_self_rest
-    POST /mcp/tools/get_leave_history   scope: hr_self_rest
-    POST /mcp/tools/approve_leave       scope: hr_approve_rest
+    POST /mcp/tools/get_leave_balance              scope: hr_self_rest
+    POST /mcp/tools/get_leave_history              scope: hr_self_rest
+    POST /mcp/tools/approve_leave                  scope: hr_approve_rest
+    POST /mcp/tools/get_cubicle_summary            scope: hr_read_rest        [S4.1 D1]
+    POST /mcp/tools/get_vacant_cubicles_on_floor   scope: hr_read_rest        [S4.1 D2]
+    POST /mcp/tools/assign_cubicle                 scope: hr_assets_write_rest [S4.1 D3]
+    POST /mcp/tools/get_my_cubicle                 scope: hr_self_rest        [S4.1 D4]
+    POST /mcp/tools/lookup_employee                scope: hr_read_rest        [S4.1 D5]
 
-Sprint 4 S4.0 reconciliation (D1): handlers now delegate to ``hr_service``
+Sprint 4 S4.0 reconciliation (D1): handlers delegate to ``hr_service``
 (the canonical in-memory implementation backed by ``service/store.py``)
-instead of returning the Sprint-1 canned dicts. The ``_CANNED_*`` constants
-have been removed; ``hr_service.ensure_user`` auto-registers users on first
-call so the demo's "single-user" assumption keeps holding.
+instead of returning the Sprint-1 canned dicts.
 
 Each handler:
   1. Extracts a Bearer token from the ``Authorization`` header.
-  2. Reads the ``X-Request-ID`` correlation id (set by ``CorrelationIdMiddleware``
-     or passed directly from the caller; falls back to ``get_request_id()``).
-  3. Calls ``deps.validator.validate_token(jwt, required_scopes=...)`` which runs
-     the full F-04 six-step check (sig, iss, exp, aud, act.sub, scope).
-  4. On ``JWTValidationError``, ``PeerTrustError``, or ``ScopeError``: raises
-     ``HTTPException(401)`` whose ``detail`` dict is ``{"error_id": ..., "request_id": ...}``.
-  5. On success: delegates to ``hr_service`` using the now-Sprint-4-plumbed
-     ``claims.username`` (Track A) — falling back to ``claims.sub`` prefix when
-     username is absent (e.g. system tokens).
+  2. Reads the ``X-Request-ID`` correlation id.
+  3. Calls ``deps.validator.validate_token(jwt, required_scopes=...)`` (F-04).
+  4. On JWTValidationError / PeerTrustError / ScopeError → 401.
+  5. On success: delegates to ``hr_service``.
 """
 
 from __future__ import annotations
@@ -74,6 +72,18 @@ __all__ = [
     "GetLeaveHistoryResult",
     "ApproveLeaveArgs",
     "ApproveLeaveResult",
+    # Sprint 4 S4.1 cubicle models
+    "GetCubicleSummaryArgs",
+    "CubicleFloorCounts",
+    "GetCubicleSummaryResult",
+    "GetVacantCubiclesOnFloorArgs",
+    "GetVacantCubiclesOnFloorResult",
+    "GetMyCubicleArgs",
+    "GetMyCubicleResult",
+    "AssignCubicleArgs",
+    "AssignCubicleResult",
+    "LookupEmployeeArgs",
+    "LookupEmployeeResult",
 ]
 
 
@@ -167,6 +177,134 @@ class ApproveLeaveResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Sprint 4 S4.1 cubicle models (UC-11)
+# ---------------------------------------------------------------------------
+
+
+class GetCubicleSummaryArgs(BaseModel):
+    """Request body for ``get_cubicle_summary``. No fields — included for
+    payload symmetry with the other tools."""
+
+
+class CubicleFloorCounts(BaseModel):
+    """Per-floor totals returned by the summary endpoint."""
+
+    total: int
+    vacant: int
+
+
+class GetCubicleSummaryResult(BaseModel):
+    """Response for ``get_cubicle_summary``.
+
+    Shape mirrors the dict returned by ``hr_service.get_cubicle_summary``:
+    one entry per floor (1..4) keyed as ``floor_N``.
+    """
+
+    floor_1: CubicleFloorCounts
+    floor_2: CubicleFloorCounts
+    floor_3: CubicleFloorCounts
+    floor_4: CubicleFloorCounts
+
+
+class GetVacantCubiclesOnFloorArgs(BaseModel):
+    """Request body for ``get_vacant_cubicles_on_floor``."""
+
+    floor: int = Field(ge=1, le=4, description="Floor number 1..4.")
+
+
+class GetVacantCubiclesOnFloorResult(BaseModel):
+    """Response for ``get_vacant_cubicles_on_floor``.
+
+    On valid floor: returns the list of vacant cubicle IDs on that floor.
+    On invalid floor: ``error="invalid_floor"`` with ``vacant=[]`` (Pydantic
+    cannot represent the heterogeneous union cleanly without a discriminator;
+    we keep both fields and let the caller branch on ``error``).
+    """
+
+    floor: int | None = None
+    vacant: list[str] = Field(default_factory=list)
+    error: str | None = None
+    message: str | None = None
+
+
+class GetMyCubicleArgs(BaseModel):
+    """Request body for ``get_my_cubicle``. Self-service: no fields needed —
+    the handler reads ``claims.username``."""
+
+
+class GetMyCubicleResult(BaseModel):
+    """Response for ``get_my_cubicle``.
+
+    ``assigned=False`` indicates the caller has no cubicle. Otherwise
+    ``cubicle_id``, ``floor``, ``assigned_at`` are populated.
+    """
+
+    assigned: bool
+    cubicle_id: str | None = None
+    floor: int | None = None
+    assigned_at: str | None = None
+
+
+class AssignCubicleArgs(BaseModel):
+    """Request body for ``assign_cubicle`` (write-tier, hr_assets_write_rest)."""
+
+    cubicle_id: str = Field(min_length=1, description="Cubicle identifier (e.g. C-027).")
+    employee_username: str = Field(min_length=1, description="Target employee username.")
+    employee_email: str = Field(default="", description="Optional email; for audit.")
+
+
+class _CurrentHolder(BaseModel):
+    """Sub-model for ``cubicle_already_occupied`` responses."""
+
+    username: str | None = None
+    email: str | None = None
+
+
+class _AssignedTo(BaseModel):
+    """Sub-model for the happy-path ``assigned_to`` field."""
+
+    username: str | None = None
+    email: str | None = None
+
+
+class AssignCubicleResult(BaseModel):
+    """Response for ``assign_cubicle``.
+
+    Happy path: ``success=True`` plus assignment fields. Business-layer
+    rejection: ``success=False`` plus ``error`` and either ``current_holder``
+    or ``message``. Status stays 200 — auth + scope already passed.
+    """
+
+    success: bool = True
+    cubicle_id: str | None = None
+    floor: int | None = None
+    assigned_to: _AssignedTo | None = None
+    assigned_at: str | None = None
+    error: str | None = None
+    message: str | None = None
+    current_holder: _CurrentHolder | None = None
+
+
+class LookupEmployeeArgs(BaseModel):
+    """Request body for ``lookup_employee``."""
+
+    username_or_email: str = Field(min_length=1, description="Username or email.")
+
+
+class LookupEmployeeResult(BaseModel):
+    """Response for ``lookup_employee``.
+
+    F-12: ``sub`` IS UUID is returned to the HR Agent (which uses it as
+    ``login_hint`` on CIBA) but MUST NOT be logged or surfaced to chat/UI.
+    """
+
+    found: bool
+    username: str | None = None
+    email: str | None = None
+    sub: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # Dependency container
 # ---------------------------------------------------------------------------
 
@@ -237,7 +375,7 @@ def _username_for(claims) -> str:  # type: ignore[no-untyped-def]
 
 
 def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
-    """Return a FastAPI ``APIRouter`` with three HR tool endpoints.
+    """Return a FastAPI ``APIRouter`` with eight HR tool endpoints.
 
     All endpoints are mounted under the prefix supplied by the caller (typically
     ``/mcp/tools``).  Each handler validates the inbound token via
@@ -442,5 +580,261 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             message=result.get("message"),
             approved_by=act_sub or claims.sub,
         )
+
+    # ── Sprint 4 S4.1 cubicle handlers (UC-11) ────────────────────────────────
+    #
+    # All five share the same auth boilerplate as the leave handlers: extract
+    # bearer, validate token under the required scope, delegate to hr_service.
+    # Auth-layer rejection → 401. Business-layer rejection (e.g. cubicle
+    # already occupied) → 200 with ``success=False`` per the existing pattern.
+
+    def _validate(token_str: str | None, rid: str, required: frozenset[str]):
+        """Shared validate-or-401 helper (used by the cubicle handlers)."""
+        if not token_str:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        return token_str, rid, required
+
+    # ── get_cubicle_summary (D1, hr_read_rest) ────────────────────────────────
+
+    @router.post("/get_cubicle_summary", response_model=GetCubicleSummaryResult)
+    async def get_cubicle_summary(
+        body: GetCubicleSummaryArgs,  # noqa: ARG001 — empty body kept for symmetry
+        request: Request,
+    ) -> GetCubicleSummaryResult:
+        """Return per-floor cubicle counts (HR Admin read path)."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("get_cubicle_summary missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_read_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "get_cubicle_summary validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        result = await hr_service.get_cubicle_summary()
+        return GetCubicleSummaryResult(
+            floor_1=CubicleFloorCounts(**result["floor_1"]),
+            floor_2=CubicleFloorCounts(**result["floor_2"]),
+            floor_3=CubicleFloorCounts(**result["floor_3"]),
+            floor_4=CubicleFloorCounts(**result["floor_4"]),
+        )
+
+    # ── get_vacant_cubicles_on_floor (D2, hr_read_rest) ───────────────────────
+
+    @router.post(
+        "/get_vacant_cubicles_on_floor",
+        response_model=GetVacantCubiclesOnFloorResult,
+    )
+    async def get_vacant_cubicles_on_floor(
+        body: GetVacantCubiclesOnFloorArgs,
+        request: Request,
+    ) -> GetVacantCubiclesOnFloorResult:
+        """Return the vacant-cubicle list for a given floor."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("get_vacant_cubicles_on_floor missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_read_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "get_vacant_cubicles_on_floor validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        result = await hr_service.get_vacant_cubicles_on_floor(body.floor)
+        return GetVacantCubiclesOnFloorResult(**result)
+
+    # ── get_my_cubicle (D4, hr_self_rest) ─────────────────────────────────────
+
+    @router.post("/get_my_cubicle", response_model=GetMyCubicleResult)
+    async def get_my_cubicle(
+        body: GetMyCubicleArgs,  # noqa: ARG001 — empty body
+        request: Request,
+    ) -> GetMyCubicleResult:
+        """Return the caller's cubicle assignment (self-service)."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("get_my_cubicle missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            claims = await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_self_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "get_my_cubicle validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        username = _username_for(claims)
+        result = await hr_service.get_my_cubicle(username)
+        return GetMyCubicleResult(**result)
+
+    # ── assign_cubicle (D3, hr_assets_write_rest) ─────────────────────────────
+
+    @router.post("/assign_cubicle", response_model=AssignCubicleResult)
+    async def assign_cubicle(
+        body: AssignCubicleArgs,
+        request: Request,
+    ) -> AssignCubicleResult:
+        """Assign a cubicle to an employee (HR Admin, write tier).
+
+        Required scope ``hr_assets_write_rest`` (NEW in Sprint 4). On
+        business-layer rejection (already occupied / not found) returns 200
+        with ``success=False`` and an ``error`` field.
+        """
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("assign_cubicle missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            claims = await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_assets_write_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "assign_cubicle validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        # The agent passes employee_username + employee_email (from its
+        # lookup_employee call). The target employee's IS sub is populated
+        # only when the agent has resolved one — pass through if available
+        # (Sprint 4 S4.1 keeps it None on this surface; sub is recorded
+        # internally if the caller threads it).
+        target_sub = getattr(claims, "sub", None)  # caller's sub (admin)
+        # Per sprint-4.md §7 the assigned_to_sub records the *target employee*
+        # sub. The HR Agent will look this up on the lookup_employee MCP tool
+        # before initiating CIBA, but the wire body here doesn't carry it
+        # (LLM- and admin-typed inputs control username/email only). For
+        # Sprint 4 we therefore record None and rely on the username as the
+        # canonical join key. The internal sub field is preserved in the
+        # service signature for Sprint 5 when the agent threads it through.
+        _ = target_sub  # not stored — caller's sub is for audit, not the join.
+
+        logger.info(
+            "assign_cubicle validation_ok rid=%s admin_sub=%s cubicle_id=%s "
+            "employee_username=%s",
+            rid,
+            getattr(claims, "sub", "?"),
+            body.cubicle_id,
+            body.employee_username,
+        )
+
+        result = await hr_service.assign_cubicle(
+            cubicle_id=body.cubicle_id,
+            employee_username=body.employee_username,
+            employee_email=body.employee_email or "",
+            sub=None,
+        )
+
+        # Branch the response shape on success.
+        if result.get("success"):
+            return AssignCubicleResult(
+                success=True,
+                cubicle_id=result["cubicle_id"],
+                floor=result["floor"],
+                assigned_to=_AssignedTo(**result["assigned_to"]),
+                assigned_at=result["assigned_at"],
+            )
+        # Business-layer rejection.
+        if result.get("error") == "cubicle_already_occupied":
+            return AssignCubicleResult(
+                success=False,
+                error="cubicle_already_occupied",
+                current_holder=_CurrentHolder(**result["current_holder"]),
+            )
+        return AssignCubicleResult(
+            success=False,
+            error=result.get("error"),
+            message=result.get("message"),
+        )
+
+    # ── lookup_employee (D5, hr_read_rest) ────────────────────────────────────
+
+    @router.post("/lookup_employee", response_model=LookupEmployeeResult)
+    async def lookup_employee(
+        body: LookupEmployeeArgs,
+        request: Request,
+    ) -> LookupEmployeeResult:
+        """Resolve a username-or-email to ``{found, username, email, sub}``.
+
+        F-12: ``sub`` is returned to the agent (used as ``login_hint`` on
+        CIBA in some flows) but agent log lines MUST NOT echo it. The SPA /
+        chat surface NEVER sees this response — the agent transforms it
+        into the human-readable ``action_text`` before propagating.
+        """
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("lookup_employee missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_read_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "lookup_employee validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        result = await hr_service.lookup_employee(body.username_or_email)
+        return LookupEmployeeResult(**result)
 
     return router

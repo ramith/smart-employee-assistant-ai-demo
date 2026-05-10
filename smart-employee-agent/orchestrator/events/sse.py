@@ -98,6 +98,12 @@ class CibaUrlEvent(BaseModel):
     # the SPA's consent widget renders it directly to guarantee the user
     # sees the reason-aware copy.
     binding_message: str | None = None
+    # Sprint 4 S4.1 — server-rendered consent action text. Forwarded
+    # verbatim from ``ConsentRequiredPayload.action_text``. When set, the
+    # SPA prefers this over the SCOPE_ACTION_MAP lookup so parameterised
+    # admin-action strings ("Assign cubicle C-027 to jane.doe") render
+    # without the SPA having to parse the binding_message.
+    action_text: str | None = None
 
 
 class CibaStateChangeEvent(BaseModel):

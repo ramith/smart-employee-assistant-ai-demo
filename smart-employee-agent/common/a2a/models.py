@@ -79,6 +79,12 @@ class ConsentRequiredPayload(BaseModel):
     expires_in: int
     is_refresh: bool = False
     prior_consent_at: datetime | None = None
+    # Sprint 4 S4.1 — server-rendered consent action text (parameterised).
+    # Constructed by the specialist dispatcher from resolved tool args
+    # (e.g. "Assign cubicle C-027 to jane.doe"). When None, the SPA falls
+    # back to SCOPE_ACTION_MAP lookup. Sanitised against the F-08 charset
+    # whitelist + 256-char cap before reaching the wire.
+    action_text: str | None = None
 
 
 class ResultPayload(BaseModel):

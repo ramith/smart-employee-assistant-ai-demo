@@ -254,6 +254,96 @@ class HRMcpClient:
             body={"leave_id": leave_id},
         )
 
+    # ── Cubicle methods (Sprint 4 S4.1, UC-11) ───────────────────────────────
+    #
+    # Mirror the same shape as the leave methods: take token_b + optional
+    # request_id, post the JSON body, return the parsed dict. The hr_server
+    # response_model handles the Pydantic shape; this client is a thin HTTP
+    # adapter and does not re-validate.
+
+    async def get_cubicle_summary(
+        self,
+        *,
+        token_b: OAuthToken,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST /mcp/tools/get_cubicle_summary``. Scope: ``hr_read_rest``."""
+        return await self._post(
+            "/mcp/tools/get_cubicle_summary",
+            token_b=token_b,
+            request_id=request_id,
+            body={},
+        )
+
+    async def get_vacant_cubicles_on_floor(
+        self,
+        *,
+        token_b: OAuthToken,
+        floor: int,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST /mcp/tools/get_vacant_cubicles_on_floor``. Scope: ``hr_read_rest``."""
+        return await self._post(
+            "/mcp/tools/get_vacant_cubicles_on_floor",
+            token_b=token_b,
+            request_id=request_id,
+            body={"floor": floor},
+        )
+
+    async def get_my_cubicle(
+        self,
+        *,
+        token_b: OAuthToken,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST /mcp/tools/get_my_cubicle``. Scope: ``hr_self_rest``."""
+        return await self._post(
+            "/mcp/tools/get_my_cubicle",
+            token_b=token_b,
+            request_id=request_id,
+            body={},
+        )
+
+    async def assign_cubicle(
+        self,
+        *,
+        token_b: OAuthToken,
+        cubicle_id: str,
+        employee_username: str,
+        employee_email: str = "",
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST /mcp/tools/assign_cubicle``. Scope: ``hr_assets_write_rest`` (NEW)."""
+        return await self._post(
+            "/mcp/tools/assign_cubicle",
+            token_b=token_b,
+            request_id=request_id,
+            body={
+                "cubicle_id": cubicle_id,
+                "employee_username": employee_username,
+                "employee_email": employee_email,
+            },
+        )
+
+    async def lookup_employee(
+        self,
+        *,
+        token_b: OAuthToken,
+        username_or_email: str,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST /mcp/tools/lookup_employee``. Scope: ``hr_read_rest``.
+
+        F-12: caller (HR Agent) MUST NOT log the ``sub`` field of the
+        response — it is internal join data only.
+        """
+        return await self._post(
+            "/mcp/tools/lookup_employee",
+            token_b=token_b,
+            request_id=request_id,
+            body={"username_or_email": username_or_email},
+        )
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def aclose(self) -> None:

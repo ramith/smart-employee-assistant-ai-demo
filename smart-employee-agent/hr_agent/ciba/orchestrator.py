@@ -121,7 +121,65 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         lambda args: {"leave_id": args.get("leave_id")},
         "openid hr_approve_rest",
     ),
+    # ── Sprint 4 S4.1 cubicle tools (UC-11) ──────────────────────────────────
+    "hr.cubicle_summary": (
+        "View vacant cubicles by floor",
+        "get_cubicle_summary",
+        lambda args: {},
+        None,
+    ),
+    "hr.cubicle_list_floor": (
+        "View vacant cubicles on floor",
+        "get_vacant_cubicles_on_floor",
+        lambda args: {"floor": int(args.get("floor", 1))},
+        None,
+    ),
+    "hr.cubicle_assign": (
+        "Assign cubicle to employee",
+        "assign_cubicle",
+        lambda args: {
+            "cubicle_id": args.get("cubicle_id"),
+            "employee_username": args.get("employee_username"),
+            "employee_email": args.get("employee_email", ""),
+        },
+        "openid hr_assets_write_rest",
+    ),
+    "hr.lookup_employee": (
+        "Look up an employee",
+        "lookup_employee",
+        lambda args: {"username_or_email": args.get("name", "")},
+        None,
+    ),
 }
+
+
+# ── action_text sanitisation (security audit F-08) ──────────────────────────
+#
+# ``action_text`` for hr_assets_write_rest carries user-typed substrings
+# (cubicle_id from regex extraction; employee_username from chat). It flows
+# through A2A → orchestrator → SSE → SPA where the SPA renders it with
+# textContent so DOM injection is blocked. But the audit log writes
+# ``action_text`` verbatim, so we restrict the charset and cap the length
+# server-side before propagation.
+import re as _re
+
+_ACTION_TEXT_ALLOWED_RE = _re.compile(r"[A-Za-z0-9 .\-_'@,]")
+_ACTION_TEXT_MAX_LEN = 256
+
+
+def _sanitise_action_text(value: str) -> str:
+    """Restrict *value* to the F-08 allowed charset and cap length.
+
+    Allowed characters: ``[A-Za-z0-9 .-_'@,]``. Anything else is dropped.
+    Length capped at 256 chars. The sanitised value is suitable for both the
+    SSE wire payload and structured log lines.
+    """
+    if not value:
+        return ""
+    out = "".join(ch for ch in value if _ACTION_TEXT_ALLOWED_RE.match(ch))
+    if len(out) > _ACTION_TEXT_MAX_LEN:
+        out = out[:_ACTION_TEXT_MAX_LEN]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -416,13 +474,40 @@ class HRDispatcher:
         is_refresh = prior_iat is not None
         prior_consent_at = prior_iat
 
-        # ── 2. Render binding message (F-05; 3B.2 FIX-17 reason-branched) ────
-        binding_msg = render(
-            select_template(last_logout_reason, is_refresh=is_refresh),
-            agent_label=deps.agent_label,
-            action=action_text,
-            request_id=request_id,
-        )
+        # ── 2. Sprint 4 S4.1 action_text + binding_message ───────────────────
+        #
+        # For most tools the SPA derives action copy from SCOPE_ACTION_MAP and
+        # ``action_text`` stays None. For hr_assets_write_rest the dispatcher
+        # constructs a parameterised action_text from the resolved tool args
+        # (cubicle_id, employee_username) so the consent widget can render
+        # "Assign cubicle C-027 to jane.doe" verbatim. The string is
+        # sanitised against the F-08 charset whitelist + 256-char cap.
+        sprint4_action_text: str | None = None
+        custom_binding_msg: str | None = None
+        if tool == "hr.cubicle_assign":
+            cubicle_id = (args.get("cubicle_id") or "").strip()
+            employee_username = (args.get("employee_username") or "").strip()
+            sprint4_action_text = _sanitise_action_text(
+                f"Assign cubicle {cubicle_id} to {employee_username}"
+            )
+            # UC-11 spec binding-message verbatim: includes the corr-id so the
+            # consent screen lets the admin tie the request back to the chat
+            # turn. Sanitised through the same whitelist for log hygiene.
+            custom_binding_msg = _sanitise_action_text(
+                f"{deps.agent_label} wants to assign cubicle {cubicle_id} "
+                f"to {employee_username} corr-id {request_id}"
+            )
+
+        # ── 2b. Render binding message (F-05; 3B.2 FIX-17 reason-branched) ────
+        if custom_binding_msg is not None:
+            binding_msg = custom_binding_msg
+        else:
+            binding_msg = render(
+                select_template(last_logout_reason, is_refresh=is_refresh),
+                agent_label=deps.agent_label,
+                action=action_text,
+                request_id=request_id,
+            )
         if last_logout_reason is not None:
             logger.info(
                 "hr_dispatcher_binding_reason_applied request_id=%s reason=%s "
@@ -537,6 +622,7 @@ class HRDispatcher:
             expires_in=ciba_request.expires_in_s,
             is_refresh=is_refresh,
             prior_consent_at=prior_consent_at,
+            action_text=sprint4_action_text,
         )
 
     # ── Background task ───────────────────────────────────────────────────────

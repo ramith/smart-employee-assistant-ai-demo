@@ -516,6 +516,13 @@ textarea, input {
   border-width: 1.5px;
 }
 
+/* Sprint 4 S4.1 — write-tier amber tint (UC-11, hr_assets_write_rest). */
+.consent-widget--write .cw-card {
+  border-color: var(--amber-border);
+  background: var(--amber-soft);
+}
+
+
 .consent-widget--expired .cw-card {
   border-color: var(--amber-border);
   border-width: 1.5px;

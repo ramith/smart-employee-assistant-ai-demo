@@ -301,3 +301,197 @@ async def get_leaves_for_dashboard(
             "status": req["status"],
         })
     return results
+
+
+# ─── Cubicle service (Sprint 4 S4.1, UC-11) ─────────────────────────────────
+#
+# Identity model: ``username`` is the primary key, ``email`` is optional.
+# ``sub`` is recorded internally for audit but never returned to chat or
+# report endpoints (sprint-4.md §7).
+#
+# F-04 (security audit): assign_cubicle is idempotent for same-user re-calls;
+# different-user collisions return ``cubicle_already_occupied`` with the
+# current holder. Single-process / single-uvicorn-worker (BLOCK-I) keeps the
+# in-process dict access serial — no TOCTOU within one process.
+
+
+async def get_cubicle_summary() -> Dict:
+    """Return per-floor counts: ``{floor_N: {total, vacant}}`` for floors 1..4."""
+    summary: Dict[str, Dict[str, int]] = {
+        f"floor_{n}": {"total": 0, "vacant": 0} for n in range(1, 5)
+    }
+    for row in store.cubicles:
+        key = f"floor_{row['floor']}"
+        if key not in summary:
+            # Defensive — cubicle data is seeded with floor 1..4 only, but a
+            # future seed change shouldn't break the aggregation.
+            summary[key] = {"total": 0, "vacant": 0}
+        summary[key]["total"] += 1
+        if not row["occupied"]:
+            summary[key]["vacant"] += 1
+    return summary
+
+
+async def get_vacant_cubicles_on_floor(floor: int) -> Dict:
+    """Return the vacant-cubicle list for *floor*.
+
+    Returns ``{error: "invalid_floor"}`` for floor outside 1..4 — keeps the
+    handler 200-with-error-envelope contract consistent (auth passed; data
+    request invalid).
+    """
+    if not isinstance(floor, int) or floor < 1 or floor > 4:
+        return {"error": "invalid_floor", "message": f"Floor {floor!r} is not 1..4."}
+    vacant = [
+        row["cubicle_id"]
+        for row in store.cubicles
+        if row["floor"] == floor and not row["occupied"]
+    ]
+    vacant.sort()
+    return {"floor": floor, "vacant": vacant}
+
+
+async def get_my_cubicle(username: str) -> Dict:
+    """Return the caller's cubicle assignment, if any.
+
+    ``username`` is the primary identifier (Sprint 4 §7). Returns
+    ``{assigned: False}`` when the caller has no cubicle.
+    """
+    if not username:
+        return {"assigned": False}
+    needle = username.strip().lower()
+    for row in store.cubicles:
+        existing = (row["assigned_to_username"] or "").strip().lower()
+        if row["occupied"] and existing == needle:
+            return {
+                "assigned": True,
+                "cubicle_id": row["cubicle_id"],
+                "floor": row["floor"],
+                "assigned_at": row["assigned_at"],
+            }
+    return {"assigned": False}
+
+
+async def assign_cubicle(
+    cubicle_id: str,
+    employee_username: str,
+    employee_email: str,
+    sub: Optional[str] = None,
+) -> Dict:
+    """Assign *cubicle_id* to (*employee_username*, *employee_email*, *sub*).
+
+    Idempotency rule (Stage 5 §D3, Stage 8 F-04): if the cubicle is already
+    held by the same username, return the existing record with
+    ``success=True`` (no error). Different username → ``cubicle_already_occupied``.
+
+    Note (F-04): demo POC, single uvicorn worker. Two concurrent admin
+    browsers racing for the same ``(cubicle_id, employee_username)`` would
+    both see ``success=True``; this is acceptable (the second CIBA was
+    "wasted" but no data corruption). Production would use a per-cubicle
+    lock or a transactional write here.
+    """
+    # Find target cubicle.
+    target = None
+    for row in store.cubicles:
+        if row["cubicle_id"] == cubicle_id:
+            target = row
+            break
+    if target is None:
+        return {
+            "error": "cubicle_not_found",
+            "message": f"Cubicle {cubicle_id!r} does not exist.",
+        }
+
+    if target["occupied"]:
+        existing = (target["assigned_to_username"] or "").strip().lower()
+        incoming = (employee_username or "").strip().lower()
+        if existing == incoming and incoming:
+            # Idempotent — same user, return existing record.
+            return {
+                "success": True,
+                "cubicle_id": target["cubicle_id"],
+                "floor": target["floor"],
+                "assigned_to": {
+                    "username": target["assigned_to_username"],
+                    "email": target["assigned_to_email"],
+                },
+                "assigned_at": target["assigned_at"],
+            }
+        return {
+            "error": "cubicle_already_occupied",
+            "current_holder": {
+                "username": target["assigned_to_username"],
+                "email": target["assigned_to_email"],
+            },
+        }
+
+    # Vacant — assign now.
+    from datetime import datetime as _dt, timezone as _tz
+    now_iso = _dt.now(tz=_tz.utc).isoformat()
+    target["occupied"] = True
+    target["assigned_to_username"] = employee_username
+    target["assigned_to_email"] = employee_email or None
+    target["assigned_to_sub"] = sub
+    target["assigned_at"] = now_iso
+    return {
+        "success": True,
+        "cubicle_id": target["cubicle_id"],
+        "floor": target["floor"],
+        "assigned_to": {
+            "username": employee_username,
+            "email": employee_email or None,
+        },
+        "assigned_at": now_iso,
+    }
+
+
+async def lookup_employee(username_or_email: str) -> Dict:
+    """Resolve a username-or-email to ``{found, username, email, sub}``.
+
+    Email matching is case-insensitive; username matching is case-sensitive
+    (usernames are pre-normalised lower-case in the seed). Returns
+    ``{found: False}`` when no match.
+    """
+    if not username_or_email:
+        return {"found": False}
+    needle = username_or_email.strip()
+    needle_lower = needle.lower()
+    for record in store.users.values():
+        username = record.get("username", "")
+        email = record.get("email", "")
+        if username and username == needle:
+            return {
+                "found": True,
+                "username": username,
+                "email": email or "",
+                "sub": record.get("sub", ""),
+            }
+        if email and email.lower() == needle_lower:
+            return {
+                "found": True,
+                "username": username or "",
+                "email": email,
+                "sub": record.get("sub", ""),
+            }
+    return {"found": False}
+
+
+async def get_all_cubicle_assignments() -> List[Dict]:
+    """Return all assigned cubicles as report rows (NEVER includes ``sub``).
+
+    Used by the UC-16 Cubicles report; only username/email/cubicle_id/floor/
+    assigned_at are surfaced. ``sub`` is internal join data only
+    (sprint-4.md §7).
+    """
+    rows: List[Dict] = []
+    for row in store.cubicles:
+        if not row["occupied"]:
+            continue
+        rows.append({
+            "username": row["assigned_to_username"],
+            "email": row["assigned_to_email"],
+            "cubicle_id": row["cubicle_id"],
+            "floor": row["floor"],
+            "assigned_at": row["assigned_at"],
+        })
+    rows.sort(key=lambda r: (r["floor"], r["cubicle_id"]))
+    return rows

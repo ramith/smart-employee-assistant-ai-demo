@@ -120,12 +120,13 @@ const COPY = {
 // ─── Scope → action map (copy-deck §5.A) ────────────────────────────────────
 
 const SCOPE_ACTION_MAP = {
-  "hr.read":        "View your leave balance",
-  "hr.approve":     "Approve a leave request on your behalf",
-  "hr.write":       "Submit a leave request on your behalf",
-  "it.read":        "Look up available laptops",
-  "it.assign":      "Assign a laptop to you",
-  "directory.read": "Look up team contact information",
+  "hr.read":              "View your leave balance",
+  "hr.approve":           "Approve a leave request on your behalf",
+  "hr.write":             "Submit a leave request on your behalf",
+  "hr_assets_write_rest": "Assign cubicle",
+  "it.read":              "Look up available laptops",
+  "it.assign":            "Assign a laptop to you",
+  "directory.read":       "Look up team contact information",
 };
 
 // ─── Scope → gerund map (copy-deck §5.C) ────────────────────────────────────
@@ -718,7 +719,10 @@ function onCibaUrlEvent(event) {
   });
 
   const label = agentLabelRaw || agentLabel(agentId);
-  const actionText = scopeToAction(scope);
+  // Sprint 4 S4.1: prefer the server-rendered action_text (parameterised
+  // for write-tier scopes like "Assign cubicle C-027 to jane.doe") over
+  // the static SCOPE_ACTION_MAP lookup.
+  const actionText = event.action_text || scopeToAction(scope);
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
   cibaState = {
@@ -906,9 +910,14 @@ function renderWidget() {
   $("cw-expired-body").hidden = true;
   $("cw-error-body").hidden = true;
 
-  // Remove state classes
+  // Remove state classes; tint amber for write-tier scopes (UC-11 admin
+  // delegation visual convention).
   const widget = $("consent-widget");
-  widget.className = "consent-widget consent-widget--awaiting";
+  let widgetClass = "consent-widget consent-widget--awaiting";
+  if (scope && scope.indexOf("hr_assets_write_rest") !== -1) {
+    widgetClass += " consent-widget--write";
+  }
+  widget.className = widgetClass;
   widget.hidden = false;
 
   // Slide in animation
