@@ -52,20 +52,22 @@ cd /Users/ramith/demo/dda-poc/iam-ai-samples/smart-employee-agent
 
 Expected: `PASS: N | FAIL: 0 | WARN: 0` (or only WARNs on operator-discretion items). Any FAIL means stop and fix before continuing.
 
-The script audits the **full system topology** in nine sections:
+The script audits the **full system topology** in 10 sections:
 1. **Connectivity** — JWKS endpoint up.
 2. **JWKS payload** — keys[] non-empty.
 3. **Mgmt API auth** — admin credentials accepted on `/api/server/v1/api-resources`.
-4. **OAuth Applications** — every client_id from `orchestrator/.env` registered (orchestrator-mcp-client, orchestrator-agent-oauth, hr_agent OAuth App, it_agent OAuth App).
-5. **API Resources** — `hr_server-api` + `it_server-api` exist.
-6. **Scopes per resource** — full Sprint 1-4 inventory (HR: 6 scopes; IT: 3 scopes) registered.
+4. **OAuth Applications** — every client_id from `orchestrator/.env` registered (orchestrator-mcp-client, ORCHESTRATOR_AGENT, HR Agent app, IT Agent application).
+5. **API Resources** — `HR API` (`urn:hr:api`) + `IT API` (`urn:it:api`) exist (matched by name OR identifier).
+6. **Scopes per resource** — Sprint 1-4 inventory present (HR: 5 scopes incl. NEW `hr_assets_write_rest`; IT: 3 scopes incl. NEW `it_assets_self_rest`).
 7. **Demo users (SCIM2)** — `employee_user` + `hr_admin_user` exist.
-8. **Demo roles (SCIM2 v2)** — `Employee` + `HR Admin` exist.
-9. **Sample-token claim audit** — issues a **user-bearing** access token via the password grant (ROPC) against `employee_user` using the existing `orchestrator-mcp-client` credentials, decodes the JWT payload, and asserts `username` + `email` are present. (`client_credentials` is intentionally NOT used — it returns app identity, not user identity, so it can't verify the Sprint 4 plumbing requirement.)
+7b. **SCIM2 Agents** — `orchestrator-agent`, `hr-agent`, `it-agent` registered (separate registry from OAuth Apps).
+8. **Demo roles (SCIM2 v2)** — `employee` (lowercase!) + `HR Admin` exist.
+8b. **Role-scope bindings** — verifies each role carries its expected scope set per `sprint-4.md §6` matrix. **This is where Sprint 4 NEW scope-binding gaps surface** (e.g. `it_assets_self_rest` not yet attached to `employee`; `hr_assets_write_rest` + `it_assets_self_rest` not yet attached to `HR Admin`).
+9. **Demo user attributes (SCIM2)** — verifies `userName` + `emails[].value` present on each demo user record (the source attributes the OAuth claim mapping projects into the access token's `username` / `email` claims).
 
-The script is **stdlib-only Python** (no extra deps). It sources expected client IDs + secret from `orchestrator/.env` automatically. Sections 4–9 fail closed if Section 3 (admin auth) fails — fix admin creds first.
+The script is **stdlib-only Python** (no extra deps). It sources expected client IDs from `orchestrator/.env` automatically. Sections 4–9 fail closed if Section 3 (admin auth) fails — fix admin creds first.
 
-**Section 9 prerequisite:** the `orchestrator-mcp-client` app must have **Password** grant enabled (Console → Applications → orchestrator-mcp-client → Protocol → Allowed Grant Types → check "Password"). If not enabled, Section 9 emits a WARN with the exact remediation. `DEMO_PASSWORD` defaults to `NewsMax@1234` per `wso2-is-setup.md` §7; override via env if rotated.
+**Manual follow-up after Section 9 passes:** sign in to the SPA via Pattern C, then verify the OAuth claim mapping landed in the access token by running `docker compose logs orchestrator | grep auth_exchange_success` and inspecting the surrounding context. (The script can't mint a user-bearing token automatically — that requires browser interaction.)
 
 ### 1.5 Verify both demo accounts are alive
 

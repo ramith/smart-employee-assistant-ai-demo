@@ -77,11 +77,12 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Locked scope inventory (Sprint 4 close — sprint-4.md §6 + scope-policy.md §2)
+# Locked scope inventory (verified 2026-05-11 against live IS Console).
+# Note: there is no separate `hr_apply_rest` — apply-leave is gated by
+# `hr_self_rest` (UC-13 §Preconditions line 18).
 HR_SCOPES = {
     "hr_basic_rest",
     "hr_self_rest",
-    "hr_apply_rest",
     "hr_read_rest",
     "hr_approve_rest",
     "hr_assets_write_rest",  # Sprint 4 NEW
@@ -92,8 +93,38 @@ IT_SCOPES = {
     "it_assets_write_rest",
 }
 DEMO_USERS = ["employee_user", "hr_admin_user"]
-DEMO_ROLES = ["Employee", "HR Admin"]
-REQUIRED_CLAIMS = ["username", "email"]
+# Role names verified 2026-05-11 against live IS Console — note `employee`
+# is lowercase (deviates from the docs which say "Employee").
+DEMO_ROLES = ["employee", "HR Admin"]
+# Agents are managed via SCIM2 /scim2/Agents (separate from /applications).
+# Each agent also has an auto-created Agent Application (OAuth) which is
+# checked in Section 4; this is the IS-side "agent registry" view.
+DEMO_AGENTS = ["orchestrator-agent", "hr-agent", "it-agent"]
+
+# Locked role-scope matrix (sprint-4.md §6, post-Sprint-4 close).
+# Roles are NOT inherited at IS — HR Admin explicitly carries Employee's
+# scopes too. Sprint 4 NEW scopes (it_assets_self_rest, hr_assets_write_rest)
+# must be attached for the demo to pass live verification.
+EXPECTED_ROLE_SCOPES = {
+    "employee": {
+        "hr_basic_rest",
+        "hr_self_rest",
+        "it_assets_read_rest",
+        "it_assets_self_rest",  # Sprint 4 NEW
+    },
+    "HR Admin": {
+        # Employee's scopes (explicitly attached, no inheritance):
+        "hr_basic_rest",
+        "hr_self_rest",
+        "it_assets_read_rest",
+        "it_assets_self_rest",  # Sprint 4 NEW
+        # HR Admin-only:
+        "hr_read_rest",
+        "hr_approve_rest",
+        "it_assets_write_rest",
+        "hr_assets_write_rest",  # Sprint 4 NEW
+    },
+}
 
 # ─── Pretty output ───────────────────────────────────────────────────────────
 
@@ -296,9 +327,14 @@ def check_applications(base_url: str, auth_hdr: str, expected_client_ids: dict[s
 
 
 def check_api_resources(
-    base_url: str, auth_hdr: str, hr_name: str, it_name: str
+    base_url: str, auth_hdr: str, hr_specs: list[str], it_specs: list[str]
 ) -> dict[str, str]:
-    """Returns map name → resourceId for the two demo API resources."""
+    """Returns map logical-key → resourceId for the two demo API resources.
+
+    Each spec list is a set of acceptable matchers (display name OR
+    identifier) — IS Console exposes both fields and operators commonly
+    use either. Returns the first-matched resource per group.
+    """
     hdr("Section 5 — API Resources")
     code, body = http_get(
         f"{base_url}/api/server/v1/api-resources?limit=200",
@@ -312,48 +348,63 @@ def check_api_resources(
     except Exception:
         bad("API resources list", "invalid JSON from /api-resources")
         return {}
-    by_name = {r.get("name"): r.get("id") for r in resources if r.get("name")}
+
+    def _find(specs: list[str], group_label: str) -> tuple[str, str] | None:
+        for r in resources:
+            name = r.get("name") or ""
+            ident = r.get("identifier") or ""
+            for s in specs:
+                if s and (s == name or s == ident):
+                    return (name or ident, r.get("id"))
+        return None
+
     out: dict[str, str] = {}
-    for label in (hr_name, it_name):
-        if label in by_name:
-            ok(f"API resource '{label}' exists")
-            out[label] = by_name[label]
-        else:
-            bad(f"API resource '{label}'", "not found — register in IS Console → API Resources")
+    hr_match = _find(hr_specs, "HR")
+    if hr_match:
+        ok(f"HR API resource: '{hr_match[0]}' (matched: {hr_specs[0]} or fallback)")
+        out["HR"] = hr_match[1]
+    else:
+        bad("HR API resource", f"not found — tried: {hr_specs}. Register in Console → API Resources")
+    it_match = _find(it_specs, "IT")
+    if it_match:
+        ok(f"IT API resource: '{it_match[0]}'")
+        out["IT"] = it_match[1]
+    else:
+        bad("IT API resource", f"not found — tried: {it_specs}. Register in Console → API Resources")
     return out
 
 
-def check_scopes(base_url: str, auth_hdr: str, resources: dict[str, str], hr_name: str, it_name: str) -> None:
+def check_scopes(base_url: str, auth_hdr: str, resources: dict[str, str]) -> None:
     hdr("Section 6 — Scopes per resource")
 
-    def _audit(resource_name: str, expected: set[str]) -> None:
-        rid = resources.get(resource_name)
+    def _audit(group_label: str, expected: set[str]) -> None:
+        rid = resources.get(group_label)
         if not rid:
-            warn(f"{resource_name} scopes", "skipped (resource not found in §5)")
+            warn(f"{group_label} API scopes", "skipped (resource not found in §5)")
             return
         code, body = http_get(
             f"{base_url}/api/server/v1/api-resources/{rid}/scopes",
             headers={"Authorization": auth_hdr, "Accept": "application/json"},
         )
         if code != 200:
-            warn(f"{resource_name} scopes", f"GET /scopes returned {code}")
+            warn(f"{group_label} API scopes", f"GET /scopes returned {code}")
             return
         try:
             scopes = {s.get("name") for s in json.loads(body) if s.get("name")}
         except Exception:
-            bad(f"{resource_name} scopes", "invalid JSON")
+            bad(f"{group_label} API scopes", "invalid JSON")
             return
         missing = expected - scopes
         if not missing:
-            ok(f"{resource_name}: {len(expected)} required scope(s) present")
+            ok(f"{group_label} API: {len(expected)} required scope(s) present")
         else:
             bad(
-                f"{resource_name} scopes",
+                f"{group_label} API scopes",
                 "missing: " + ", ".join(sorted(missing)) + " — register in IS Console",
             )
 
-    _audit(hr_name, HR_SCOPES)
-    _audit(it_name, IT_SCOPES)
+    _audit("HR", HR_SCOPES)
+    _audit("IT", IT_SCOPES)
 
 
 def check_users(base_url: str, auth_hdr: str) -> None:
@@ -374,96 +425,191 @@ def check_users(base_url: str, auth_hdr: str) -> None:
             warn(f"user '{username}'", f"GET /scim2/Users returned {code}")
 
 
-def check_roles(base_url: str, auth_hdr: str) -> None:
+def check_roles(base_url: str, auth_hdr: str) -> dict[str, dict]:
+    """Returns map role-name → role-record (SCIM2). Used by §8b for scope check."""
     hdr("Section 8 — Demo roles (SCIM2 v2)")
+    out: dict[str, dict] = {}
     for role in DEMO_ROLES:
         url = f"{base_url}/scim2/v2/Roles?filter={urllib.parse.quote(f'displayName eq {role}')}"
         code, body = http_get(url, headers={"Authorization": auth_hdr, "Accept": "application/scim+json"})
-        if code == 200:
-            try:
-                total = int(json.loads(body).get("totalResults", 0))
-            except Exception:
-                total = 0
-            if total >= 1:
-                ok(f"role '{role}' exists")
-            else:
-                bad(f"role '{role}'", "totalResults=0 — create in Console → User Management → Roles")
-        else:
-            warn(f"role '{role}'", f"GET /scim2/v2/Roles returned {code} — check manually")
+        if code != 200:
+            warn(f"role '{role}'", f"GET /scim2/v2/Roles returned {code}")
+            continue
+        try:
+            doc = json.loads(body)
+            resources = doc.get("Resources") or []
+        except Exception:
+            bad(f"role '{role}'", "invalid SCIM2 JSON")
+            continue
+        if not resources:
+            bad(f"role '{role}'", "totalResults=0 — create in Console → User Management → Roles")
+            continue
+        ok(f"role '{role}' exists")
+        out[role] = resources[0]
+    return out
 
 
-def check_token_claims(
-    base_url: str,
-    *,
-    mcp_client_id: str,
-    mcp_client_secret: str,
-    demo_username: str,
-    demo_password: str,
-) -> None:
-    """Section 9 — verify a USER-BEARING token carries username + email.
+def check_role_scope_bindings(base_url: str, auth_hdr: str, roles: dict[str, dict]) -> None:
+    """Section 8b — verify each role carries its expected scope set.
 
-    Uses the password grant (ROPC) against the demo user with the
-    existing orchestrator-mcp-client as the OAuth client. client_credentials
-    won't work here — that grant returns an app-identity token with no
-    user claims, which can't verify the Sprint 4 plumbing requirement
-    that hr_server / it_server validate_token reads claims.username
-    from a user-bearing access token.
+    The IS SCIM2 v2 Roles API returns `permissions` (list of scope-name
+    objects or strings) on the role resource. For maximum compatibility
+    across IS versions we accept either shape: the list may contain
+    strings (plain scope names) OR dicts with `value` / `display` keys.
     """
-    hdr("Section 9 — Sample-token claim audit (ROPC)")
-    if not mcp_client_id or not mcp_client_secret:
-        warn(
-            "sample token",
-            "ORCHESTRATOR_MCP_CLIENT_ID / _SECRET not in orchestrator/.env — skipping",
-        )
-        return
-    code, body = http_post_form(
-        f"{base_url}/oauth2/token",
-        data={
-            "grant_type": "password",
-            "username": demo_username,
-            "password": demo_password,
-            "scope": "openid profile email",
-        },
-        headers={"Authorization": _basic_auth_header(mcp_client_id, mcp_client_secret)},
+    hdr("Section 8b — Role-scope bindings (sprint-4.md §6 matrix)")
+    for role_name, expected_scopes in EXPECTED_ROLE_SCOPES.items():
+        record = roles.get(role_name)
+        if not record:
+            warn(f"role '{role_name}' bindings", "skipped (role not found in §8)")
+            continue
+        # Re-fetch the full role record (the search response is sometimes
+        # abbreviated). Use the role id from the listing.
+        rid = record.get("id")
+        if rid:
+            code, body = http_get(
+                f"{base_url}/scim2/v2/Roles/{rid}",
+                headers={"Authorization": auth_hdr, "Accept": "application/scim+json"},
+            )
+            if code == 200:
+                try:
+                    record = json.loads(body)
+                except Exception:
+                    pass
+        # Tolerant extraction — IS variants emit either strings or {value, display}.
+        attached: set[str] = set()
+        for entry in record.get("permissions", []) or []:
+            if isinstance(entry, str):
+                attached.add(entry)
+            elif isinstance(entry, dict):
+                val = entry.get("value") or entry.get("display") or entry.get("name")
+                if val:
+                    attached.add(val)
+        missing = expected_scopes - attached
+        extra = attached - expected_scopes
+        if not missing:
+            ok(f"role '{role_name}': {len(expected_scopes)} expected scope(s) attached")
+            if extra:
+                # Extra scopes aren't a failure — just note them.
+                warn(
+                    f"role '{role_name}' extras",
+                    f"role also carries {len(extra)} unlisted scope(s): {sorted(extra)} (informational)",
+                )
+        else:
+            bad(
+                f"role '{role_name}' bindings",
+                f"missing scope(s): {sorted(missing)} — attach in Console → User Management → Roles → "
+                f"{role_name} → Permissions tab",
+            )
+
+
+def check_agents(base_url: str, auth_hdr: str) -> None:
+    """Section 7b — verify SCIM2 Agents exist (separate from OAuth Apps).
+
+    Each demo agent (orchestrator-agent, hr-agent, it-agent) is registered
+    in the SCIM2 Agents registry and has an auto-created Agent Application
+    companion (verified in Section 4 via /applications client_ids). This
+    section confirms the SCIM2 side is also intact.
+    """
+    hdr("Section 7b — SCIM2 Agents")
+    code, body = http_get(
+        f"{base_url}/scim2/Agents",
+        headers={"Authorization": auth_hdr, "Accept": "application/scim+json"},
     )
     if code != 200:
-        # Two common causes: (a) password grant not enabled on the
-        # orchestrator-mcp-client app; (b) demo password rotated. Surface
-        # both with a clear remediation hint.
         warn(
-            "sample token issuance",
-            f"POST /oauth2/token returned {code}. Common causes: "
-            "(1) Password grant not enabled on orchestrator-mcp-client — "
-            "enable in IS Console → Applications → orchestrator-mcp-client → "
-            "Protocol tab → Allowed Grant Types → check 'Password'. "
-            "(2) DEMO_PASSWORD env var doesn't match the demo user's actual "
-            f"password (default per wso2-is-setup.md is NewsMax@1234). "
-            f"Body excerpt: {body[:160]}",
+            "SCIM2 Agents",
+            f"GET /scim2/Agents returned {code}; on some IS builds the path is "
+            "/scim2/v2/Agents. Verify manually in Console → Agents.",
         )
         return
     try:
-        access_token = json.loads(body).get("access_token") or ""
+        doc = json.loads(body)
+        resources = doc.get("Resources") or []
     except Exception:
-        bad("sample token issuance", "invalid JSON from /token")
+        bad("SCIM2 Agents", "invalid SCIM2 JSON")
         return
-    payload = b64url_decode_payload(access_token)
-    if not payload:
-        bad(
-            "sample token format",
-            "could not decode JWT payload (opaque token? — switch the app to JWT access tokens "
-            "in IS Console → orchestrator-mcp-client → Protocol → Access Token Type = JWT)",
+    # Match by either name or userName field — depends on IS version.
+    present_names: set[str] = set()
+    for r in resources:
+        for k in ("displayName", "name", "userName"):
+            v = r.get(k)
+            if v:
+                present_names.add(v)
+                break
+    for agent in DEMO_AGENTS:
+        if agent in present_names:
+            ok(f"agent '{agent}' registered (SCIM2)")
+        else:
+            bad(
+                f"agent '{agent}'",
+                "not found via /scim2/Agents — register in Console → Agents",
+            )
+
+
+def check_user_attributes(base_url: str, auth_hdr: str) -> None:
+    """Section 9 — verify demo users have userName + email attributes set.
+
+    The Sprint 4 plumbing requires `username` + `email` claims in the
+    user-bearing access token issued at Pattern C login. Minting such a
+    token from this script would require browser interaction (auth-code
+    flow with PKCE — `orchestrator-mcp-client` does not enable the
+    password grant). Instead we verify the prerequisite: the user record
+    in IS carries the source attributes for those claims. If the source
+    is missing, the OAuth attribute mapping has nothing to project.
+
+    A green PASS here is necessary but NOT sufficient for full
+    user-bearing-token verification. After this script passes, do a
+    Pattern C sign-in via the SPA and inspect `Session.token_a` claims
+    (or grep orchestrator logs for `auth_exchange_success`) to confirm
+    the mapping is wired through.
+    """
+    hdr("Section 9 — Demo user attributes (SCIM2)")
+    for username in DEMO_USERS:
+        url = f"{base_url}/scim2/Users?filter={urllib.parse.quote(f'userName eq {username}')}"
+        code, body = http_get(
+            url, headers={"Authorization": auth_hdr, "Accept": "application/scim+json"}
         )
-        return
-    missing = [c for c in REQUIRED_CLAIMS if c not in payload]
-    if not missing:
-        ok(f"user-bearing token for '{demo_username}' carries username + email claims")
-    else:
-        bad(
-            "sample token claims",
-            f"missing: {', '.join(missing)} — map them into the access-token claim set in "
-            "IS Console → API Resources → (your resource) → Scopes / OIDC, ensure the "
-            "OAuth app's requested scopes include 'profile email', and re-issue.",
+        if code != 200:
+            warn(f"user '{username}' attributes", f"SCIM2 returned {code}")
+            continue
+        try:
+            doc = json.loads(body)
+            resources = doc.get("Resources") or []
+        except Exception:
+            bad(f"user '{username}' attributes", "invalid SCIM2 JSON")
+            continue
+        if not resources:
+            bad(f"user '{username}' attributes", "user not found")
+            continue
+        u = resources[0]
+        has_username = bool(u.get("userName"))
+        emails = u.get("emails") or []
+        has_email = any(
+            (isinstance(e, dict) and e.get("value")) or (isinstance(e, str) and e)
+            for e in emails
         )
+        if has_username and has_email:
+            ok(f"user '{username}' has userName + email set (claim source available)")
+        else:
+            missing = []
+            if not has_username:
+                missing.append("userName")
+            if not has_email:
+                missing.append("emails[].value")
+            bad(
+                f"user '{username}' attributes",
+                f"missing: {', '.join(missing)} — set in Console → User Management → "
+                f"select user → Profile, then re-run.",
+            )
+
+    print()
+    print(
+        f"  {_Y}note:{_R} Section 9 verifies the SCIM2 source attributes only. To "
+        "confirm the OAuth claim mapping into access tokens, sign in to the SPA "
+        "(Pattern C), then verify with: "
+    )
+    print(f"    docker compose logs orchestrator | grep auth_exchange_success")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -491,9 +637,6 @@ def main(argv: list[str] | None = None) -> int:
     it_name = os.environ.get("IT_API_RESOURCE_NAME", "it_server-api")
 
     mcp_client_id = _resolved("ORCHESTRATOR_MCP_CLIENT_ID", env_file)
-    mcp_client_secret = _resolved("ORCHESTRATOR_MCP_CLIENT_SECRET", env_file)
-    demo_username = os.environ.get("DEMO_USERNAME", "employee_user")
-    demo_password = os.environ.get("DEMO_PASSWORD", "NewsMax@1234")
 
     expected_client_ids = {
         "orchestrator-mcp-client": mcp_client_id,
@@ -511,29 +654,21 @@ def main(argv: list[str] | None = None) -> int:
     check_jwks(base_url)
 
     if not check_mgmt_api_auth(base_url, auth_hdr):
-        # Skip downstream sections that depend on Mgmt API; still try token check.
-        check_token_claims(
-            base_url,
-            mcp_client_id=mcp_client_id,
-            mcp_client_secret=mcp_client_secret,
-            demo_username=demo_username,
-            demo_password=demo_password,
-        )
+        # Sections 4-9 all depend on Mgmt API auth; nothing further to do.
         _summarise()
         return 1
 
     check_applications(base_url, auth_hdr, expected_client_ids)
-    resources = check_api_resources(base_url, auth_hdr, hr_name, it_name)
-    check_scopes(base_url, auth_hdr, resources, hr_name, it_name)
+    # API resources matched by display name OR identifier (operators use either).
+    hr_specs = [hr_name, "HR API", "urn:hr:api"]
+    it_specs = [it_name, "IT API", "urn:it:api"]
+    resources = check_api_resources(base_url, auth_hdr, hr_specs, it_specs)
+    check_scopes(base_url, auth_hdr, resources)
     check_users(base_url, auth_hdr)
-    check_roles(base_url, auth_hdr)
-    check_token_claims(
-        base_url,
-        mcp_client_id=mcp_client_id,
-        mcp_client_secret=mcp_client_secret,
-        demo_username=demo_username,
-        demo_password=demo_password,
-    )
+    check_agents(base_url, auth_hdr)
+    roles = check_roles(base_url, auth_hdr)
+    check_role_scope_bindings(base_url, auth_hdr, roles)
+    check_user_attributes(base_url, auth_hdr)
 
     return _summarise()
 
