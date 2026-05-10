@@ -507,3 +507,50 @@ async def test_get_or_404_touches_session_when_found() -> None:
     assert session.last_seen_at > backdated
     delta = (_utc_now() - session.last_seen_at).total_seconds()
     assert delta < 2.0
+
+
+# ---------------------------------------------------------------------------
+# Test 14 — pending logout reasons: record + consume
+# ---------------------------------------------------------------------------
+
+
+def test_pending_logout_reason_record_and_consume_round_trip() -> None:
+    """record + consume returns the same string; consume clears the entry."""
+    store = _make_store()
+    store.record_pending_logout_reason("user-001", "admin_terminated")
+    assert store.consume_pending_logout_reason("user-001") == "admin_terminated"
+    # Second consume returns None — single-use semantics.
+    assert store.consume_pending_logout_reason("user-001") is None
+
+
+def test_pending_logout_reason_overwrite_keeps_latest() -> None:
+    """Recording twice for the same user keeps the latest reason."""
+    store = _make_store()
+    store.record_pending_logout_reason("user-001", "user_signed_out")
+    store.record_pending_logout_reason("user-001", "admin_terminated")
+    assert store.consume_pending_logout_reason("user-001") == "admin_terminated"
+
+
+def test_pending_logout_reason_hard_cap_evicts_oldest() -> None:
+    """Hardening: hard cap prevents unbounded growth; FIFO-evicts on overflow."""
+    store = _make_store()
+    # Shrink the cap for the test so we don't have to add 10k entries.
+    store._PENDING_LOGOUT_REASONS_HARD_CAP = 3  # noqa: SLF001 — test-only
+    store.record_pending_logout_reason("u1", "user_signed_out")
+    store.record_pending_logout_reason("u2", "user_signed_out")
+    store.record_pending_logout_reason("u3", "user_signed_out")
+    store.record_pending_logout_reason("u4", "admin_terminated")  # evicts u1
+    assert store.consume_pending_logout_reason("u1") is None  # evicted
+    assert store.consume_pending_logout_reason("u4") == "admin_terminated"
+
+
+def test_pending_logout_reason_sweep_drops_old_entries() -> None:
+    """Hardening: sweeper drops entries older than the TTL."""
+    import time as _time
+    store = _make_store()
+    store._PENDING_LOGOUT_REASONS_TTL_SECONDS = 60  # noqa: SLF001 — test-only
+    store.record_pending_logout_reason("user-001", "admin_terminated")
+    # Simulate the entry being old by sweeping with a now value 2 hrs in the future.
+    removed = store.sweep_pending_logout_reasons(now=_time.time() + 7200)
+    assert removed == 1
+    assert store.consume_pending_logout_reason("user-001") is None

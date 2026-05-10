@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -198,6 +200,11 @@ class SessionStore:
     """
 
     max_idle_seconds: int = 3600
+    # Hardening sprint: bounds for _pending_logout_reasons (post-3B.3 retro
+    # finding — the original "bounded by user count" claim doesn't survive
+    # a long-running process).
+    _PENDING_LOGOUT_REASONS_HARD_CAP: int = 10_000
+    _PENDING_LOGOUT_REASONS_TTL_SECONDS: int = 86_400  # 24 h
     _sessions: dict[str, Session] = field(default_factory=dict)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # 3A.1 FIX-12: per-user_sub lock serialises concurrent UC-09 and UC-10 cascades.
@@ -208,12 +215,19 @@ class SessionStore:
     # ``sub``. Populated at code-exchange time from the freshly-issued
     # id_token's ``sid`` claim, evicted on session delete.
     _sid_to_user_sub: dict[str, str] = field(default_factory=dict)
-    # 3B.2 FIX-17: ``user_sub`` → last logout reason (``"user_signed_out"``
-    # or ``"admin_terminated"``). Set by the logout cascade just before
-    # session deletion, consumed once by the next Pattern C exchange so
-    # the next CIBA can render a reason-aware binding message. Bounded
-    # by user count, so no explicit eviction; cleared on consume.
-    _pending_logout_reasons: dict[str, str] = field(default_factory=dict)
+    # 3B.2 FIX-17: ``user_sub`` → (logout_reason, recorded_at_epoch).
+    # Set by the logout cascade just before session deletion, consumed
+    # once by the next Pattern C exchange so the next CIBA can render a
+    # reason-aware binding message.
+    #
+    # Hardening sprint (post-3B.3 retro): the original "bounded by user
+    # count, no explicit eviction" claim doesn't survive a long-running
+    # process where users sign out and never return. Now hard-capped +
+    # FIFO-evicted + age-swept on the same model as
+    # ``common.revocation.SeenLogoutTokens``. Cleared on consume.
+    _pending_logout_reasons: "OrderedDict[str, tuple[str, float]]" = field(
+        default_factory=OrderedDict
+    )
 
     # ------------------------------------------------------------------
     # Sync helpers (read-only; safe without lock on a single event loop)
@@ -423,21 +437,54 @@ class SessionStore:
         (admin-terminate after user-signed-out → admin-terminate wins —
         most specific reason).
 
+        Hard-capped + FIFO-evicted + age-swept (hardening sprint after
+        3B.3). The cap protects against unbounded growth in a long-
+        running process where users sign out and never return.
+
         Args:
             user_sub: User UUID being logged out.
             reason: ``"user_signed_out"`` or ``"admin_terminated"``.
                 Other values are accepted but ignored downstream.
         """
-        self._pending_logout_reasons[user_sub] = reason
+        # Refresh recency ordering when overwriting (move-to-end).
+        if user_sub in self._pending_logout_reasons:
+            self._pending_logout_reasons.move_to_end(user_sub, last=True)
+            self._pending_logout_reasons[user_sub] = (reason, time.time())
+            return
+        if len(self._pending_logout_reasons) >= self._PENDING_LOGOUT_REASONS_HARD_CAP:
+            evicted_sub, _ = self._pending_logout_reasons.popitem(last=False)
+            logger.warning(
+                "pending_logout_reasons_evicted_for_capacity | user_sub_prefix=%s "
+                "reason=hard_cap cap=%d",
+                evicted_sub[:8],
+                self._PENDING_LOGOUT_REASONS_HARD_CAP,
+            )
+        self._pending_logout_reasons[user_sub] = (reason, time.time())
 
     def consume_pending_logout_reason(self, user_sub: str) -> str | None:
         """Pop and return the pending logout reason for *user_sub*.
 
         Called once by the Pattern C exchange when a fresh session is
         being created. Returns ``None`` if no reason was recorded
-        (e.g. first-ever login, or pending entry already consumed).
+        (e.g. first-ever login, or pending entry already consumed,
+        or the entry aged out via the periodic sweep).
         """
-        return self._pending_logout_reasons.pop(user_sub, None)
+        entry = self._pending_logout_reasons.pop(user_sub, None)
+        return entry[0] if entry is not None else None
+
+    def sweep_pending_logout_reasons(self, *, now: float | None = None) -> int:
+        """Drop entries older than ``_PENDING_LOGOUT_REASONS_TTL_SECONDS``.
+
+        A logout reason that's never consumed (user never returned) is
+        still useful copy for ~24 h, but persisting beyond that adds
+        nothing — by then the next sign-in is a fresh story. Returns
+        the count removed for observability.
+        """
+        cutoff = (now if now is not None else time.time()) - self._PENDING_LOGOUT_REASONS_TTL_SECONDS
+        expired = [k for k, (_, t) in self._pending_logout_reasons.items() if t < cutoff]
+        for k in expired:
+            del self._pending_logout_reasons[k]
+        return len(expired)
 
     async def prune_expired(self) -> int:
         """Remove all sessions that have been idle longer than ``max_idle_seconds``.
