@@ -32,8 +32,9 @@ from __future__ import annotations
 
 import logging
 import secrets
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt as pyjwt
@@ -67,19 +68,61 @@ class PendingLogin:
     """Short-lived record associating a PKCE state to its verifier and post-login destination.
 
     Keyed by ``state`` in ``AuthRouterDeps.pending_logins``.  Consumed (popped) by
-    ``POST /auth/exchange`` and discarded.  TTL enforcement is not Sprint 1 scope;
-    if the user abandons the flow the entry stays until process restart.
+    ``POST /auth/exchange`` and discarded.
+
+    Hardening sprint (post-3B.3 retro): ``pending_logins`` is now an
+    OrderedDict + bounded by ``_PENDING_LOGINS_HARD_CAP`` with FIFO
+    eviction at insert time, and entries older than
+    ``_PENDING_LOGINS_TTL_SECONDS`` are dropped on each insert via the
+    inline sweep. This closes the unauthenticated-DoS surface flagged
+    by the security retro: ``GET /auth/login`` is unauth (it has to be
+    — it starts the login flow), so an attacker hammering it could
+    accumulate entries indefinitely on the pre-hardening dict.
 
     Attributes:
         code_verifier: RFC 7636 PKCE code verifier generated at ``GET /auth/login``.
         redirect_after_login: URL the SPA should navigate to after the exchange succeeds.
             Defaults to ``"/"`` when no ``next`` query parameter is supplied.
-        created_at: UTC timestamp of creation (for future pruning / TTL enforcement).
+        created_at: UTC timestamp of creation. Drives the inline TTL sweep.
     """
 
     code_verifier: str
     redirect_after_login: str
     created_at: datetime
+
+
+# Hardening-sprint bounds for AuthRouterDeps.pending_logins.
+_PENDING_LOGINS_HARD_CAP: int = 10_000
+_PENDING_LOGINS_TTL_SECONDS: int = 600  # 10 min — generous for any real human flow
+
+
+def _enforce_pending_logins_bounds(
+    pending_logins: "OrderedDict[str, PendingLogin]",
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Inline sweep + FIFO cap. Called immediately before each insert.
+
+    Sweep first (cheap, drops entries that are now beyond the freshness
+    window — an honest sign-in completes within seconds, abandoned flows
+    age out at TTL). Then cap to leave room for the new entry.
+
+    Logs a WARN on each capacity-eviction so an unauthenticated flood
+    is observable in logs even though it doesn't break correctness.
+    """
+    cutoff = (now if now is not None else datetime.now(tz=timezone.utc)) - timedelta(
+        seconds=_PENDING_LOGINS_TTL_SECONDS
+    )
+    expired = [k for k, v in pending_logins.items() if v.created_at < cutoff]
+    for k in expired:
+        del pending_logins[k]
+    while len(pending_logins) >= _PENDING_LOGINS_HARD_CAP:
+        evicted_state, _ = pending_logins.popitem(last=False)
+        logger.warning(
+            "pending_logins_evicted_for_capacity | state_prefix=%s reason=hard_cap cap=%d",
+            evicted_state[:8],
+            _PENDING_LOGINS_HARD_CAP,
+        )
 
 
 @dataclass
@@ -103,7 +146,11 @@ class AuthRouterDeps:
     pattern_c: PatternCExchanger
     session_store: SessionStore
     logout_handler: LogoutHandler
-    pending_logins: dict[str, PendingLogin] = field(default_factory=dict)
+    # OrderedDict (not plain dict) so the hardening-sprint inline sweep +
+    # FIFO eviction can use ``popitem(last=False)``.
+    pending_logins: "OrderedDict[str, PendingLogin]" = field(
+        default_factory=OrderedDict
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +319,10 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
         """
         state = secrets.token_urlsafe(32)
         code_verifier, _ = make_pkce()
+
+        # Hardening: drop expired entries + FIFO-cap before insert. Cheap
+        # on the happy path (no expired entries; check is len(dict) only).
+        _enforce_pending_logins_bounds(deps.pending_logins)
 
         deps.pending_logins[state] = PendingLogin(
             code_verifier=code_verifier,

@@ -613,3 +613,64 @@ def test_logout_x_request_id_required_even_without_cookie() -> None:
     # No cookie + no X-Request-ID → 400 (FIX-9 fires before the cookie path).
     resp = client.post("/auth/logout")
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Hardening tests — pending_logins cap + age-sweep
+# ---------------------------------------------------------------------------
+
+
+def test_pending_logins_inline_sweep_drops_expired_entries() -> None:
+    """A login attempt evicts pending_logins entries older than the TTL."""
+    from collections import OrderedDict
+    from datetime import datetime, timedelta, timezone
+    _enforce_bounds = _routes_mod._enforce_pending_logins_bounds  # noqa: SLF001
+    PendingLoginCls = _routes_mod.PendingLogin  # noqa: SLF001
+
+    pending: OrderedDict[str, object] = OrderedDict()
+    old = datetime.now(tz=timezone.utc) - timedelta(seconds=3600)
+    fresh = datetime.now(tz=timezone.utc)
+    pending["stale"] = PendingLoginCls(
+        code_verifier="v",
+        redirect_after_login="/",
+        created_at=old,
+    )
+    pending["new"] = PendingLoginCls(
+        code_verifier="v2",
+        redirect_after_login="/",
+        created_at=fresh,
+    )
+
+    _enforce_bounds(pending)
+    assert "stale" not in pending
+    assert "new" in pending
+
+
+def test_pending_logins_hard_cap_evicts_oldest() -> None:
+    """At cap, an insert evicts the oldest entry FIFO."""
+    from collections import OrderedDict
+    from datetime import datetime, timezone
+    _enforce_bounds = _routes_mod._enforce_pending_logins_bounds  # noqa: SLF001
+    PendingLoginCls = _routes_mod.PendingLogin  # noqa: SLF001
+
+    # Patch the cap down for the test so we don't have to insert 10k entries.
+    original_cap = _routes_mod._PENDING_LOGINS_HARD_CAP  # noqa: SLF001
+    _routes_mod._PENDING_LOGINS_HARD_CAP = 3  # noqa: SLF001
+    try:
+        pending: OrderedDict[str, object] = OrderedDict()
+        for i in range(3):
+            pending[f"s{i}"] = PendingLoginCls(
+                code_verifier=f"v{i}",
+                redirect_after_login="/",
+                created_at=datetime.now(tz=timezone.utc),
+            )
+        # At cap; another insert path will trigger eviction.
+        _enforce_bounds(pending)
+        # The bounds-enforcement function evicts when len >= cap to leave
+        # room for the next insert. With cap=3 and 3 entries, the oldest
+        # is evicted.
+        assert "s0" not in pending
+        assert "s1" in pending
+        assert "s2" in pending
+    finally:
+        _routes_mod._PENDING_LOGINS_HARD_CAP = original_cap  # noqa: SLF001
