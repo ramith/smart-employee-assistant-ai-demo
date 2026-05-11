@@ -262,3 +262,44 @@ def test_my_leaves_missing_scope_returns_403() -> None:
     assert body.get("error") == "insufficient_scope"
     # Make sure no leave data leaked into the error envelope.
     assert "data" not in body
+
+
+# ---------------------------------------------------------------------------
+# 3. /api/me/cubicle — caller's own cubicle assignment
+# ---------------------------------------------------------------------------
+
+
+def test_my_cubicle_returns_assignment_for_assigned_user() -> None:
+    """A user with a seeded cubicle gets their assignment record back."""
+    payload = {
+        "sub": "user-sub-employee",
+        "scope": "openid hr_self_rest",
+        "username": "employee_user",   # C-005 is seeded to employee_user
+    }
+    client = _build_app(payload)
+    resp = client.get("/api/me/cubicle", headers={"Authorization": "Bearer fake-tok-A"})
+    assert resp.status_code == 200
+    body = resp.json()
+    # employee_user is pre-assigned C-005 (floor 1) in the seed.
+    assert body.get("cubicle_id") == "C-005"
+    assert body.get("floor") == 1
+    assert "sub" not in body and "assigned_to_sub" not in body
+
+
+def test_my_cubicle_unassigned_user_returns_not_assigned() -> None:
+    payload = {
+        "sub": "user-sub-nobody",
+        "scope": "openid hr_self_rest",
+        "username": "nobody.unassigned",
+    }
+    client = _build_app(payload)
+    resp = client.get("/api/me/cubicle", headers={"Authorization": "Bearer fake-tok-A"})
+    assert resp.status_code == 200
+    assert resp.json() == {"assigned": False}
+
+
+def test_my_cubicle_missing_scope_returns_403() -> None:
+    payload = {"sub": "x", "scope": "openid", "username": "employee_user"}
+    client = _build_app(payload)
+    resp = client.get("/api/me/cubicle", headers={"Authorization": "Bearer fake-tok-A"})
+    assert resp.status_code == 403

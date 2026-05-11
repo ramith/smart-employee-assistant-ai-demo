@@ -207,6 +207,40 @@ def build_reports_router(deps: ReportsRouterDeps) -> APIRouter:
             http_client=deps.http_client,
         )
 
+    # ── Sidebar self-service panels: cubicle + IT assets ────────────────────
+
+    @router.get("/api/me/cubicle")
+    async def get_my_cubicle(request: Request) -> JSONResponse:
+        """Proxy the My Cubicle sidebar fetch to HR Server.
+
+        Cookie auth → pre-flight ``hr_self_rest`` → Bearer token-A → HR
+        Server returns the assignment record or ``{assigned: false}``.
+        """
+        return await forward_with_token_a(
+            request,
+            session_store=deps.session_store,
+            session_cookie_name=deps.session_cookie_name,
+            target_url=f"{hr_base}/api/me/cubicle",
+            required_scope="hr_self_rest",
+            http_client=deps.http_client,
+        )
+
+    @router.get("/api/me/assets")
+    async def get_my_assets(request: Request) -> JSONResponse:
+        """Proxy the My IT Assets sidebar fetch to IT Server.
+
+        Cookie auth → pre-flight ``it_assets_self_rest`` → Bearer token-A →
+        IT Server returns ``{assets: [...], total: N}``.
+        """
+        return await forward_with_token_a(
+            request,
+            session_store=deps.session_store,
+            session_cookie_name=deps.session_cookie_name,
+            target_url=f"{it_base}/api/me/assets",
+            required_scope="it_assets_self_rest",
+            http_client=deps.http_client,
+        )
+
     # ── A3 / S4.4 — Pending Leaves report ───────────────────────────────────
 
     @router.get("/api/reports/leave-requests")

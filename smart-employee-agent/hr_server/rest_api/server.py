@@ -70,6 +70,8 @@ class _AuthContext:
     def __init__(self, payload: dict):
         self.payload = payload
         self.sub: str = payload.get("sub") or ""
+        self.username: str | None = payload.get("username") or None
+        self.email: str | None = payload.get("email") or None
         self.scopes: list[str] = (
             payload.get("scope", "").split() if payload.get("scope") else []
         )
@@ -237,6 +239,27 @@ def build_rest_router(deps: RestApiDeps) -> APIRouter:
             ctx.sub, ctx.first_name, ctx.last_name
         )
         return JSONResponse({"data": leaves, "count": len(leaves)})
+
+    @router.get("/api/me/cubicle")
+    async def get_my_cubicle(request: Request):
+        """Return the authenticated user's own cubicle assignment.
+
+        Sprint 4 (UC-12 / sidebar). Bearer token-A; scope ``hr_self_rest``.
+        Identity is the ``username`` claim. Returns the assignment record
+        or ``{assigned: false}`` — no envelope wrapping (single record).
+        """
+        ctx = await authenticate(request)
+        if isinstance(ctx, JSONResponse):
+            return ctx
+        err = _require_scope(ctx, "hr_self_rest")
+        if err:
+            return err
+        if not ctx.username:
+            return JSONResponse(
+                {"error_id": "ERR-AUTH-claim-missing", "detail": "username claim absent"},
+                status_code=401,
+            )
+        return JSONResponse(await hr_service.get_my_cubicle(ctx.username))
 
     @router.get("/api/reports/leave-requests")
     async def get_pending_leave_requests(request: Request):

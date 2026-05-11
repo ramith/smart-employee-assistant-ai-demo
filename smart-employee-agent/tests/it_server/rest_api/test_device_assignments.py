@@ -160,3 +160,45 @@ def test_device_assignments_missing_scope_returns_403() -> None:
     assert resp.status_code == 403
     body = resp.json()
     assert "data" not in body
+
+
+# ---------------------------------------------------------------------------
+# 3. /api/me/assets — caller's own IT assets
+# ---------------------------------------------------------------------------
+
+
+def test_my_assets_returns_callers_assets() -> None:
+    """employee_user has 2 seeded assets (1 laptop outstanding, 1 phone returned)."""
+    payload = {
+        "sub": "user-sub-employee",
+        "scope": "openid it_assets_self_rest",
+        "username": "employee_user",
+    }
+    client = _build_app(payload)
+    resp = client.get("/api/me/assets", headers={"Authorization": "Bearer fake-tok-A"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("total") == 2
+    asset_ids = sorted(a["asset_id"] for a in body["assets"])
+    assert asset_ids == ["AST-12345", "AST-12346"]
+    for a in body["assets"]:
+        assert "sub" not in a and "employee_id" not in a
+
+
+def test_my_assets_unassigned_user_returns_empty() -> None:
+    payload = {
+        "sub": "x",
+        "scope": "openid it_assets_self_rest",
+        "username": "nobody.unassigned",
+    }
+    client = _build_app(payload)
+    resp = client.get("/api/me/assets", headers={"Authorization": "Bearer fake-tok-A"})
+    assert resp.status_code == 200
+    assert resp.json() == {"assets": [], "total": 0}
+
+
+def test_my_assets_missing_scope_returns_403() -> None:
+    payload = {"sub": "x", "scope": "openid", "username": "employee_user"}
+    client = _build_app(payload)
+    resp = client.get("/api/me/assets", headers={"Authorization": "Bearer fake-tok-A"})
+    assert resp.status_code == 403
