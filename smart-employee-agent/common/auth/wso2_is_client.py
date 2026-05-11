@@ -235,9 +235,45 @@ class WSO2ISClient:
             or body.get("code")
         )
         if not code:
+            # WSO2 IS App-Native Auth returns HTTP 200 even when the
+            # credentials are rejected — the failure is in flowStatus +
+            # nextStep.messages. Surface that instead of the cryptic
+            # "no code in response body" so operators can immediately tell
+            # "the agent secret is wrong / was regenerated" from a log line.
+            flow_status = body.get("flowStatus", "UNKNOWN")
+            messages = (body.get("nextStep") or {}).get("messages") or []
+            err_msgs = [
+                f"{m.get('messageId', '?')}: {m.get('message', '')}"
+                for m in messages
+                if isinstance(m, dict) and m.get("type") == "ERROR"
+            ]
+            is_credential_failure = flow_status == "FAIL_INCOMPLETE" or any(
+                "ABA-60003" in m or "login.fail" in m for m in err_msgs
+            )
+            hint = (
+                " — agent authentication FAILED; the agent secret is likely "
+                "stale (rotated by 'Regenerate' in IS Console). Update the "
+                "agent's *_AGENT_SECRET in the service .env and recreate the "
+                "container."
+                if is_credential_failure
+                else ""
+            )
+            logger.error(
+                "post_authn no-code | flowStatus=%s errors=%s%s",
+                flow_status,
+                err_msgs or "(none)",
+                hint,
+            )
             raise CIBAInitiationError(
-                "POST /oauth2/authn succeeded but no code in response body",
-                details={"http_status": response.status_code, "body": response.text[:500]},
+                f"POST /oauth2/authn returned flowStatus={flow_status}"
+                + (f" errors={err_msgs}" if err_msgs else "")
+                + hint,
+                details={
+                    "http_status": response.status_code,
+                    "flowStatus": flow_status,
+                    "errors": err_msgs,
+                    "body": response.text[:500],
+                },
             )
         return code
 
