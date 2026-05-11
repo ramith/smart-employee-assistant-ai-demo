@@ -143,7 +143,10 @@ class IssueAssetArgs(BaseModel):
     """
 
     asset_id: str = Field(description="Catalogue asset_id, e.g. 'MBP-14-001'")
-    employee_id: str = Field(description="Target employee sub")
+    employee_id: str = Field(
+        description="Recipient's username (an email-form value is normalised to "
+        "its local part)"
+    )
 
 
 class IssueAssetResult(BaseModel):
@@ -374,8 +377,9 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
     ) -> IssueAssetResult:
         """Issue an asset to an employee.
 
-        Required scope: ``it_assets_write_rest``.  Sprint 1 used canned data;
-        this endpoint records the issuance in-memory only and returns success.
+        Required scope: ``it_assets_write_rest``.  Records the issuance in the
+        in-memory store (so the recipient's "My IT Assets" panel and the
+        HR-admin Devices report reflect it) and returns the issuance receipt.
         """
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
@@ -422,6 +426,11 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         )
 
         from datetime import datetime, timezone
+
+        # Persist the assignment — without this the issuance "succeeds" on the
+        # wire but the recipient's "My IT Assets" panel and the Devices report
+        # stay empty (the Sprint 1 stub returned success without recording).
+        it_service.issue_asset(body.asset_id, body.employee_id)
 
         act_sub: str = (
             claims.act.get("sub") if isinstance(claims.act, dict) else None

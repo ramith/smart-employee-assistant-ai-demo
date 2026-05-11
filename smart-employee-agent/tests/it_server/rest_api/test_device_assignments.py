@@ -52,7 +52,7 @@ for _pkg in ("it_server", "it_server.service", "it_server.auth", "it_server.rest
     _ensure_pkg(_pkg)
 
 _store = _load("it_server.service.store", "it_server/service/store.py")
-_load("it_server.service.it_service", "it_server/service/it_service.py")
+_it_service = _load("it_server.service.it_service", "it_server/service/it_service.py")
 
 _jwt_stub = types.ModuleType("it_server.auth.jwt_validator")
 
@@ -223,3 +223,39 @@ def test_my_assets_missing_scope_returns_403() -> None:
     client = _build_app(payload)
     resp = client.get("/api/me/assets", headers={"Authorization": "Bearer fake-tok-A"})
     assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 4. Round-trip — an issuance shows up in both the panel and the report (S5.17).
+# ---------------------------------------------------------------------------
+
+
+def test_issued_asset_shows_in_my_assets_and_device_report() -> None:
+    """``issue_asset`` (the HR-admin write path) persists; the recipient's
+    /api/me/assets and the /api/reports/device-assignments tab both reflect it."""
+    # HR admin issues a laptop + a phone to employee_user (named by username).
+    _it_service.issue_asset("MBP-14-001", "employee_user")
+    _it_service.issue_asset("PHN-IP15-001", "employee_user")
+
+    # Employee panel — token-A for employee_user (username from the email-form sub).
+    emp_client = _build_app(
+        {"sub": "employee_user@example.com", "scope": "openid it_assets_self_rest"}
+    )
+    emp = emp_client.get("/api/me/assets", headers={"Authorization": "Bearer t"}).json()
+    assert emp["total"] == 2
+    assert sorted(a["asset_id"] for a in emp["assets"]) == ["MBP-14-001", "PHN-IP15-001"]
+
+    # HR-admin Devices report.
+    admin_client = _build_app(
+        {"sub": "hr_admin_user@example.com", "scope": "openid it_assets_read_rest",
+         "username": "hr_admin_user"}
+    )
+    rep = admin_client.get(
+        "/api/reports/device-assignments", headers={"Authorization": "Bearer t"}
+    ).json()
+    assert rep["count"] == 2
+    ids = sorted(r["asset_id"] for r in rep["data"])
+    assert ids == ["MBP-14-001", "PHN-IP15-001"]
+    for r in rep["data"]:
+        assert r["username"] == "employee_user"
+        assert "sub" not in r

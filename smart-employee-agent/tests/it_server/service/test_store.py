@@ -11,6 +11,11 @@ Coverage targets:
     5. ``get_my_assets("")`` / unknown username returns ``{assets: [], total: 0}``.
     6. ``get_all_asset_assignments`` joins ``email`` from users, never surfaces
        ``sub`` (sprint-4.md §7).
+    7. ``it_service.issue_asset`` / ``store.record_issuance`` persist the
+       assignment (S5.17 — the write path was a no-op stub): fills model/type
+       from the catalogue, normalises an email recipient, re-issue moves the
+       holder, uncatalogued ids are still recorded, ``available_count`` is
+       decremented exactly once.
 """
 
 from __future__ import annotations
@@ -184,3 +189,51 @@ def test_get_all_asset_assignments_joins_email_no_sub() -> None:
     # Critical: ``sub`` must NEVER appear in a report row.
     for r in rows:
         assert "sub" not in r
+
+
+# ---------------------------------------------------------------------------
+# 7. issue_asset / record_issuance — the write path persists the assignment.
+# ---------------------------------------------------------------------------
+
+
+def test_issue_asset_persists_and_fills_from_catalogue() -> None:
+    cat_before = _store.catalogue_entry_by_id("MBP-14-001")
+    assert cat_before is not None
+    start = int(cat_before["available_count"])
+    row = _svc.issue_asset("MBP-14-001", "alice")
+    assert row == {
+        "asset_id": "MBP-14-001", "username": "alice", "type": "laptop",
+        "model": "MacBook Pro 14", "status": "outstanding",
+    }
+    # It is now visible to the employee panel and the report.
+    assert _svc.get_my_assets("alice")["total"] == 1
+    assert any(r["asset_id"] == "MBP-14-001" for r in _svc.get_all_asset_assignments())
+    # A new catalogued issuance decrements available_count.
+    assert int(_store.catalogue_entry_by_id("MBP-14-001")["available_count"]) == start - 1
+
+
+def test_issue_asset_normalises_email_recipient() -> None:
+    _svc.issue_asset("PHN-IP15-001", "alice@example.com")
+    rows = _store.get_assets_for_username("alice")
+    assert len(rows) == 1 and rows[0]["asset_id"] == "PHN-IP15-001"
+    assert _store.get_assets_for_username("alice@example.com") == []
+
+
+def test_issue_asset_reissue_moves_holder_no_double_count() -> None:
+    start = int(_store.catalogue_entry_by_id("MBP-14-001")["available_count"])
+    _svc.issue_asset("MBP-14-001", "alice")
+    _svc.issue_asset("MBP-14-001", "bob")  # same physical asset → moves to bob
+    assert _store.get_assets_for_username("alice") == []
+    assert len(_store.get_assets_for_username("bob")) == 1
+    assert len([a for a in _store.assets if a["asset_id"] == "MBP-14-001"]) == 1
+    # Only the *first* (new-row) issuance decremented the catalogue.
+    assert int(_store.catalogue_entry_by_id("MBP-14-001")["available_count"]) == start - 1
+
+
+def test_issue_asset_uncatalogued_id_still_recorded() -> None:
+    row = _svc.issue_asset("AST-99999", "alice")
+    assert row["asset_id"] == "AST-99999"
+    assert row["username"] == "alice"
+    assert row["model"] == "AST-99999"  # falls back to the id
+    assert row["status"] == "outstanding"
+    assert _svc.get_my_assets("alice")["total"] == 1

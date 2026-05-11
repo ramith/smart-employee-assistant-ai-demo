@@ -128,6 +128,62 @@ def get_asset_by_id(asset_id: str) -> Dict | None:
     return None
 
 
+def catalogue_entry_by_id(asset_id: str) -> Dict | None:
+    """Return the *catalogue* entry for ``asset_id`` (``model`` / ``type`` /
+    ``available_count``), or ``None`` if it isn't a catalogued asset."""
+    if not asset_id:
+        return None
+    for c in _ASSET_CATALOGUE:
+        if c["asset_id"] == asset_id:
+            return c
+    return None
+
+
+def record_issuance(
+    asset_id: str,
+    username: str,
+    *,
+    model: str = "",
+    asset_type: str = "",
+) -> Dict:
+    """Create — or move — an asset-assignment row, and return it.
+
+    A physical asset has at most one holder, so the match is on ``asset_id``:
+    an existing row is reassigned to ``username``; otherwise a new row is
+    appended. ``status`` is set to ``"outstanding"``. When the id is
+    catalogued and this is a *new* assignment, ``available_count`` is
+    decremented (floor 0). Stdlib-only, no I/O — the store is in-memory.
+    """
+    for a in assets:
+        if a["asset_id"] == asset_id:
+            a["username"] = username
+            a["status"] = "outstanding"
+            if model:
+                a["model"] = model
+            if asset_type:
+                a["type"] = asset_type
+            logger.info(
+                "[ASSET ISSUED] asset_id=%s reassigned -> username=%s", asset_id, username
+            )
+            return a
+    row = {
+        "asset_id": asset_id,
+        "username": username,
+        "type": asset_type,
+        "model": model or asset_id,
+        "status": "outstanding",
+    }
+    assets.append(row)
+    cat = catalogue_entry_by_id(asset_id)
+    if cat is not None and int(cat.get("available_count", 0)) > 0:
+        cat["available_count"] = int(cat["available_count"]) - 1
+    logger.info(
+        "[ASSET ISSUED] asset_id=%s -> username=%s type=%s",
+        asset_id, username, asset_type or "(uncatalogued)",
+    )
+    return row
+
+
 def lookup_user_by_username(username: str) -> Dict | None:
     """Return the user record whose ``username`` matches, or ``None``.
 

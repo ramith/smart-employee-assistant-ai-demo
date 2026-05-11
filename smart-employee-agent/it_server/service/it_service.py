@@ -72,3 +72,31 @@ def get_all_asset_assignments() -> list[dict]:
 
 def get_asset_by_id(asset_id: str) -> Optional[dict]:
     return store.get_asset_by_id(asset_id)
+
+
+def issue_asset(asset_id: str, employee: str) -> dict:
+    """Record an asset issuance (HR-Admin write path; UC-07 / UC-18).
+
+    Persists an assignment row so the employee's "My IT Assets" panel
+    (``get_my_assets``) and the HR-admin Devices report
+    (``get_all_asset_assignments``) reflect it — the Sprint 1 endpoint
+    returned success without recording anything.
+
+    ``employee`` is the recipient's username; an email-form value is
+    normalised to its local part (the ``username == email-local-part``
+    convention — see ``common/auth/ciba_client.py`` / ``docs/wso2-is-setup.md``
+    §5.5). ``model`` / ``type`` come from the catalogue when ``asset_id`` is
+    catalogued; an uncatalogued id is still recorded. Returns the stored row.
+    """
+    asset_id = (asset_id or "").strip()
+    employee = (employee or "").strip()
+    username = employee.split("@", 1)[0] if "@" in employee else employee
+    cat = store.catalogue_entry_by_id(asset_id)
+    model = (cat or {}).get("model", "") if cat else ""
+    asset_type = (cat or {}).get("type", "") if cat else ""
+    row = store.record_issuance(asset_id, username, model=model, asset_type=asset_type)
+    logger.info(
+        "[IT WRITE] issue_asset asset_id=%s -> username=%s (type=%s)",
+        asset_id, username or "(empty)", asset_type or "(uncatalogued)",
+    )
+    return row

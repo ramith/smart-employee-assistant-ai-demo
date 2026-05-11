@@ -669,7 +669,9 @@ def it_write_payload() -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_issue_asset_valid_write_token(rsa_keypair, sign_token, it_write_payload):
-    """T-IT-MCP-11: Token with it_assets_write_rest issues an asset successfully."""
+    """T-IT-MCP-11: Token with it_assets_write_rest issues an asset successfully —
+    and (S5.17) the assignment is *persisted* so the employee panel / Devices
+    report reflect it; the issuance is no longer a no-op stub."""
     _, public_jwk = rsa_keypair
     token = sign_token(it_write_payload)
     app = _build_app(public_jwk)
@@ -677,16 +679,23 @@ async def test_issue_asset_valid_write_token(rsa_keypair, sign_token, it_write_p
 
     resp = client.post(
         "/mcp/tools/issue_asset",
-        json={"asset_id": "MBP-14-001", "employee_id": "user-uuid-abc123"},
+        json={"asset_id": "MBP-14-001", "employee_id": "alice"},
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["asset_id"] == "MBP-14-001"
-    assert data["employee_id"] == "user-uuid-abc123"
+    assert data["employee_id"] == "alice"
     assert data["issued_by"] == IT_AGENT_UUID  # act.sub
     assert "issued_at" in data
+
+    # S5.17: it actually landed in the store, model/type filled from catalogue.
+    assert _it_store_mod.get_assets_for_username("alice") == [
+        {"asset_id": "MBP-14-001", "username": "alice", "type": "laptop",
+         "model": "MacBook Pro 14", "status": "outstanding"}
+    ]
+    assert _it_service_mod.get_my_assets("alice")["total"] == 1
 
 
 @pytest.mark.asyncio
