@@ -531,16 +531,34 @@ textarea, input {
    variant (Request ID and End date columns hidden via the HTML change). */
 .sidebar-card .my-leaves-table {
   font-size: 0.75rem;
+  /* Pin the layout so the four columns share the narrow card width evenly and
+     the Status column is never pushed off / clipped. (renderMyLeavesPanel emits
+     exactly four <td> per row — Type | Start | Days | Status — matching <thead>.) */
+  table-layout: fixed;
+  width: 100%;
 }
 
-.sidebar-card .my-leaves-table thead th {
+.sidebar-card .my-leaves-table thead th,
+.sidebar-card .my-leaves-table tbody td {
   padding: 0.375rem 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-card .my-leaves-table thead th {
   font-size: 0.6875rem;
 }
 
-.sidebar-card .my-leaves-table tbody td {
-  padding: 0.375rem 0.5rem;
-}
+/* Column widths (sum = 100%): Type holds "Personal Leave"; Start is MM-DD;
+   Days is one digit; Status holds a "Rejected" pill. */
+.sidebar-card .my-leaves-table th:nth-child(1),
+.sidebar-card .my-leaves-table td:nth-child(1) { width: 38%; }
+.sidebar-card .my-leaves-table th:nth-child(2),
+.sidebar-card .my-leaves-table td:nth-child(2) { width: 20%; }
+.sidebar-card .my-leaves-table th:nth-child(3),
+.sidebar-card .my-leaves-table td:nth-child(3) { width: 14%; text-align: center; }
+.sidebar-card .my-leaves-table th:nth-child(4),
+.sidebar-card .my-leaves-table td:nth-child(4) { width: 28%; }
 
 .sidebar-card .my-leaves-empty {
   font-size: 0.8125rem;

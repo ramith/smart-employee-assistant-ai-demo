@@ -2187,11 +2187,20 @@ function renderMyLeavesPanel(rows) {
   tbody.innerHTML = sorted.map((r) => {
     const status = String(r.status || "");
     const cls = LEAVE_STATUS_CLASS[status.toLowerCase()] || "leave-status--pending";
-    return "<tr>"
-      + "<td>" + escapeHtml(r.request_id || "") + "</td>"
-      + "<td>" + escapeHtml(r.type || "") + "</td>"
-      + "<td>" + escapeHtml(r.start_date || "") + "</td>"
-      + "<td>" + escapeHtml(r.end_date || "") + "</td>"
+    const startFull = String(r.start_date || "");
+    const endFull = String(r.end_date || "");
+    // Compact sidebar: show MM-DD for the start date; the request id + full
+    // date range live in the row tooltip (full info is also in chat / Reports).
+    const startShort = startFull.length >= 10 ? startFull.slice(5) : startFull;
+    const tip = [
+      r.request_id ? "Request " + r.request_id : "",
+      startFull && endFull ? startFull + " → " + endFull : startFull,
+      r.type ? String(r.type) : "",
+    ].filter(Boolean).join(" · ");
+    // One <td> per <thead> column: Type | Start | Days | Status.
+    return "<tr title=\"" + escapeHtml(tip) + "\">"
+      + "<td>" + escapeHtml(String(r.type || "")) + "</td>"
+      + "<td>" + escapeHtml(startShort) + "</td>"
       + "<td>" + escapeHtml(String(r.days_requested ?? "")) + "</td>"
       + "<td><span class='leave-status " + cls + "'>" + escapeHtml(status) + "</span></td>"
       + "</tr>";
