@@ -402,7 +402,7 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
         # EX-1 — IS returned an error (e.g. user denied consent)
         if error:
             spa_base = _spa_base_url(deps.config)
-            redirect_url = f"{spa_base}/login?error={error}"
+            redirect_url = f"{spa_base}/?error={error}"
             logger.warning("auth_callback_error | error=%r state=%s", error, state)
             return HTMLResponse(
                 _make_error_redirect_html(redirect_url),
@@ -652,7 +652,7 @@ def _make_exchange_relay_html(
     The page has no visible content.  On load it fires a ``fetch`` to
     ``POST /auth/exchange`` with JSON ``{code, state}``.  On success it
     navigates to ``redirect_after``; on failure it navigates to
-    ``/login?error=exchange_failed``.
+    ``/?error=exchange_failed``.
 
     Inline JavaScript is used intentionally: this page is ephemeral
     (rendered once per login flow, never cached) and has no external
@@ -707,10 +707,10 @@ def _make_exchange_relay_html(
           }} catch (e) {{ /* fall through; cookie still authenticates */ }}
           window.location.href = '{safe_redirect}';
         }} else {{
-          window.location.href = '/login?error=exchange_failed';
+          window.location.href = '/?error=exchange_failed';
         }}
       }} catch (e) {{
-        window.location.href = '/login?error=exchange_failed';
+        window.location.href = '/?error=exchange_failed';
       }}
     }})();
   </script>
