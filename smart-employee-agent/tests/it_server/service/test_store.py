@@ -1,12 +1,15 @@
-"""Tests for it_server/service/store.py + it_service.py — Sprint 4 S4.2 (UC-12).
+"""Tests for it_server/service/store.py + it_service.py — S5.12 (no seed roster).
 
 Coverage targets:
-    1. Seed shape: ``_SEED_ASSETS`` rows are keyed by ``username``; no
-       ``employee_id`` field anywhere in the seed.
-    2. ``users`` dict pre-seeded with the four named demo users.
-    3. ``get_my_assets(username)`` returns the right rows, ``{assets, total}`` shape.
-    4. ``get_my_assets("")`` / unknown username returns ``{assets: [], total: 0}``.
-    5. ``get_all_asset_assignments`` joins ``email`` from users, never surfaces
+    1. Store starts empty — no seeded assets, no seeded users.
+    2. ``ensure_user`` registers a user from token claims (``username``/``email``);
+       a later token-C-style call (no profile claims) doesn't clobber them.
+    3. ``lookup_user_by_sub`` / ``lookup_user_by_username`` resolve a registered
+       user; unknown → ``None``.
+    4. ``get_my_assets(username)`` returns the right rows, ``{assets, total}`` shape;
+       resolving ``sub`` → ``username`` works once the user is registered.
+    5. ``get_my_assets("")`` / unknown username returns ``{assets: [], total: 0}``.
+    6. ``get_all_asset_assignments`` joins ``email`` from users, never surfaces
        ``sub`` (sprint-4.md §7).
 """
 
@@ -66,85 +69,118 @@ def _reset():
     _store.reset_data()
 
 
-# ---------------------------------------------------------------------------
-# 1. Seed shape — username-keyed, no employee_id field
-# ---------------------------------------------------------------------------
-
-
-def test_seed_assets_keyed_by_username_no_employee_id() -> None:
-    """Sprint 4 S4.2: assets carry ``username``, never ``employee_id``."""
-    assert len(_store.assets) >= 5
-    for row in _store.assets:
-        assert "username" in row
-        assert "employee_id" not in row
-        # Required fields per Stage 5 §E1
-        assert {"asset_id", "username", "type", "model", "status"}.issubset(row.keys())
-
-
-# ---------------------------------------------------------------------------
-# 2. Users dict pre-seeded with named demo users
-# ---------------------------------------------------------------------------
-
-
-def test_users_seed_contains_named_demo_users() -> None:
-    """The four named demo users (UC-11/UC-12) must be pre-loaded."""
-    usernames = {rec["username"] for rec in _store.users.values()}
-    assert {"employee_user", "hr_admin_user", "jane.doe", "bob.smith"}.issubset(
-        usernames
+def _issue(asset_id: str, username: str, type_: str = "laptop",
+           model: str = "MBP 14 M3", status: str = "outstanding") -> None:
+    """Append an asset row directly (stand-in for the live issuance flow)."""
+    _store.assets.append(
+        {"asset_id": asset_id, "username": username, "type": type_,
+         "model": model, "status": status}
     )
-    # Every seeded user record carries username + email + sub.
-    for rec in _store.users.values():
-        assert rec.get("username")
-        assert rec.get("email")
-        assert rec.get("sub")
 
 
 # ---------------------------------------------------------------------------
-# 3. get_my_assets returns the right rows for a known username
+# 1. Store starts empty — no seed roster, no seed assets.
 # ---------------------------------------------------------------------------
 
 
-def test_get_my_assets_returns_user_rows() -> None:
-    """employee_user has 1 laptop + 1 phone in the seed."""
-    result = _svc.get_my_assets("employee_user")
+def test_store_starts_empty() -> None:
+    assert _store.assets == []
+    assert _store.users == {}
+
+
+# ---------------------------------------------------------------------------
+# 2. ensure_user registers from token claims; token-C call doesn't clobber.
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_user_persists_profile_claims() -> None:
+    rec = _store.ensure_user(
+        "alice@example.com", "Alice", "Smith",
+        username="alice", email="alice@example.com",
+    )
+    assert rec["sub"] == "alice@example.com"
+    assert rec["username"] == "alice"
+    assert rec["email"] == "alice@example.com"
+    assert rec["name"] == "Alice Smith"
+    # A later OBO/CIBA-style call (no profile claims) must not wipe them.
+    again = _store.ensure_user("alice@example.com", "", "")
+    assert again["username"] == "alice"
+    assert again["email"] == "alice@example.com"
+    # If the record was created without a username, a later call backfills it.
+    _store.ensure_user("bob@example.com", "Bob", "Jones")
+    assert _store.users["bob@example.com"]["username"] == ""
+    _store.ensure_user("bob@example.com", "Bob", "Jones", username="bob", email="bob@example.com")
+    assert _store.users["bob@example.com"]["username"] == "bob"
+
+
+# ---------------------------------------------------------------------------
+# 3. lookup_user_by_sub / by_username.
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_user_by_sub_and_username() -> None:
+    assert _store.lookup_user_by_sub("alice@example.com") is None
+    assert _store.lookup_user_by_username("alice") is None
+    _store.ensure_user("alice@example.com", "Alice", "Smith", username="alice", email="alice@example.com")
+    by_sub = _store.lookup_user_by_sub("alice@example.com")
+    assert by_sub is not None and by_sub["username"] == "alice"
+    by_name = _store.lookup_user_by_username("alice")
+    assert by_name is not None and by_name["sub"] == "alice@example.com"
+    assert _store.lookup_user_by_sub("nobody@example.com") is None
+
+
+# ---------------------------------------------------------------------------
+# 4. get_my_assets — by username and resolved from sub.
+# ---------------------------------------------------------------------------
+
+
+def test_get_my_assets_by_username() -> None:
+    _issue("AST-1", "alice")
+    _issue("AST-2", "alice", type_="phone", model="iPhone 15", status="returned")
+    _issue("AST-3", "bob")
+    result = _svc.get_my_assets("alice")
     assert result["total"] == 2
-    asset_ids = {a["asset_id"] for a in result["assets"]}
-    assert "AST-12345" in asset_ids
-    assert "AST-12346" in asset_ids
+    assert {a["asset_id"] for a in result["assets"]} == {"AST-1", "AST-2"}
+
+
+def test_get_my_assets_resolves_username_from_sub() -> None:
+    # token-C carries only `sub`; the REST auth path registered `username`.
+    _store.ensure_user("alice@example.com", "Alice", "Smith", username="alice", email="alice@example.com")
+    _issue("AST-1", "alice")
+    result = _svc.get_my_assets("", sub="alice@example.com")
+    assert result["total"] == 1
+    assert result["assets"][0]["asset_id"] == "AST-1"
 
 
 # ---------------------------------------------------------------------------
-# 4. get_my_assets returns empty for unknown / empty username
+# 5. get_my_assets returns empty for unknown / empty username.
 # ---------------------------------------------------------------------------
 
 
 def test_get_my_assets_unknown_username_returns_empty() -> None:
-    """Unknown username → empty list, not an error."""
     result = _svc.get_my_assets("nobody.here")
     assert result == {"assets": [], "total": 0}
 
 
 def test_get_my_assets_empty_username_returns_empty() -> None:
-    """Empty username (defensive) → empty list."""
     result = _svc.get_my_assets("")
     assert result == {"assets": [], "total": 0}
 
 
 # ---------------------------------------------------------------------------
-# 5. get_all_asset_assignments joins email, never surfaces sub
+# 6. get_all_asset_assignments joins email, never surfaces sub.
 # ---------------------------------------------------------------------------
 
 
 def test_get_all_asset_assignments_joins_email_no_sub() -> None:
-    """Report rows include username + email; ``sub`` is internal-only (§7)."""
+    _store.ensure_user("alice@example.com", "Alice", "Smith", username="alice", email="alice@example.com")
+    _issue("AST-1", "alice")
     rows = _svc.get_all_asset_assignments()
-    assert len(rows) == len(_store.assets)
-    # Find the employee_user laptop.
-    laptops = [r for r in rows if r["asset_id"] == "AST-12345"]
-    assert len(laptops) == 1
-    row = laptops[0]
-    assert row["username"] == "employee_user"
-    assert row["email"] == "employee.user@example.com"
+    assert len(rows) == len(_store.assets) == 1
+    row = rows[0]
+    assert row["asset_id"] == "AST-1"
+    assert row["username"] == "alice"
+    assert row["email"] == "alice@example.com"
     # Critical: ``sub`` must NEVER appear in a report row.
     for r in rows:
         assert "sub" not in r

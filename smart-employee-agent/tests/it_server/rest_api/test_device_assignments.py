@@ -113,6 +113,20 @@ def test_device_assignments_happy_path_returns_envelope_without_sub() -> None:
         "username": "hr_admin_user",
     }
 
+    # S5.12: no seed data — register employee_user and append their assets first.
+    _store.ensure_user(
+        "employee_user@example.com", "Employee", "User",
+        username="employee_user", email="employee_user@example.com",
+    )
+    _store.assets.append(
+        {"asset_id": "AST-12345", "username": "employee_user", "type": "laptop",
+         "model": "MBP 14 M3", "status": "outstanding"}
+    )
+    _store.assets.append(
+        {"asset_id": "AST-12346", "username": "employee_user", "type": "phone",
+         "model": "iPhone 15 Pro", "status": "returned"}
+    )
+
     client = _build_app(payload)
     resp = client.get(
         "/api/reports/device-assignments",
@@ -121,22 +135,18 @@ def test_device_assignments_happy_path_returns_envelope_without_sub() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert set(body.keys()) == {"data", "count"}
-    # Seed asserts >= 5 rows per it_server/service/store._SEED_ASSETS.
-    assert body["count"] >= 5
+    # 2 assets appended above.
+    assert body["count"] == 2
     expected_fields = {"username", "email", "asset_id", "type", "model", "status"}
     for row in body["data"]:
         assert expected_fields <= set(row.keys())
         # Identity surface lock: sub / employee_id never returned.
         assert "sub" not in row
         assert "employee_id" not in row
-    # At least one seeded user has both username and email populated
-    # (named-user seed is loaded by reset_data via _SEED_USERS).
-    populated = [
-        r for r in body["data"]
-        if r["username"] == "employee_user"
-    ]
-    assert populated, "expected employee_user row from seed"
-    assert populated[0]["email"] == "employee.user@example.com"
+    # employee_user row should have the email we registered above.
+    populated = [r for r in body["data"] if r["username"] == "employee_user"]
+    assert populated, "expected employee_user row from live setup"
+    assert populated[0]["email"] == "employee_user@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -168,12 +178,23 @@ def test_device_assignments_missing_scope_returns_403() -> None:
 
 
 def test_my_assets_returns_callers_assets() -> None:
-    """employee_user has 2 seeded assets (1 laptop outstanding, 1 phone returned)."""
+    """employee_user's 2 live-setup assets are returned."""
     payload = {
         "sub": "user-sub-employee",
         "scope": "openid it_assets_self_rest",
         "username": "employee_user",
     }
+    # S5.12: no seed — append assets for employee_user before hitting the endpoint.
+    # The REST _authenticate will call ensure_user(sub, ..., username=...) and
+    # register the caller, so the username→email join works.
+    _store.assets.append(
+        {"asset_id": "AST-12345", "username": "employee_user", "type": "laptop",
+         "model": "MBP 14 M3", "status": "outstanding"}
+    )
+    _store.assets.append(
+        {"asset_id": "AST-12346", "username": "employee_user", "type": "phone",
+         "model": "iPhone 15 Pro", "status": "returned"}
+    )
     client = _build_app(payload)
     resp = client.get("/api/me/assets", headers={"Authorization": "Bearer fake-tok-A"})
     assert resp.status_code == 200

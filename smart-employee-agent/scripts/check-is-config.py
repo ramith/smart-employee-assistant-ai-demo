@@ -686,14 +686,33 @@ def check_user_attributes(base_url: str, auth_hdr: str) -> None:
             bad(f"user '{username}' attributes", "user not found")
             continue
         u = resources[0]
-        has_username = bool(u.get("userName"))
+        uname = u.get("userName") or ""
+        # SCIM2 userName may be userstore-qualified ("PRIMARY/employee_user").
+        uname_bare = uname.split("/", 1)[-1] if uname else ""
+        has_username = bool(uname)
         emails = u.get("emails") or []
-        has_email = any(
-            (isinstance(e, dict) and e.get("value")) or (isinstance(e, str) and e)
+        email_vals = [
+            (e.get("value") if isinstance(e, dict) else e)
             for e in emails
-        )
+            if (isinstance(e, dict) and e.get("value")) or (isinstance(e, str) and e)
+        ]
+        has_email = bool(email_vals)
         if has_username and has_email:
             ok(f"user '{username}' has userName + email set (claim source available)")
+            # S5.12: the agents derive the CIBA login_hint by stripping @domain
+            # off the email-form `sub`, so the userName MUST equal the email
+            # local-part or CIBA fails with the "federated user" error.
+            email_localparts = {str(v).split("@", 1)[0].lower() for v in email_vals}
+            if uname_bare.lower() not in email_localparts:
+                bad(
+                    f"user '{username}' login_hint alignment",
+                    f"userName '{uname_bare}' != any email local-part "
+                    f"{sorted(email_localparts)} — CIBA via chat will fail for this "
+                    f"user (see docs/architecture/identity-subject-mismatch.md §6). "
+                    f"Recreate the account with userName = the email local-part.",
+                )
+            else:
+                ok(f"user '{username}' userName matches email local-part (CIBA login_hint OK)")
         else:
             missing = []
             if not has_username:

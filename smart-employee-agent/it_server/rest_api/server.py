@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
 from it_server.auth.jwt_validator import JWTValidator, TokenError
-from it_server.service import it_service
+from it_server.service import it_service, store
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,14 @@ async def _authenticate(
         )
 
     ctx = _AuthContext(payload)
+    if ctx.sub:
+        # token-A carries the username/email profile claims — persist them so
+        # the token-C it.get_my_assets tool can resolve sub → username, and the
+        # Devices report can show emails (no hard-coded user seed).
+        store.ensure_user(
+            ctx.sub, ctx.first_name, ctx.last_name,
+            username=ctx.username, email=ctx.email,
+        )
 
     act = payload.get("act")
     endpoint = request.url.path

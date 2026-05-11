@@ -122,8 +122,13 @@ def _make_authenticate(deps: RestApiDeps):
             )
 
         ctx = _AuthContext(payload)
-        if ctx.sub and ctx.first_name:
-            store.ensure_user(ctx.sub, ctx.first_name, ctx.last_name)
+        if ctx.sub:
+            # token-A carries the username/email profile claims — persist them
+            # so lookup_employee / report joins resolve real users (no seed).
+            store.ensure_user(
+                ctx.sub, ctx.first_name, ctx.last_name,
+                username=ctx.username, email=ctx.email,
+            )
 
         act = payload.get("act")
         endpoint = request.url.path

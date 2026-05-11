@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -82,29 +83,50 @@ def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+# A login_hint local-part we're willing to send IS verbatim as a username.
+# Deliberately conservative: ASCII letters/digits and the few punctuation chars
+# that occur in real usernames/email local-parts. Anything else (spaces,
+# control chars, ``@`` x2, …) is left untouched so IS rejects it cleanly rather
+# than us guessing.
+_LOGIN_HINT_LOCALPART_RE = re.compile(r"^[A-Za-z0-9._%+\-]+$")
+
+
 def _normalize_login_hint(value: str) -> str:
     """Coerce a CIBA ``login_hint`` to a form WSO2 IS resolves to a *local* user.
 
-    Callers pass the inbound token's ``sub`` claim. Depending on the OAuth-app
-    config that can be a user-id UUID (``2048ad8c-…``) or an email-style
-    ``localpart@domain`` (e.g. ``employee_user@example.com`` when the app uses
-    email as the subject). IS's ``login_hint`` resolver reads ``user@something``
-    as ``user`` in tenant ``something`` — so ``employee_user@example.com`` makes
-    IS look for a tenant ``example.com``, fails to, and rejects the request with
-    *"external notification channel is not supported for federated users"*.
+    Callers pass the inbound token's ``sub`` claim. Since S5.12 every OAuth app
+    asserts ``email`` as the OIDC subject, so for a user with an ``emailaddress``
+    attribute ``sub`` is ``localpart@domain`` (e.g. ``employee_user@example.com``,
+    or ``shammi0107@gmail.com`` for a live demo user); users without one fall
+    back to a user-id UUID. IS's ``login_hint`` resolver reads ``user@something``
+    as *"user ``user`` in tenant ``something``"* — so an email-shaped hint makes
+    IS look for a tenant ``example.com`` / ``gmail.com``, fail, and reject the
+    request with *"external notification channel is not supported for federated
+    users"*. WSO2 IS does, however, accept a bare username **or** a user-id UUID.
 
-    Rule: if ``value`` is ``localpart@domain`` with a non-empty ``localpart`` and
-    a ``domain`` that looks like a DNS/email domain (contains a ``.``), use just
-    ``localpart`` (the username, resolved in the default tenant). UUIDs and bare
-    usernames (no ``@``) — and odd forms like ``weird@thing`` with no dot — pass
-    through unchanged.
+    Rule: if ``value`` is ``localpart@domain`` with a plausible-username
+    ``localpart`` and a ``domain`` that looks like a DNS domain (contains a
+    ``.``), send just ``localpart``. UUIDs and bare usernames (no ``@``), odd
+    forms like ``weird@thing`` (no dot in the domain), and local-parts with
+    surprising characters pass through unchanged.
+
+    ASSUMPTION (documented in ``docs/architecture/identity-subject-mismatch.md``):
+    the IS *username* equals the email's local-part. This holds for the seeded
+    accounts (``employee_user`` ↔ ``employee_user@example.com``) and for live
+    demo accounts as long as they're created with ``username`` = the email
+    local-part (the operator controls both). If a user's username differs from
+    their email local-part, CIBA for that user will fail with the *federated
+    user* error — the generic fix would be a privileged SCIM2 ``emails eq``
+    lookup (the doc's "Option B"), deliberately out of scope here.
     """
     if "@" not in value:
         return value
     local, _, domain = value.partition("@")
-    if local and "." in domain:
-        if local != value:
-            logger.debug("ciba_login_hint_normalized | from=%s to=%s", value, local)
+    if local and "." in domain and _LOGIN_HINT_LOCALPART_RE.match(local):
+        # INFO so it's visible that normalisation fired; log the bare local-part
+        # (the value actually sent to IS), not the full email, to keep INFO logs
+        # PII-light. The raw inbound sub is at DEBUG / in error details if needed.
+        logger.info("ciba_login_hint_normalized | to=%s", local)
         return local
     return value
 

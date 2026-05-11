@@ -132,7 +132,11 @@ class Session:
 
     Attributes:
         session_id: Cookie value; also used as the SSE path param.
-        user_sub: Asgardeo user UUID from the id_token ``sub`` claim.
+        user_sub: The user's OIDC ``sub`` claim from token-A. With the OAuth
+            apps set to email-subject (S5.12) this is the user's email for
+            users with an ``emailaddress`` attribute, the user-id UUID
+            otherwise — and it matches the ``sub`` on the per-agent CIBA/OBO
+            tokens (token-C), so per-user state keys consistently.
         user_label: Display name extracted from the id_token.
         token_a: Raw orchestrator session token (Pattern C result).
         pkce_state: CSRF-prevention state set during ``GET /auth/login``;
@@ -272,7 +276,9 @@ class SessionStore:
         ``asyncio.Queue``.
 
         Args:
-            user_sub: Asgardeo user UUID (``sub`` from id_token).
+            user_sub: The user's OIDC ``sub`` claim from token-A (email-form
+                for users with an ``emailaddress`` attribute, user-id UUID
+                otherwise — see ``docs/architecture/identity-subject-mismatch.md``).
             user_label: Display name for SSE ``session_ready`` event.
             token_a: Pattern-C token-A for this session.
 

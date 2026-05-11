@@ -43,7 +43,6 @@ async def get_leave_policy() -> List[Dict]:
 
 async def get_my_leave_balance(sub: str, first_name: str, last_name: str = "") -> Dict:
     """Get leave balance for the authenticated user. Auto-registers if new."""
-    sub = store.user_key(sub)  # S5.11: canonicalise so token-A and token-C agree
     user = store.ensure_user(sub, first_name, last_name)
     balance = store.leave_balances[sub]
     return {
@@ -58,7 +57,6 @@ async def get_my_leave_balance(sub: str, first_name: str, last_name: str = "") -
 
 async def get_my_leave_requests(sub: str, first_name: str, last_name: str = "") -> List[Dict]:
     """Get all leave requests for the authenticated user."""
-    sub = store.user_key(sub)  # S5.11: canonicalise (My Leaves panel reads under token-A's sub)
     store.ensure_user(sub, first_name, last_name)
     return [
         {
@@ -85,7 +83,6 @@ async def apply_leave(
     reason: str,
 ) -> Dict:
     """Submit a new leave request for the authenticated user."""
-    sub = store.user_key(sub)  # S5.11: store under the canonical key so My Leaves can read it back
     user = store.ensure_user(sub, first_name, last_name)
 
     if leave_type not in store.leave_policy:
@@ -360,16 +357,18 @@ async def get_my_cubicle(sub: str = "", username: str | None = None) -> Dict:
     tokens) then ``username`` (a fallback for tokens that carry the profile
     claim). Returns ``{assigned: False}`` when the caller has no cubicle.
     """
-    # S5.11: canonicalise the sub on both sides so token-A's email-style sub
-    # matches a seed assignment recorded under the UUID.
-    sub_needle = store.user_key((sub or "").strip())
+    # token-A (REST) and token-C (agent CIBA) now carry the same ``sub`` for a
+    # given user, so an exact match on the recorded ``assigned_to_sub`` works.
+    # NOTE: both the sub and the username comparisons below MUST stay ``==`` —
+    # never substring/startswith — or one user's cubicle could leak to another.
+    sub_needle = (sub or "").strip()
     name_needle = (username or "").strip().lower()
     if not sub_needle and not name_needle:
         return {"assigned": False}
     for row in store.cubicles:
         if not row["occupied"]:
             continue
-        row_sub = store.user_key((row["assigned_to_sub"] or "").strip())
+        row_sub = (row["assigned_to_sub"] or "").strip()
         row_name = (row["assigned_to_username"] or "").strip().lower()
         if (sub_needle and row_sub == sub_needle) or (name_needle and row_name == name_needle):
             return {
@@ -458,8 +457,9 @@ async def lookup_employee(username_or_email: str) -> Dict:
     """Resolve a username-or-email to ``{found, username, email, sub}``.
 
     Email matching is case-insensitive; username matching is case-sensitive
-    (usernames are pre-normalised lower-case in the seed). Returns
-    ``{found: False}`` when no match.
+    (the username comes from the token's ``username`` claim verbatim, via
+    ``ensure_user`` on the REST auth path). Returns ``{found: False}`` when no
+    match — including for users who haven't signed in yet (no seeded roster).
     """
     if not username_or_email:
         return {"found": False}

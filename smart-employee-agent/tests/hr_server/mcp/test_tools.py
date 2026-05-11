@@ -609,9 +609,8 @@ async def test_cubicle_summary_with_hr_read_rest(rsa_keypair, sign_token, hr_rea
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    # Seed has C-005 (fl 1), C-030 (fl 2), C-052 (fl 3) pre-assigned;
-    # floor 4 fully vacant.
-    assert data["floor_1"] == {"total": 25, "vacant": 24}
+    # S5.12: no seed assignments — all 100 cubicles start vacant.
+    assert data["floor_1"] == {"total": 25, "vacant": 25}
     assert data["floor_4"] == {"total": 25, "vacant": 25}
 
 
@@ -732,6 +731,11 @@ async def test_get_my_cubicle_with_hr_self_rest(rsa_keypair, sign_token, hr_read
 @pytest.mark.asyncio
 async def test_lookup_employee_with_hr_read_rest(rsa_keypair, sign_token, hr_read_rest_payload):
     _, public_jwk = rsa_keypair
+    # S5.12: no seed users — register jane.doe first so lookup_employee can find her.
+    _hr_store_mod.ensure_user(
+        "jane.doe@example.com", "Jane", "Doe",
+        username="jane.doe", email="jane.doe@example.com",
+    )
     token = sign_token(hr_read_rest_payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)

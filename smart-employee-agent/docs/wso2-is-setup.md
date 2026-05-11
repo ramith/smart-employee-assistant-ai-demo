@@ -90,6 +90,11 @@ Console → **Applications** → **+ New Application** → **Standard-Based Appl
 - ☑ **Client Credentials**
 - Client Authentication method: **Client Secret Basic**
 
+**User Attributes tab — Subject (S5.12) — REQUIRED:**
+- ☑ **Email** under "User Attribute Selection".
+- Under **Subject**: ☑ **Assign alternate subject identifier**, **Subject attribute = Email**, **Subject type = Public**.
+- Why: token-A (this app's user token, behind the SPA's `/api/me/*` proxy) must carry the **same `sub`** as the per-agent CIBA/OBO tokens (token-C, issued by `hr-agent`/`it-agent`, which are also email-subject — see Step 3). If this app emits the default `userid` UUID while the agent apps emit the email, per-user state desyncs (e.g. a leave applied via chat doesn't show in "My Leaves"). The original S5.11 diagnosis assumed this app was already email-subject — verify it actually is.
+
 **Capture for `orchestrator/.env`:**
 - Client ID → `ORCHESTRATOR_MCP_CLIENT_ID`
 - Client Secret → `ORCHESTRATOR_MCP_CLIENT_SECRET`
@@ -135,6 +140,11 @@ Then go to Console → **Applications** → find the auto-created app named afte
 
 **Roles tab — IMPORTANT:**
 - **Role Audience: Organization** (default is Application; flip to Organization). Application-audience roles don't propagate across the agent chain; Organization audience does. Required for Sprint 2/3 role-based scopes (e.g. `hr_admin` for `approve_leave`).
+
+**User Attributes tab — Subject (S5.12) — DO THIS for `hr-agent` and `it-agent` (NOT `orchestrator-agent`):**
+- Under **Subject**: ☑ **Assign alternate subject identifier**, **Subject attribute = Email**, **Subject type = Public**, leave "Include user domain" / "Include organization name" unchecked. Also ☑ **Email** under "User Attribute Selection".
+- Why: the per-agent CIBA/OBO token (token-C) issued by these apps must carry the **same `sub`** as the orchestrator session token (token-A from `orchestrator-mcp-client` — which **also** needs Subject = Email, see Step 2), or per-user state keyed by `sub` desyncs across code paths. **All three of `orchestrator-mcp-client` + `hr-agent` + `it-agent` must agree** — set the same Subject config on all three. See [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md). The agent's *own* actor token is unaffected — an agent identity has no `email` attribute, so IS falls back to the `userid` UUID for it (which is what `act.sub` / `trusted_act_subs` need).
+- **`orchestrator-agent`**: leave the default subject. It only ever mints its own actor token (the user code-exchange happens at `orchestrator-mcp-client`), so flipping it buys nothing.
 
 Click **Update** to save.
 
@@ -191,11 +201,17 @@ The denial path tests (N30, N31, UC-08) still work cleanly: `employee_user` does
 
 Console → **Users** → **+ Add User**:
 
-| Username | Password | Role |
-|---|---|---|
-| `employee_user` | `NewsMax@1234` | **Employee** (explicit role assignment) |
-| `hr_admin_user` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
-| `probe.user` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in Sprint 1 demo) |
+| Username | Email Address (required) | Password | Role |
+|---|---|---|---|
+| `employee_user` | `employee_user@example.com` | `NewsMax@1234` | **Employee** (explicit role assignment) |
+| `hr_admin_user` | `hr_admin_user@example.com` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
+| `probe.user` | `probe.user@example.com` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in the demo) |
+
+> **S5.12 — two hard requirements for every user that will sign in (including live demo-day accounts):**
+> 1. **The user MUST have an `emailaddress` attribute.** With the OAuth apps set to email-subject (§4), a user *without* an email gets `sub` = the `userid` UUID — that's still self-consistent (token-A and token-C both fall back), so it won't break keying, but it's surprising; set the email.
+> 2. **The IS `username` MUST equal the email's local-part** — `username` `shammi0107` ↔ email `shammi0107@gmail.com`. The agents derive the CIBA `login_hint` by stripping `@domain` off the inbound `sub`; if the username differs from the local-part, CIBA for that user fails with *"external notification channel is not supported for federated users"*. (You control both when creating accounts — just keep them aligned.)
+>
+> There is **no** seeded demo roster anymore — the demo runs against whatever users you create here; `lookup_employee` / the report username→email joins resolve them from the token's profile claims on first sign-in.
 
 Credentials captured in `scripts/probes/.test-users.env` (gitignored).
 
@@ -344,6 +360,12 @@ CIBA grant not enabled on the agent's OAuth App's Protocol tab. Re-check Step 4.
 
 ### Consent widget appears but never resolves
 Notification Channel not set to External. Re-check Step 4.
+
+### `"external notification channel is not supported for federated users"` from `/oauth2/ciba`
+The `login_hint` (derived from the inbound token's `sub`) didn't resolve to a local user. Either the user's IS `username` ≠ their email's local-part (see the S5.12 note in Step 4.5 — fix the username), or the agent OAuth app lost its email-subject config (re-check Step 4's User Attributes → Subject).
+
+### Leave applied via chat doesn't appear in "My Leaves" / a sidebar widget is empty after a chat action
+The per-user `sub` keying desynced — `hr-agent`/`it-agent` lost their **Subject = Email** config (Step 4, User Attributes → Subject), so token-C carries a UUID while token-A carries the email. Re-apply it. Also confirm the user has an `emailaddress` attribute. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md).
 
 ### `"Impersonator is not found in subject token"` from any /token call
 You're trying RFC 8693 token-exchange — that's NOT used in v4. The orchestrator should be calling `/oauth2/token` with `grant_type=authorization_code` (Pattern C) or polling with `grant_type=urn:openid:params:grant-type:ciba`. Check the request shape in logs.

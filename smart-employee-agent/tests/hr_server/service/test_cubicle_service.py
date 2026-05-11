@@ -1,7 +1,8 @@
-"""Tests for hr_service cubicle functions — Sprint 4 S4.1 (UC-11).
+"""Tests for hr_service cubicle functions — UC-11 (cubicles), S5.12 (no seed).
 
 Coverage targets:
-    1. Seed shape: 100 cubicles across 4 floors, all initially vacant.
+    1. Seed shape: 100 cubicles across 4 floors, ALL vacant on a fresh start
+       (assignments are made live; no pre-assigned demo roster).
     2. ``get_cubicle_summary`` aggregates totals + vacant counts per floor.
     3. ``get_vacant_cubicles_on_floor(2)`` returns floor 2 IDs.
     4. ``get_vacant_cubicles_on_floor(invalid)`` returns ``invalid_floor`` error.
@@ -9,12 +10,15 @@ Coverage targets:
     6. ``assign_cubicle`` idempotent: same ``(cubicle_id, username)`` → success.
     7. ``assign_cubicle`` collision: different username → ``cubicle_already_occupied``.
     8. ``assign_cubicle`` unknown id → ``cubicle_not_found``.
-    9. ``lookup_employee`` by username → found.
-   10. ``lookup_employee`` by email (case-insensitive) → found.
-   11. ``lookup_employee`` unknown → not found.
-   12. ``get_my_cubicle`` for unassigned user → ``assigned: False``.
-   13. ``get_my_cubicle`` for assigned user → cubicle_id + floor.
-   14. ``get_all_cubicle_assignments`` excludes ``sub`` (security audit F-12).
+    9. ``lookup_employee`` resolves a user registered via ``ensure_user`` by
+       username and by email (case-insensitive); unknown → not found.
+   10. ``get_my_cubicle`` for unassigned user → ``assigned: False``.
+   11. ``get_my_cubicle`` for assigned user → cubicle_id + floor (matched by sub
+       *and* by username).
+   12. Per-user data keying: a leave/cubicle written under sub X is visible via
+       sub X and NOT via a different sub (token-A and token-C carry the same
+       ``sub`` for a user since S5.12 — no ``user_key`` shim, no hard-coded map).
+   13. ``get_all_cubicle_assignments`` excludes ``sub`` (security audit F-12).
 """
 
 from __future__ import annotations
@@ -74,11 +78,11 @@ def _reset():
 
 
 # ---------------------------------------------------------------------------
-# 1. Seed shape
+# 1. Seed shape — 100 cubicles, all vacant on a fresh start
 # ---------------------------------------------------------------------------
 
 
-def test_cubicles_seed_has_100_rows_across_4_floors() -> None:
+def test_cubicles_seed_has_100_rows_across_4_floors_all_vacant() -> None:
     assert len(_store.cubicles) == 100
     floors = {row["floor"] for row in _store.cubicles}
     assert floors == {1, 2, 3, 4}
@@ -86,13 +90,14 @@ def test_cubicles_seed_has_100_rows_across_4_floors() -> None:
     for floor in range(1, 5):
         rows = [r for r in _store.cubicles if r["floor"] == floor]
         assert len(rows) == 25
-    # 3 pre-assigned in the seed (C-005, C-030, C-052); the rest vacant.
+    # No cubicle is pre-assigned — assignments happen live.
     occupied = [r for r in _store.cubicles if r["occupied"]]
-    assert {r["cubicle_id"] for r in occupied} == {"C-005", "C-030", "C-052"}
-    assert len(_store.cubicles) - len(occupied) == 97
-    # C-027 (UC-11 walkthrough target) must be vacant.
-    c027 = next(r for r in _store.cubicles if r["cubicle_id"] == "C-027")
-    assert not c027["occupied"]
+    assert occupied == []
+    for r in _store.cubicles:
+        assert r["assigned_to_username"] is None
+        assert r["assigned_to_email"] is None
+        assert r["assigned_to_sub"] is None
+        assert r["assigned_at"] is None
     # IDs are C-001 .. C-100.
     ids = [r["cubicle_id"] for r in _store.cubicles]
     assert ids[0] == "C-001"
@@ -105,14 +110,22 @@ def test_cubicles_seed_has_100_rows_across_4_floors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_summary_aggregates_per_floor_with_seed_assignments() -> None:
+async def test_summary_aggregates_per_floor_all_vacant_on_fresh_start() -> None:
     summary = await _svc.get_cubicle_summary()
     assert set(summary.keys()) == {"floor_1", "floor_2", "floor_3", "floor_4"}
-    # Seed: C-005 (floor 1), C-030 (floor 2), C-052 (floor 3) pre-assigned.
+    for floor in ("floor_1", "floor_2", "floor_3", "floor_4"):
+        assert summary[floor] == {"total": 25, "vacant": 25}
+
+
+@pytest.mark.asyncio
+async def test_summary_reflects_a_live_assignment() -> None:
+    await _svc.assign_cubicle(
+        cubicle_id="C-005", employee_username="alice",
+        employee_email="alice@example.com", sub="alice@example.com",
+    )
+    summary = await _svc.get_cubicle_summary()
     assert summary["floor_1"] == {"total": 25, "vacant": 24}
-    assert summary["floor_2"] == {"total": 25, "vacant": 24}
-    assert summary["floor_3"] == {"total": 25, "vacant": 24}
-    assert summary["floor_4"] == {"total": 25, "vacant": 25}
+    assert summary["floor_2"] == {"total": 25, "vacant": 25}
 
 
 # ---------------------------------------------------------------------------
@@ -121,15 +134,21 @@ async def test_summary_aggregates_per_floor_with_seed_assignments() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vacant_floor_2_returns_24_ids() -> None:
+async def test_vacant_floor_2_returns_all_25_then_24_after_assignment() -> None:
     result = await _svc.get_vacant_cubicles_on_floor(2)
     assert result["floor"] == 2
     assert "error" not in result
-    # C-030 is pre-assigned in the seed → 24 vacant on floor 2.
-    assert len(result["vacant"]) == 24
+    assert len(result["vacant"]) == 25
     assert "C-026" in result["vacant"]
     assert "C-050" in result["vacant"]
-    assert "C-027" in result["vacant"]   # UC-11 walkthrough target
+    assert "C-030" in result["vacant"]
+
+    await _svc.assign_cubicle(
+        cubicle_id="C-030", employee_username="bob",
+        employee_email="bob@example.com", sub="bob@example.com",
+    )
+    result = await _svc.get_vacant_cubicles_on_floor(2)
+    assert len(result["vacant"]) == 24
     assert "C-030" not in result["vacant"]
 
 
@@ -155,7 +174,7 @@ async def test_assign_cubicle_happy_path() -> None:
         cubicle_id="C-027",
         employee_username="jane.doe",
         employee_email="jane.doe@example.com",
-        sub="jane.doe-sub-uuid-0003",
+        sub="jane.doe@example.com",
     )
     assert result["success"] is True
     assert result["cubicle_id"] == "C-027"
@@ -170,7 +189,7 @@ async def test_assign_cubicle_happy_path() -> None:
     row = next(r for r in _store.cubicles if r["cubicle_id"] == "C-027")
     assert row["occupied"] is True
     assert row["assigned_to_username"] == "jane.doe"
-    assert row["assigned_to_sub"] == "jane.doe-sub-uuid-0003"
+    assert row["assigned_to_sub"] == "jane.doe@example.com"
 
 
 # ---------------------------------------------------------------------------
@@ -238,34 +257,26 @@ async def test_assign_cubicle_unknown_id_returns_not_found() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. lookup_employee — by username.
+# 9. lookup_employee — resolves a user registered via ensure_user.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_lookup_employee_by_username() -> None:
-    result = await _svc.lookup_employee("jane.doe")
-    assert result["found"] is True
-    assert result["username"] == "jane.doe"
-    assert result["email"] == "jane.doe@example.com"
-    assert result["sub"]  # non-empty
+async def test_lookup_employee_by_username_and_email() -> None:
+    # No hard-coded roster — register a user the way the REST auth path does.
+    _store.ensure_user(
+        "jane.doe@example.com", "Jane", "Doe",
+        username="jane.doe", email="jane.doe@example.com",
+    )
+    by_username = await _svc.lookup_employee("jane.doe")
+    assert by_username["found"] is True
+    assert by_username["username"] == "jane.doe"
+    assert by_username["email"] == "jane.doe@example.com"
+    assert by_username["sub"] == "jane.doe@example.com"
 
-
-# ---------------------------------------------------------------------------
-# 10. lookup_employee — by email (case-insensitive).
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_lookup_employee_by_email_case_insensitive() -> None:
-    result = await _svc.lookup_employee("JANE.DOE@example.com")
-    assert result["found"] is True
-    assert result["username"] == "jane.doe"
-
-
-# ---------------------------------------------------------------------------
-# 11. lookup_employee — unknown.
-# ---------------------------------------------------------------------------
+    by_email = await _svc.lookup_employee("JANE.DOE@example.com")
+    assert by_email["found"] is True
+    assert by_email["username"] == "jane.doe"
 
 
 @pytest.mark.asyncio
@@ -275,7 +286,7 @@ async def test_lookup_employee_unknown_returns_not_found() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 12. get_my_cubicle — unassigned.
+# 10. get_my_cubicle — unassigned.
 # ---------------------------------------------------------------------------
 
 
@@ -286,7 +297,7 @@ async def test_get_my_cubicle_unassigned() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. get_my_cubicle — after assignment (matched by sub *and* by username).
+# 11. get_my_cubicle — after assignment (matched by sub *and* by username).
 # ---------------------------------------------------------------------------
 
 
@@ -296,9 +307,9 @@ async def test_get_my_cubicle_after_assignment() -> None:
         cubicle_id="C-027",
         employee_username="jane.doe",
         employee_email="jane.doe@example.com",
-        sub="sub-1",
+        sub="jane.doe@example.com",
     )
-    by_sub = await _svc.get_my_cubicle(sub="sub-1")
+    by_sub = await _svc.get_my_cubicle(sub="jane.doe@example.com")
     assert by_sub["assigned"] is True
     assert by_sub["cubicle_id"] == "C-027"
     assert by_sub["floor"] == 2
@@ -306,9 +317,60 @@ async def test_get_my_cubicle_after_assignment() -> None:
     by_username = await _svc.get_my_cubicle(username="jane.doe")
     assert by_username["cubicle_id"] == "C-027"
 
+    # A *different* sub must NOT see jane's cubicle.
+    other = await _svc.get_my_cubicle(sub="someone.else@example.com")
+    assert other == {"assigned": False}
+
 
 # ---------------------------------------------------------------------------
-# 14. get_all_cubicle_assignments — never returns ``sub`` (F-12).
+# 12. Per-user data keying — same sub round-trips; a different sub does not.
+#     (token-A and token-C carry the same `sub` for a user since S5.12.)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_leave_round_trips_under_same_sub_only() -> None:
+    emp = "employee_user@example.com"
+    other = "other_user@example.com"
+    res = await _svc.apply_leave(
+        sub=emp, first_name="Employee", last_name="User",
+        leave_type="Sick Leave", start_date="2026-06-10", end_date="2026-06-12",
+        reason="surgery",
+    )
+    assert res.get("success") is True
+    rid = res["request_id"]
+    mine = await _svc.get_my_leave_requests(sub=emp, first_name="", last_name="")
+    assert any(r["request_id"] == rid for r in mine), mine
+    theirs = await _svc.get_my_leave_requests(sub=other, first_name="", last_name="")
+    assert all(r["request_id"] != rid for r in theirs)
+
+
+@pytest.mark.asyncio
+async def test_leave_balance_is_per_sub() -> None:
+    emp = "employee_user@example.com"
+    other = "other_user@example.com"
+    result = await _svc.apply_leave(
+        sub=emp, first_name="Employee", last_name="User",
+        leave_type="Sick Leave", start_date="2026-07-01", end_date="2026-07-03", reason="x",
+    )
+    # Approve the leave so the balance is deducted (apply_leave creates Pending only).
+    await _svc.approve_leave_request(
+        request_id=result["request_id"],
+        reviewer_sub="hr-admin-sub",
+        reviewer_name="HR Admin",
+    )
+    b_emp = await _svc.get_my_leave_balance(emp, "Employee", "User")
+    b_other = await _svc.get_my_leave_balance(other, "Other", "User")
+    # Same record on repeat read; a different sub gets a fresh default balance.
+    assert (await _svc.get_my_leave_balance(emp, "", ""))["balance"] == b_emp["balance"]
+    assert b_other["balance"] == _store.default_balance()
+    # emp had 3 sick days deducted; other still has full default sick balance.
+    assert b_emp["balance"] != b_other["balance"]
+    assert b_emp["balance"]["sick"] == _store.default_balance()["sick"] - 3
+
+
+# ---------------------------------------------------------------------------
+# 13. get_all_cubicle_assignments — never returns ``sub`` (F-12).
 # ---------------------------------------------------------------------------
 
 
@@ -321,8 +383,7 @@ async def test_get_all_cubicle_assignments_never_returns_sub() -> None:
         sub="jane-internal-sub",
     )
     rows = await _svc.get_all_cubicle_assignments()
-    # 3 seed assignments + the one just added = 4.
-    assert len(rows) == 4
+    assert len(rows) == 1  # only the one just assigned; no seeded assignments
     for row in rows:
         assert "sub" not in row
         assert "assigned_to_sub" not in row
@@ -330,61 +391,3 @@ async def test_get_all_cubicle_assignments_never_returns_sub() -> None:
     jane_row = next(r for r in rows if r["username"] == "jane.doe")
     assert jane_row["cubicle_id"] == "C-027"
     assert jane_row["floor"] == 2
-
-
-# ---------------------------------------------------------------------------
-# S5.11 — user_key canonicalisation: token-A (email-style sub) and token-C
-# (UUID sub) must hit the same leave/cubicle records.
-# ---------------------------------------------------------------------------
-
-_EMP_UUID = "2048ad8c-16a6-4ec1-bb63-b38300118f28"
-_EMP_EMAIL = "employee_user@example.com"
-
-
-def test_user_key_collapses_demo_sub_forms() -> None:
-    assert _store.user_key(_EMP_UUID) == _EMP_UUID
-    assert _store.user_key(_EMP_EMAIL) == _EMP_UUID
-    assert _store.user_key("hr_admin_user@example.com") == "15fab9e7-18ec-4f6b-be0f-7aa1ddcebfb7"
-    # Unknown subs pass through unchanged.
-    assert _store.user_key("00000000-0000-0000-0000-000000000000") == "00000000-0000-0000-0000-000000000000"
-    assert _store.user_key("someone@elsewhere.org") == "someone@elsewhere.org"
-    assert _store.user_key("plain_username") == "plain_username"
-    assert _store.user_key("") == ""
-
-
-@pytest.mark.asyncio
-async def test_leave_applied_via_uuid_is_visible_via_email_sub() -> None:
-    """A leave applied with the agent's UUID sub (token-C) shows up when the My
-    Leaves panel reads it with the orchestrator's email-style sub (token-A)."""
-    res = await _svc.apply_leave(
-        sub=_EMP_UUID, first_name="Employee", last_name="User",
-        leave_type="Sick Leave", start_date="2026-06-10", end_date="2026-06-12", reason="surgery",
-    )
-    assert res.get("success") is True
-    rid = res["request_id"]
-    # Read back the same way the /api/me/leaves panel does — but with token-A's sub.
-    rows_via_email = await _svc.get_my_leave_requests(sub=_EMP_EMAIL, first_name="", last_name="")
-    assert any(r["request_id"] == rid for r in rows_via_email), rows_via_email
-    # And via the UUID directly.
-    rows_via_uuid = await _svc.get_my_leave_requests(sub=_EMP_UUID, first_name="", last_name="")
-    assert any(r["request_id"] == rid for r in rows_via_uuid)
-
-
-@pytest.mark.asyncio
-async def test_leave_balance_consistent_across_sub_forms() -> None:
-    # Apply 3 days of sick leave via the UUID, then read the balance via the email sub.
-    await _svc.apply_leave(
-        sub=_EMP_UUID, first_name="Employee", last_name="User",
-        leave_type="Sick Leave", start_date="2026-07-01", end_date="2026-07-03", reason="x",
-    )
-    b_uuid = await _svc.get_my_leave_balance(_EMP_UUID, "Employee", "User")
-    b_email = await _svc.get_my_leave_balance(_EMP_EMAIL, "", "")
-    assert b_uuid["balance"] == b_email["balance"]  # same underlying record
-
-
-@pytest.mark.asyncio
-async def test_get_my_cubicle_matches_via_email_sub() -> None:
-    # C-005 is seeded to employee_user with assigned_to_sub = the UUID.
-    res = await _svc.get_my_cubicle(sub=_EMP_EMAIL)
-    assert res["assigned"] is True
-    assert res["cubicle_id"] == "C-005"
