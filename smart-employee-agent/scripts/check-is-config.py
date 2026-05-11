@@ -331,6 +331,94 @@ def check_applications(base_url: str, auth_hdr: str, expected_client_ids: dict[s
             bad(label, f"client_id '{client_id}' not registered as any application")
 
 
+def check_orchestrator_subscriptions(base_url: str, auth_hdr: str, mcp_client_id: str) -> None:
+    """Section 4b — verify orchestrator-mcp-client is subscribed to HR + IT APIs.
+
+    The SPA's Pattern C login authorize URL requests business scopes; IS will
+    strip them unless the OAuth app is subscribed to the API resources that
+    own those scopes. Without these subscriptions, the user signs in but
+    token-A only carries `openid profile email` — Reports nav stays hidden,
+    My Leaves panel can't load, reports proxy returns 403 on pre-flight.
+
+    Subscribed via Console → Applications → orchestrator-mcp-client →
+    Authorization tab → "+ Authorize resource".
+    """
+    hdr("Section 4b — orchestrator-mcp-client API subscriptions")
+    if not mcp_client_id:
+        warn("subscriptions", "ORCHESTRATOR_MCP_CLIENT_ID not in env — skipping")
+        return
+
+    # Resolve the app's IS-side id from the client_id.
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications?filter=clientId+eq+{urllib.parse.quote(mcp_client_id)}",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        warn("subscriptions", f"could not look up orchestrator-mcp-client: HTTP {code}")
+        return
+    try:
+        apps = json.loads(body).get("applications") or []
+    except Exception:
+        bad("subscriptions", "invalid JSON from /applications filter")
+        return
+    if not apps:
+        bad("subscriptions", "orchestrator-mcp-client not found — see Section 4")
+        return
+    app_id = apps[0].get("id")
+
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications/{app_id}/authorized-apis",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        bad("subscriptions", f"GET /authorized-apis returned {code}")
+        return
+    try:
+        subs = json.loads(body)
+    except Exception:
+        bad("subscriptions", "invalid JSON from /authorized-apis")
+        return
+    if not isinstance(subs, list) or not subs:
+        bad(
+            "subscriptions",
+            "orchestrator-mcp-client has NO API authorizations — "
+            "subscribe in Console → Applications → orchestrator-mcp-client → "
+            "Authorization tab → '+ Authorize resource' for HR API + IT API.",
+        )
+        return
+
+    # Build name → scope-set map from the subscriptions.
+    sub_by_name: dict[str, set[str]] = {}
+    for entry in subs:
+        name = entry.get("displayName") or entry.get("identifier") or ""
+        scopes = {s.get("name") for s in (entry.get("authorizedScopes") or []) if s.get("name")}
+        sub_by_name[name] = scopes
+
+    # HR coverage.
+    hr_sub = sub_by_name.get("HR API") or sub_by_name.get("urn:hr:api") or set()
+    hr_missing = HR_SCOPES - hr_sub
+    if not hr_missing:
+        ok(f"HR API subscription: {len(HR_SCOPES)} scope(s) authorized on orchestrator-mcp-client")
+    else:
+        bad(
+            "HR API subscription",
+            f"missing: {sorted(hr_missing)} — add via Console → orchestrator-mcp-client → "
+            f"Authorization → HR API → tick the scope(s).",
+        )
+
+    # IT coverage.
+    it_sub = sub_by_name.get("IT API") or sub_by_name.get("urn:it:api") or set()
+    it_missing = IT_SCOPES - it_sub
+    if not it_missing:
+        ok(f"IT API subscription: {len(IT_SCOPES)} scope(s) authorized on orchestrator-mcp-client")
+    else:
+        bad(
+            "IT API subscription",
+            f"missing: {sorted(it_missing)} — add via Console → orchestrator-mcp-client → "
+            f"Authorization → IT API → tick the scope(s).",
+        )
+
+
 def check_api_resources(
     base_url: str, auth_hdr: str, hr_specs: list[str], it_specs: list[str]
 ) -> dict[str, str]:
@@ -674,6 +762,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     check_applications(base_url, auth_hdr, expected_client_ids)
+    check_orchestrator_subscriptions(base_url, auth_hdr, mcp_client_id)
     # API resources matched by display name OR identifier (operators use either).
     hr_specs = [hr_name, "HR API", "urn:hr:api"]
     it_specs = [it_name, "IT API", "urn:it:api"]

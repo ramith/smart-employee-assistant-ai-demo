@@ -350,7 +350,17 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             # runtime (project_orchestrator_app_vestigial.md).
             client_id=deps.config.mcp_client_id,
             redirect_uri=deps.config.mcp_redirect_uri,
-            scope="openid profile email orchestrate",
+            # Sprint 4: request the full business-scope set so IS can return
+            # role-filtered scopes in the token-A claim. Without these in the
+            # authorize URL, IS strips them and the SPA gets only the OIDC
+            # defaults — Reports nav stays hidden, My Leaves panel won't load.
+            # The orchestrator-mcp-client app MUST be subscribed to HR + IT
+            # API resources for these to actually be granted (operator action).
+            scope=(
+                "openid profile email "
+                "hr_basic_rest hr_self_rest hr_read_rest hr_approve_rest hr_assets_write_rest "
+                "it_assets_read_rest it_assets_self_rest it_assets_write_rest"
+            ),
             requested_actor=deps.config.orchestrator_agent.agent_id,
             state=state,
             code_verifier=code_verifier,
