@@ -9,16 +9,16 @@
   "skills": [
     {
       "id": "it.list_available_assets",
-      "name": "List available assets",
-      "description": "Return the catalogue of IT assets available for allocation; optionally filter by asset_type (laptop / monitor / phone).",
+      "name": "List the available-device catalogue",
+      "description": "Return the catalogue of IT devices AVAILABLE to be issued to an employee, with how many of each are in stock; optionally filter by asset_type (one of: laptop, monitor, phone). Use this for questions about what hardware can be requested or issued: 'what laptops are available', 'show me the monitors', 'what equipment can I get', 'is there a spare phone'. This is the inventory — it is NOT the devices the user currently has (for that use it.get_my_assets), and it is NOT the act of issuing one (for that use it.issue_asset).",
       "scope": "it_assets_read_rest",
       "required_scopes": ["it_assets_read_rest"],
       "args": ["asset_type"]
     },
     {
       "id": "it.get_my_assets",
-      "name": "Get my assigned assets",
-      "description": "Return the IT assets currently assigned to the authenticated user (e.g. their laptop, phone).",
+      "name": "Get my assigned devices",
+      "description": "Return the IT devices CURRENTLY ASSIGNED TO the authenticated user — the laptop, phone and/or monitor they personally hold, with each one's status. Use this for first-person questions about the user's own equipment: 'what laptop do I have', 'what's my phone', 'what devices am I issued', 'do I have a monitor', 'show me my equipment'. Parameter-less. This is the user's OWN devices — it is NOT the available-to-issue catalogue (for that use it.list_available_assets).",
       "scope": "it_assets_self_rest",
       "required_scopes": ["it_assets_self_rest"],
       "args": []

@@ -26,6 +26,13 @@
 - [ ] Expect: two consent widgets in turn (`hr.read_balance` → `hr.cubicle_lookup_self`, both "View your …"), approve each → one reply covering *both* — leave balance + "your cubicle is C-005 on floor 1".
 - [ ] Log: `llm_router_ok tools=['hr.read_balance', 'hr.cubicle_lookup_self']`.
 
+## 2b. Multi-turn follow-up — conversation memory (employee)
+
+The orchestrator keeps a rolling per-session transcript (last 12 turns) and replays it into the router/composer prompts, so follow-ups that only make sense in context still route correctly. Two checks:
+
+- **IT follow-up:** Type **"what laptop do I have?"** → consent → reply with your assigned laptop (`it.get_my_assets`). Then type **"and what monitors are available?"** — with no other context this is ambiguous, but with the history the router resolves it to `it.list_available_assets` filtered to monitors (not `it.get_my_assets` again). Log: `llm_router_ok tools=['it.get_my_assets']` then `llm_router_ok tools=['it.list_available_assets']`.
+- **Apply-leave follow-up:** Type **"I want to apply for some leave"** (no type, no dates) → the agent asks for the type and dates (no consent widget — `hr.apply_leave` fails the arg check). Then type **"sick leave, from 2026-06-10 to 2026-06-12"** — the router, seeing the prior turn, routes to `hr.apply_leave` with all three args → consent → request submitted, My Leaves card updates. Log: first turn `hr_dispatcher_args_missing`, second turn `llm_router_ok tools=['hr.apply_leave']`. (You can also test the screenshot scenario: "I want to apply for a leave next monday to wednesday" → asks for the type → "it will be a sick leave" → submits — relative-date parsing depends on the model; if it punts, give ISO dates.)
+
 ## 3. Apply for leave end-to-end (employee) — closes UC-13's long-open Main flow
 
 - [ ] Type: **"I'd like to take annual leave from 2026-06-10 to 2026-06-14, reason: family trip"**.
