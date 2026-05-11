@@ -680,9 +680,11 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
                 lines.append(f"  • {name} — up to {maxd} day(s) per year{suffix}")
             else:
                 lines.append(f"  • {t}")
+        to_apply = data.get("to_apply") or []
+        if to_apply:
+            lines.append("To apply, give me: " + "; ".join(str(x) for x in to_apply) + ".")
         lines.append(
-            'To apply, ask the HR agent with a type and dates — e.g. '
-            '"annual leave from 2026-06-10 to 2026-06-14".'
+            'For example: "annual leave from 2026-06-10 to 2026-06-14, reason: family trip".'
         )
         return "\n".join(lines)
 

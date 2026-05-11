@@ -9,8 +9,8 @@
   "skills": [
     {
       "id": "hr.read_policy",
-      "name": "Get leave policy",
-      "description": "Return the company leave policy: the available leave types and their rules (max days/year, notice period).",
+      "name": "Get leave policy and how to apply",
+      "description": "Return the company leave policy — the leave types you can apply for (Annual Leave, Sick Leave, Personal Leave), each with its rules (max days per year, minimum notice in days), and the information you must provide to submit a leave request (the leave type, the start and end dates in YYYY-MM-DD, and an optional reason). Use this whenever the user asks about leave types, the leave policy, the leave rules, how to apply for leave, or what information they need to give to apply for a leave. (To actually submit a leave request — when the user has given a type and dates — use hr.apply_leave instead.)",
       "scope": "hr_basic_rest",
       "required_scopes": ["hr_basic_rest"],
       "args": []

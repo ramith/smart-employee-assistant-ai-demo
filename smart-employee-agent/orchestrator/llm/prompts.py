@@ -209,9 +209,13 @@ def composer_system() -> str:
             "useful) what the user could try.",
             "- State only facts present in the tool outputs. Never invent request "
             "ids, balances, cubicle numbers, asset ids, or dates.",
+            "- If a leave-policy result is present, list each leave type with its "
+            "minimum notice period, and — if the result includes a 'to_apply' "
+            "list — tell the user exactly what they need to provide to apply for "
+            "leave (the leave type, the start and end dates, and an optional reason).",
             '- Use a bullet list ("- ") only when listing 3 or more items; '
             "otherwise prose.",
-            "- Keep it under about 5 sentences for simple cases.",
+            "- Keep it under about 6 sentences for simple cases.",
         ]
     )
 

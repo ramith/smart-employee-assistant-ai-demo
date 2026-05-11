@@ -117,9 +117,21 @@ class LeavePolicyEntry(BaseModel):
 
 
 class GetLeavePolicyResult(BaseModel):
-    """Response for ``get_leave_policy`` — the full company leave policy."""
+    """Response for ``get_leave_policy`` — the full company leave policy plus,
+    in ``to_apply``, the information the employee must provide to submit a leave
+    request (so a "what do I need to apply for leave?" question can be answered
+    directly from this tool's output)."""
 
     leave_types: list[LeavePolicyEntry]
+    to_apply: list[str] = Field(
+        default_factory=lambda: [
+            "leave_type (one of: Annual Leave, Sick Leave, Personal Leave)",
+            "start_date (YYYY-MM-DD)",
+            "end_date (YYYY-MM-DD, on or after start_date)",
+            "reason (optional)",
+        ],
+        description="The fields the employee provides to apply for leave.",
+    )
 
 
 class GetLeaveBalanceArgs(BaseModel):
