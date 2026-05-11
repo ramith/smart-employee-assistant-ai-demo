@@ -99,185 +99,218 @@
       <span>Signing you out…</span>
     </div>
 
-    <!-- Main chat area -->
-    <main id="chat-main">
+    <!-- ── Home layout: sidebar + chat pane ──────────────────────────── -->
+    <div id="home-layout" class="home-layout">
 
-      <!-- Toast container -->
-      <div id="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+      <!-- Left sidebar: contextual employee data cards -->
+      <aside id="left-sidebar" class="left-sidebar">
 
-      <!-- Service banners (degraded / down) -->
-      <div id="service-banner" class="service-banner" hidden>
-        <span id="service-banner-text"></span>
-        <button class="banner-dismiss" id="service-banner-dismiss" aria-label="Dismiss">×</button>
-      </div>
+        <!-- My Leaves card (Sprint 4 S4.3 — UC-13/14) -->
+        <!--
+          Fetches GET /api/me/leaves on first paint; re-fetches on every
+          settled chat_message SSE event so chat-applied leaves appear
+          without reload. Empty-state copy: see app.js renderMyLeavesPanel().
+        -->
+        <section id="my-leaves-panel" class="my-leaves-panel sidebar-card" aria-label="My leave requests" hidden>
+          <header class="my-leaves-header sidebar-card-header">
+            <h3 class="my-leaves-title sidebar-card-title">My Leaves</h3>
+            <span id="my-leaves-status" class="my-leaves-status" hidden></span>
+          </header>
+          <div id="my-leaves-body" class="my-leaves-body">
+            <p id="my-leaves-empty" class="my-leaves-empty">No leave requests yet.</p>
+            <table id="my-leaves-table" class="my-leaves-table" hidden>
+              <thead>
+                <tr>
+                  <th data-sort="type">Type</th>
+                  <th data-sort="start_date">Start</th>
+                  <th data-sort="days_requested">Days</th>
+                  <th data-sort="status">Status</th>
+                </tr>
+              </thead>
+              <tbody id="my-leaves-tbody"></tbody>
+            </table>
+          </div>
+        </section>
 
-      <!-- Chat transcript -->
-      <div id="chat-transcript" class="chat-transcript" aria-label="Chat transcript" role="log" aria-live="off">
+        <!-- My Cubicle card -->
+        <section id="my-cubicle-panel" class="sidebar-card" aria-label="My cubicle assignment" hidden>
+          <header class="sidebar-card-header">
+            <h3 class="sidebar-card-title">My Cubicle</h3>
+          </header>
+          <div id="my-cubicle-body" class="sidebar-card-body">
+            <p class="sidebar-card-empty">Loading…</p>
+          </div>
+        </section>
 
-        <!-- Empty state (shown until first message) -->
-        <div id="empty-state" class="empty-state">
-          <h2 class="empty-heading">What can I help you with?</h2>
-          <p class="empty-body">I can check your leave balance, look up available equipment, and answer routine HR and IT questions. Each request will ask you to approve the agent that handles it.</p>
+        <!-- My IT Assets card -->
+        <section id="my-assets-panel" class="sidebar-card" aria-label="My IT assets" hidden>
+          <header class="sidebar-card-header">
+            <h3 class="sidebar-card-title">My IT Assets</h3>
+          </header>
+          <div id="my-assets-body" class="sidebar-card-body">
+            <p class="sidebar-card-empty">Loading…</p>
+          </div>
+        </section>
+
+      </aside>
+
+      <!-- Chat pane (right) -->
+      <main id="chat-main">
+
+        <!-- Toast container -->
+        <div id="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+
+        <!-- Service banners (degraded / down) -->
+        <div id="service-banner" class="service-banner" hidden>
+          <span id="service-banner-text"></span>
+          <button class="banner-dismiss" id="service-banner-dismiss" aria-label="Dismiss">x</button>
         </div>
 
-        <!-- Routing status line (transient, replaced by events) -->
-        <div id="routing-line" class="routing-line" hidden aria-live="polite"></div>
+        <!-- Chat transcript -->
+        <div id="chat-transcript" class="chat-transcript" aria-label="Chat transcript" role="log" aria-live="off">
 
-      </div>
-
-      <!-- ── Consent Widget ──────────────────────────────────────────── -->
-      <!--
-        States: AWAITING_APPROVAL | VERIFYING | WORKING | DONE | DENIED | EXPIRED | ERROR
-        Rendered above the composer. Slides in when active.
-        Only ONE widget visible at a time (serial fan-out, Q2).
-      -->
-      <div id="consent-widget" class="consent-widget" hidden role="region" aria-label="Approval required">
-
-        <!-- Full card: shown in AWAITING_APPROVAL, EXPIRED, ERROR -->
-        <div id="cw-card" class="cw-card">
-          <div class="cw-card-header">
-            <span id="cw-card-title" class="cw-card-title">Action requires your approval</span>
+          <!-- Empty state (shown until first message) -->
+          <div id="empty-state" class="empty-state">
+            <h2 class="empty-heading">What can I help you with?</h2>
+            <p class="empty-body">I can check your leave balance, look up available equipment, and answer routine HR and IT questions. Each request will ask you to approve the agent that handles it.</p>
           </div>
 
-          <!-- Session-refresh amber banner (UC-06) -->
-          <div id="cw-refresh-banner" class="cw-refresh-banner" hidden>
-            <span id="cw-refresh-banner-text"></span>
+          <!-- Routing status line (transient, replaced by events) -->
+          <div id="routing-line" class="routing-line" hidden aria-live="polite"></div>
+
+        </div>
+
+        <!-- ── Consent Widget ────────────────────────────────────────── -->
+        <!--
+          States: AWAITING_APPROVAL | VERIFYING | WORKING | DONE | DENIED | EXPIRED | ERROR
+          Rendered above the composer. Slides in when active.
+          Only ONE widget visible at a time (serial fan-out, Q2).
+        -->
+        <div id="consent-widget" class="consent-widget" hidden role="region" aria-label="Approval required">
+
+          <!-- Full card: shown in AWAITING_APPROVAL, EXPIRED, ERROR -->
+          <div id="cw-card" class="cw-card">
+            <div class="cw-card-header">
+              <span id="cw-card-title" class="cw-card-title">Action requires your approval</span>
+            </div>
+
+            <!-- Session-refresh amber banner (UC-06) -->
+            <div id="cw-refresh-banner" class="cw-refresh-banner" hidden>
+              <span id="cw-refresh-banner-text"></span>
+            </div>
+
+            <!-- Mid-flight resume banner (UC-05 EX-2) -->
+            <div id="cw-resume-banner" class="cw-resume-banner" hidden>
+              <span id="cw-resume-banner-text"></span>
+            </div>
+
+            <div class="cw-agent-row">
+              <span id="cw-agent-icon" class="cw-agent-icon" aria-hidden="true"></span>
+              <span id="cw-agent-label" class="cw-agent-label"></span>
+            </div>
+
+            <!-- Prior-consent timestamp (UC-06) -->
+            <div id="cw-prior-consent" class="cw-prior-consent" hidden></div>
+
+            <div class="cw-action-row">
+              <span class="cw-action-prefix">Wants to:</span>
+              <span id="cw-action-text" class="cw-action-text"></span>
+            </div>
+
+            <div class="cw-binding-row">
+              <span id="cw-binding-code" class="cw-binding-code"></span>
+            </div>
+
+            <!-- 3B.2 FIX-17: surface the reason-aware binding_message inline so
+                 the user sees why re-approval is being asked (WSO2 IS may not
+                 render it on its consent screen). Hidden when null. -->
+            <div id="cw-binding-message-row" class="cw-binding-message-row" hidden>
+              <span id="cw-binding-message-text" class="cw-binding-message-text"></span>
+            </div>
+
+            <div class="cw-footer-text" id="cw-footer-text">Each agent asks for its own approval. Your identity provider records every consent.</div>
+
+            <!-- Expired body (hidden unless EXPIRED) -->
+            <div id="cw-expired-body" class="cw-expired-body" hidden>
+              <span id="cw-expired-body-text"></span>
+            </div>
+
+            <!-- Error body (hidden unless ERROR) -->
+            <div id="cw-error-body" class="cw-error-body" hidden>
+              <span id="cw-error-body-text"></span>
+            </div>
+
+            <div class="cw-actions-row">
+              <!-- AWAITING_APPROVAL buttons -->
+              <button class="btn-primary cw-approve-btn" id="cw-approve-btn">Approve</button>
+              <button class="btn-outline cw-deny-btn" id="cw-deny-btn">Deny</button>
+
+              <!-- EXPIRED buttons (hidden unless EXPIRED) -->
+              <button class="btn-primary" id="cw-retry-btn" hidden>Ask again</button>
+              <button class="btn-ghost" id="cw-dismiss-btn" hidden>Dismiss</button>
+
+              <!-- ERROR buttons (hidden unless ERROR) -->
+              <button class="btn-primary" id="cw-error-retry-btn" hidden>Try again</button>
+              <button class="btn-ghost" id="cw-error-cancel-btn" hidden>Cancel</button>
+
+              <!-- Countdown (AWAITING_APPROVAL) -->
+              <span id="cw-countdown" class="cw-countdown"></span>
+            </div>
           </div>
 
-          <!-- Mid-flight resume banner (UC-05 EX-2) -->
-          <div id="cw-resume-banner" class="cw-resume-banner" hidden>
-            <span id="cw-resume-banner-text"></span>
+          <!-- Slim row: shown in VERIFYING, WORKING -->
+          <div id="cw-slim" class="cw-slim" hidden>
+            <span id="cw-slim-icon" class="cw-slim-icon" aria-hidden="true"></span>
+            <span id="cw-slim-dots" class="cw-slim-dots" hidden aria-hidden="true">
+              <span></span><span></span><span></span>
+            </span>
+            <span id="cw-slim-text" class="cw-slim-text"></span>
+            <button class="cw-cancel-link" id="cw-cancel-btn">Cancel</button>
           </div>
 
-          <div class="cw-agent-row">
-            <span id="cw-agent-icon" class="cw-agent-icon" aria-hidden="true"></span>
-            <span id="cw-agent-label" class="cw-agent-label"></span>
+        </div>
+
+        <!-- ── Composer ──────────────────────────────────────────────── -->
+        <div class="composer-wrap">
+          <!-- Persistent demo prompts; always visible to make demo flow obvious. -->
+          <div class="example-chips example-chips-docked" aria-label="Sample questions">
+            <button class="chip" data-msg="What is my leave balance?">What is my leave balance?</button>
+            <button class="chip" data-msg="What laptops are available?">What laptops are available?</button>
+            <button class="chip" data-msg="Show me my leave balance and what laptops are available.">Show me my leave balance and what laptops are available.</button>
           </div>
-
-          <!-- Prior-consent timestamp (UC-06) -->
-          <div id="cw-prior-consent" class="cw-prior-consent" hidden></div>
-
-          <div class="cw-action-row">
-            <span class="cw-action-prefix">Wants to:</span>
-            <span id="cw-action-text" class="cw-action-text"></span>
-          </div>
-
-          <div class="cw-binding-row">
-            <span id="cw-binding-code" class="cw-binding-code"></span>
-          </div>
-
-          <!-- 3B.2 FIX-17: surface the reason-aware binding_message inline so
-               the user sees why re-approval is being asked (WSO2 IS may not
-               render it on its consent screen). Hidden when null. -->
-          <div id="cw-binding-message-row" class="cw-binding-message-row" hidden>
-            <span id="cw-binding-message-text" class="cw-binding-message-text"></span>
-          </div>
-
-          <div class="cw-footer-text" id="cw-footer-text">Each agent asks for its own approval. Your identity provider records every consent.</div>
-
-          <!-- Expired body (hidden unless EXPIRED) -->
-          <div id="cw-expired-body" class="cw-expired-body" hidden>
-            <span id="cw-expired-body-text"></span>
-          </div>
-
-          <!-- Error body (hidden unless ERROR) -->
-          <div id="cw-error-body" class="cw-error-body" hidden>
-            <span id="cw-error-body-text"></span>
-          </div>
-
-          <div class="cw-actions-row">
-            <!-- AWAITING_APPROVAL buttons -->
-            <button class="btn-primary cw-approve-btn" id="cw-approve-btn">Approve</button>
-            <button class="btn-outline cw-deny-btn" id="cw-deny-btn">Deny</button>
-
-            <!-- EXPIRED buttons (hidden unless EXPIRED) -->
-            <button class="btn-primary" id="cw-retry-btn" hidden>Ask again</button>
-            <button class="btn-ghost" id="cw-dismiss-btn" hidden>Dismiss</button>
-
-            <!-- ERROR buttons (hidden unless ERROR) -->
-            <button class="btn-primary" id="cw-error-retry-btn" hidden>Try again</button>
-            <button class="btn-ghost" id="cw-error-cancel-btn" hidden>Cancel</button>
-
-            <!-- Countdown (AWAITING_APPROVAL) -->
-            <span id="cw-countdown" class="cw-countdown"></span>
+          <form id="chat-form" class="composer" autocomplete="off">
+            <textarea
+              id="msg-input"
+              class="composer-input"
+              placeholder="Ask about your leave, equipment, or team…"
+              aria-label="Message the assistant."
+              rows="1"
+              maxlength="2000"
+            ></textarea>
+            <button type="submit" id="send-btn" class="composer-send" aria-label="Send message.">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+              <span class="sr-only">Send</span>
+            </button>
+          </form>
+          <div class="composer-hints">
+            <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
+            <span class="char-counter" id="char-counter" hidden></span>
           </div>
         </div>
 
-        <!-- Slim row: shown in VERIFYING, WORKING -->
-        <div id="cw-slim" class="cw-slim" hidden>
-          <span id="cw-slim-icon" class="cw-slim-icon" aria-hidden="true"></span>
-          <span id="cw-slim-dots" class="cw-slim-dots" hidden aria-hidden="true">
-            <span></span><span></span><span></span>
-          </span>
-          <span id="cw-slim-text" class="cw-slim-text"></span>
-          <button class="cw-cancel-link" id="cw-cancel-btn">Cancel</button>
-        </div>
+      </main>
 
-      </div>
+    </div>
+    <!-- /#home-layout -->
 
-      <!-- ── Composer ─────────────────────────────────────────────────── -->
-      <div class="composer-wrap">
-        <!-- Persistent demo prompts; always visible to make demo flow obvious. -->
-        <div class="example-chips example-chips-docked" aria-label="Sample questions">
-          <button class="chip" data-msg="What is my leave balance?">What is my leave balance?</button>
-          <button class="chip" data-msg="What laptops are available?">What laptops are available?</button>
-          <button class="chip" data-msg="Show me my leave balance and what laptops are available.">Show me my leave balance and what laptops are available.</button>
-        </div>
-        <form id="chat-form" class="composer" autocomplete="off">
-          <textarea
-            id="msg-input"
-            class="composer-input"
-            placeholder="Ask about your leave, equipment, or team…"
-            aria-label="Message the assistant."
-            rows="1"
-            maxlength="2000"
-          ></textarea>
-          <button type="submit" id="send-btn" class="composer-send" aria-label="Send message.">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <line x1="22" y1="2" x2="11" y2="13"></line>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-            </svg>
-            <span class="sr-only">Send</span>
-          </button>
-        </form>
-        <div class="composer-hints">
-          <span class="composer-hint">Enter to send · Shift+Enter for a new line</span>
-          <span class="char-counter" id="char-counter" hidden></span>
-        </div>
-      </div>
-
-      <!-- ── My Leaves panel (Sprint 4 S4.3 — UC-13/14) ────────────────── -->
-      <!--
-        Visible to any logged-in user immediately after sign-in. Fetches
-        GET /api/me/leaves on first paint; re-fetches on every settled
-        chat_message SSE event so chat-applied leaves appear without reload.
-        Empty-state copy: see app.js renderMyLeavesPanel().
-      -->
-      <section id="my-leaves-panel" class="my-leaves-panel" aria-label="My leave requests" hidden>
-        <header class="my-leaves-header">
-          <h3 class="my-leaves-title">My Leave Requests</h3>
-          <span id="my-leaves-status" class="my-leaves-status" hidden></span>
-        </header>
-        <div id="my-leaves-body" class="my-leaves-body">
-          <!-- Empty state shown initially; replaced by table once data arrives. -->
-          <p id="my-leaves-empty" class="my-leaves-empty">You have no leave requests yet. Ask the HR agent to apply for one.</p>
-          <table id="my-leaves-table" class="my-leaves-table" hidden>
-            <thead>
-              <tr>
-                <th data-sort="request_id">Request ID</th>
-                <th data-sort="type">Type</th>
-                <th data-sort="start_date">Start</th>
-                <th data-sort="end_date">End</th>
-                <th data-sort="days_requested">Days</th>
-                <th data-sort="status">Status</th>
-              </tr>
-            </thead>
-            <tbody id="my-leaves-tbody"></tbody>
-          </table>
-        </div>
-      </section>
-
-    </main>
+    <!-- ── Footer ──────────────────────────────────────────────────────── -->
+    <footer id="app-footer" class="app-footer">
+      <span class="app-footer-brand">Smart Employee Assistant · IAM/AI demo</span>
+      <span class="app-footer-idp">WSO2 Identity Server</span>
+    </footer>
 
     <!-- ── Reports view (Sprint 4 S4.4 — UC-15; UC-16 lands tabs in S4.5) ── -->
     <main id="reports-view" class="reports-view" hidden aria-label="HR Admin reports">
