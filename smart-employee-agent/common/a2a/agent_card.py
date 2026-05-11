@@ -241,6 +241,7 @@ def llm_projection(card: AgentCard) -> dict:
                 "label": skill.label,
                 "description": skill.description,
                 "scope": skill.scope,
+                "args": list(skill.args),
             }
             for skill in card.skills
         ],

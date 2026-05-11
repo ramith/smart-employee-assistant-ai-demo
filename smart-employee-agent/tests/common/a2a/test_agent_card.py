@@ -335,10 +335,14 @@ def test_llm_projection_top_level_keys() -> None:
 
 
 def test_llm_projection_skill_keys() -> None:
-    """Each skill dict in llm_projection must have exactly {tool_id, label, description, scope}."""
+    """Each skill dict in llm_projection must have exactly {tool_id, label, description, scope, args}.
+
+    ``args`` (S5): the names of the arguments the LLM router may extract for the tool.
+    """
     card = _make_card(skills=[_make_skill(), _make_skill(tool_id="hr.approve_leave", label="Approve")])
     projection = llm_projection(card)
     for skill_dict in projection["skills"]:
-        assert set(skill_dict.keys()) == {"tool_id", "label", "description", "scope"}, (
+        assert set(skill_dict.keys()) == {"tool_id", "label", "description", "scope", "args"}, (
             f"Unexpected skill keys: {set(skill_dict.keys())}"
         )
+        assert isinstance(skill_dict["args"], list)

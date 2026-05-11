@@ -90,6 +90,12 @@ _INTERNAL_AUTH_PATTERN = re.compile(
     r"(?i)(x-internal-auth[\"'=:\s]+)\S+"
 )
 
+# S5 (security audit F-4): Google API key shape — ``AIza`` + 35 url-safe chars
+# (39 total). Catches it anywhere (e.g. if a langchain/google transport error
+# ever embeds ``?key=AIza…`` in a URL it logs). Defence-in-depth on top of
+# GeminiLLMClient never logging repr(exc).
+_GOOGLE_API_KEY_PATTERN = re.compile(r"AIza[0-9A-Za-z_\-]{35}")
+
 # Master list — evaluated in the order below.
 #
 # Ordering rationale:
@@ -104,13 +110,14 @@ _INTERNAL_AUTH_PATTERN = re.compile(
 # 3. JWT fires last as a catch-all for any remaining bare JWT strings not
 #    already consumed by the higher-priority patterns.
 _PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (_BEARER_PATTERN,        "Bearer <REDACTED>"),
-    (_AUTH_REQ_ID_PATTERN,   r"\1<REDACTED>"),
-    (_ACTOR_TOKEN_PATTERN,   r"\1<REDACTED>"),
-    (_CLIENT_SECRET_PATTERN, r"\1<REDACTED>"),
-    (_INTERNAL_AUTH_PATTERN, r"\1<REDACTED>"),
-    (_PASSWORD_PATTERN,      r"\1<REDACTED>"),
-    (_JWT_PATTERN,           "<JWT>"),
+    (_BEARER_PATTERN,         "Bearer <REDACTED>"),
+    (_AUTH_REQ_ID_PATTERN,    r"\1<REDACTED>"),
+    (_ACTOR_TOKEN_PATTERN,    r"\1<REDACTED>"),
+    (_CLIENT_SECRET_PATTERN,  r"\1<REDACTED>"),
+    (_INTERNAL_AUTH_PATTERN,  r"\1<REDACTED>"),
+    (_PASSWORD_PATTERN,       r"\1<REDACTED>"),
+    (_GOOGLE_API_KEY_PATTERN, "<REDACTED_API_KEY>"),
+    (_JWT_PATTERN,            "<JWT>"),
 ]
 
 

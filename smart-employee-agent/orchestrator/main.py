@@ -206,8 +206,33 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         "it_agent": A2AClient(A2AClientConfig(base_url=cfg.it_agent_url)),
     }
     agent_registry = _load_agent_registry()
-    keyword_router = KeywordRouter()  # DEFAULT_RULES per F-14
+    keyword_router = KeywordRouter()  # DEFAULT_RULES per F-14 — always the fallback
     session_store = SessionStore()
+
+    # S5: build the Gemini-backed LLM client only in llm-mode with a key. The
+    # langchain import is lazy (inside orchestrator/llm/gemini.py, imported here
+    # only on this branch) so keyword-only deployments don't need the package.
+    # Any failure constructing it → degrade to keyword-only, never crash.
+    llm_client = None
+    if cfg.llm_fallback_mode == "llm" and cfg.gemini_api_key:
+        try:
+            from orchestrator.llm.gemini import GeminiLLMClient
+
+            llm_client = GeminiLLMClient(
+                api_key=cfg.gemini_api_key,
+                model=cfg.gemini_model,
+                timeout_s=cfg.llm_timeout_s,
+                max_output_tokens=cfg.llm_max_output_tokens,
+            )
+            logger.info(
+                "llm_client_enabled model=%s timeout_s=%.1f max_output_tokens=%d",
+                cfg.gemini_model, cfg.llm_timeout_s, cfg.llm_max_output_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001 — e.g. langchain not installed; keyword-only
+            logger.warning("llm_client_unavailable reason=%r — running keyword-only", exc)
+            llm_client = None
+    elif cfg.llm_fallback_mode == "llm":
+        logger.info("llm_mode_requested_without_key — running keyword-only")
 
     # 3B.1: BCL replay-protection set. Lifespan-managed sweep loop wired below.
     seen_logout_tokens = SeenLogoutTokens()
@@ -454,6 +479,7 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
         keyword_router=keyword_router,
         agent_registry=agent_registry,
         a2a_clients=a2a_clients,
+        llm_client=llm_client,
     )
     app.include_router(build_chat_router(chat_deps))
     # ── Reports router (Sprint 4 S4.3) ────────────────────────────────────────

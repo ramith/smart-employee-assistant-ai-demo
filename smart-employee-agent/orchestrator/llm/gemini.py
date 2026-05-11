@@ -1,0 +1,99 @@
+"""``GeminiLLMClient`` — the production ``LLMClient``, backed by Gemini via
+``langchain-google-genai``.
+
+This is the ONLY module under ``orchestrator/`` that imports langchain. It is
+imported lazily by ``orchestrator/main.py`` (inside the ``LLM_FALLBACK_MODE=llm``
++ key branch), so keyword-only deployments and the test suite never need the
+package. Everything else depends only on ``orchestrator.llm.client``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+# Module-top langchain imports are fine here precisely because this module is
+# only imported when LLM mode is active (the prod image has the deps).
+from langchain_core.messages import HumanMessage, SystemMessage  # type: ignore[import-not-found]
+from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore[import-not-found]
+
+from datetime import date
+
+from orchestrator.llm import prompts as _prompts
+from orchestrator.llm.client import LLMError, RoutedToolCall, ToolCatalogueEntry, ToolOutcome
+
+__all__ = ["GeminiLLMClient"]
+
+logger = logging.getLogger(__name__)
+
+
+class GeminiLLMClient:
+    """LLM router + composer over Gemini.
+
+    Two separate ``ChatGoogleGenerativeAI`` handles: the router runs at
+    ``temperature=0`` (deterministic-ish tool selection), the composer at
+    ``temperature=0.3`` (slightly more natural prose). Each call gets a hard
+    ``asyncio.wait_for`` timeout; any failure (transport, quota, auth, parse,
+    timeout) is re-raised as :class:`LLMError`, which the caller catches and
+    falls back from. Error logs carry only ``type(exc).__name__`` + a truncated
+    ``str(exc)`` — never ``repr(exc)`` or the request object — so the API key
+    can't slip into a log line (defence-in-depth on top of the redaction filter).
+    """
+
+    def __init__(
+        self, *, api_key: str, model: str, timeout_s: float, max_output_tokens: int
+    ) -> None:
+        self._router_llm = ChatGoogleGenerativeAI(
+            model=model,
+            google_api_key=api_key,
+            temperature=0.0,
+            max_output_tokens=max_output_tokens,
+        )
+        self._composer_llm = ChatGoogleGenerativeAI(
+            model=model,
+            google_api_key=api_key,
+            temperature=0.3,
+            max_output_tokens=max_output_tokens,
+        )
+        self._timeout_s = float(timeout_s)
+
+    # -- LLMClient -----------------------------------------------------------
+
+    async def route(
+        self, user_message: str, catalogue: list[ToolCatalogueEntry]
+    ) -> list[RoutedToolCall]:
+        system = _prompts.router_system(catalogue, today=date.today().isoformat())
+        try:
+            resp = await asyncio.wait_for(
+                self._router_llm.ainvoke(
+                    [SystemMessage(content=system), HumanMessage(content=user_message)]
+                ),
+                timeout=self._timeout_s,
+            )
+            return _prompts.parse_router_output(getattr(resp, "content", None))
+        except LLMError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — langchain raises a zoo; any failure → fall back
+            raise LLMError(f"router call failed: {type(exc).__name__}: {str(exc)[:200]}") from exc
+
+    async def compose(self, user_message: str, outcomes: list[ToolOutcome]) -> str:
+        system = _prompts.composer_system()
+        body = _prompts.render_outcomes(outcomes)
+        try:
+            resp = await asyncio.wait_for(
+                self._composer_llm.ainvoke(
+                    [
+                        SystemMessage(content=system),
+                        HumanMessage(content=f"{body}\n\nThe user said: {user_message}"),
+                    ]
+                ),
+                timeout=self._timeout_s,
+            )
+            text = _prompts._coerce_text(getattr(resp, "content", None)).strip()
+            if not text:
+                raise LLMError("composer returned empty text")
+            return text
+        except LLMError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise LLMError(f"composer call failed: {type(exc).__name__}: {str(exc)[:200]}") from exc

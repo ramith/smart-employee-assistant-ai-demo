@@ -119,13 +119,13 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
     "hr.read_balance": (
         "View your leave balance",
         "get_leave_balance",
-        lambda args: {"employee_id": args.get("employee_id")},
+        lambda args: {},  # self-service: hr_server keys on token.sub (legacy employee_id arg dropped)
         None,
     ),
     "hr.read_history": (
         "View your leave history",
         "get_leave_history",
-        lambda args: {"employee_id": args.get("employee_id")},
+        lambda args: {},  # self-service: hr_server keys on token.sub
         None,
     ),
     # S5.1: UC-13 chat path. Self-service write → explicit hr_self_rest scope
