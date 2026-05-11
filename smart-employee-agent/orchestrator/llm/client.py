@@ -18,6 +18,7 @@ __all__ = [
     "ChatTurn",
     "ChatHistory",
     "LLMClient",
+    "describe_llm_exc",
 ]
 
 # S5.6: a chat turn is ``(role, text)`` where ``role`` is ``"user"`` or
@@ -37,6 +38,32 @@ class LLMError(Exception):
     keyword router / the ``_render_result`` concatenation. The demo never
     hard-fails on a Gemini hiccup.
     """
+
+
+def describe_llm_exc(exc: BaseException) -> str:
+    """A short, log-safe description of an LLM-call failure.
+
+    Calls out the common Gemini free-tier case (HTTP 429 / quota exhausted —
+    20 generate_content req/day per model) and auth errors, so the orchestrator
+    log says *why* the keyword fallback kicked in. ``str(exc)`` from
+    langchain/google-genai does not contain the API key; we still cap the
+    length. Stdlib-only — usable from any module.
+    """
+    name = type(exc).__name__
+    text = str(exc)
+    low = text.lower()
+    if name == "ResourceExhausted" or "429" in text or "quota" in low or "rate limit" in low or "ratelimit" in low:
+        return (
+            f"{name}: Gemini quota / rate limit exceeded — likely the free-tier "
+            f"daily cap (20 generate_content req/day per model). Enable billing on "
+            f"the Google Cloud project, or set GEMINI_MODEL to a model with more "
+            f"headroom. Falling back to keyword routing. [{text[:160]}]"
+        )
+    if name in {"PermissionDenied", "Unauthenticated"} or "api key" in low or "api_key" in low or " 401" in text or " 403" in text:
+        return f"{name}: Gemini auth/permission error — check GEMINI_API_KEY. [{text[:160]}]"
+    if name in {"TimeoutError", "CancelledError"}:
+        return f"{name}: Gemini call exceeded the LLM_TIMEOUT_S budget (often a slow network or backoff after a 429)."
+    return f"{name}: {text[:200]}"
 
 
 @dataclass(frozen=True)

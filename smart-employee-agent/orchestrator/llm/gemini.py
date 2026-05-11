@@ -30,6 +30,7 @@ from orchestrator.llm.client import (
     RoutedToolCall,
     ToolCatalogueEntry,
     ToolOutcome,
+    describe_llm_exc,
 )
 
 __all__ = ["GeminiLLMClient"]
@@ -74,17 +75,27 @@ class GeminiLLMClient:
     def __init__(
         self, *, api_key: str, model: str, timeout_s: float, max_output_tokens: int
     ) -> None:
+        # max_retries=2 → at most one quick retry. The default (6) means a 429
+        # (quota exhausted — common on the Gemini free tier: 20 generate_content
+        # req/day) burns ~60s of exponential backoff *inside* the call, which our
+        # wait_for(timeout_s) then cancels as a cryptic TimeoutError. With a low
+        # retry count the 429 surfaces in ~3s as a clear ResourceExhausted, so
+        # the keyword fallback kicks in fast and the log says *why*. (The design
+        # already wants "any LLM failure → fall back to keyword", so retrying
+        # hard inside the LLM call works against that.)
         self._router_llm = ChatGoogleGenerativeAI(
             model=model,
             google_api_key=api_key,
             temperature=0.0,
             max_output_tokens=max_output_tokens,
+            max_retries=2,
         )
         self._composer_llm = ChatGoogleGenerativeAI(
             model=model,
             google_api_key=api_key,
             temperature=0.3,
             max_output_tokens=max_output_tokens,
+            max_retries=2,
         )
         self._timeout_s = float(timeout_s)
 
@@ -113,7 +124,7 @@ class GeminiLLMClient:
         except LLMError:
             raise
         except Exception as exc:  # noqa: BLE001 — langchain raises a zoo; any failure → fall back
-            raise LLMError(f"router call failed: {type(exc).__name__}: {str(exc)[:200]}") from exc
+            raise LLMError(f"router call failed: {describe_llm_exc(exc)}") from exc
 
     async def compose(
         self,
@@ -140,4 +151,4 @@ class GeminiLLMClient:
         except LLMError:
             raise
         except Exception as exc:  # noqa: BLE001
-            raise LLMError(f"composer call failed: {type(exc).__name__}: {str(exc)[:200]}") from exc
+            raise LLMError(f"composer call failed: {describe_llm_exc(exc)}") from exc

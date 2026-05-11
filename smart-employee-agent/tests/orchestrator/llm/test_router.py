@@ -258,3 +258,44 @@ async def test_resolve_history_defaults_to_none(agent_registry) -> None:
     deps = make_deps(llm_client=llm, mode="llm", agent_registry=agent_registry)
     await resolve_tool_calls("what's my balance", deps)
     assert llm.route_calls[0][2] is None
+
+
+# ── describe_llm_exc: human-readable LLM-failure summaries (quota / auth / timeout) ──
+
+
+def test_describe_llm_exc_quota_429() -> None:
+    from orchestrator.llm.client import describe_llm_exc
+
+    class ResourceExhausted(Exception):
+        pass
+
+    msg = describe_llm_exc(ResourceExhausted(
+        "429 You exceeded your current quota ... limit: 20, model: gemini-2.5-flash"
+    ))
+    assert "quota" in msg.lower()
+    assert "GEMINI_MODEL" in msg
+    assert "Falling back to keyword routing" in msg
+
+
+def test_describe_llm_exc_auth() -> None:
+    from orchestrator.llm.client import describe_llm_exc
+
+    class PermissionDenied(Exception):
+        pass
+
+    msg = describe_llm_exc(PermissionDenied("403 API key not valid"))
+    assert "GEMINI_API_KEY" in msg
+
+
+def test_describe_llm_exc_timeout() -> None:
+    from orchestrator.llm.client import describe_llm_exc
+
+    msg = describe_llm_exc(TimeoutError())
+    assert "LLM_TIMEOUT_S" in msg
+
+
+def test_describe_llm_exc_generic() -> None:
+    from orchestrator.llm.client import describe_llm_exc
+
+    msg = describe_llm_exc(ValueError("something odd"))
+    assert "ValueError" in msg and "something odd" in msg
