@@ -86,3 +86,4 @@ Stage 3 sprint plan: [`docs/architecture/sprint-5.md`](../architecture/sprint-5.
 |---|---|---|---|---|
 | [UC-17](UC-17-llm-routed-chat.md) | LLM-routed natural-language chat (router + composer + keyword fallback) | High | NEW (LLM router/composer + `hr.apply_leave` chat tool) | written |
 | [UC-13](UC-13-employee-applies-for-leave.md) | Employee applies for leave — *Main flow now works end-to-end via the S5 LLM path* | High | extended in S5 (`apply_leave` MCP tool + `hr.apply_leave` dispatcher entry) | written |
+| [UC-18](UC-18-hr-admin-onboards-new-hire.md) | HR Admin onboards a new hire (seat + laptop + phone, one chat turn — multi-tool fan-out across both agents) | High | NEW (composes existing tools; multi-tool serial fan-out; S5.14/S5.15 guided flows; `hr.read_all_leaves`-style chat skills) | written; **S5.16** |

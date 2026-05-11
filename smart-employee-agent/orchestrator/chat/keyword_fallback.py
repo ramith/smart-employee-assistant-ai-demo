@@ -213,7 +213,10 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         tool_id="it.get_my_assets",
     ),
     KeywordRule(
-        keywords=("laptop", "asset", "equipment", "hardware", "computer"),
+        keywords=(
+            "laptop", "phone", "monitor", "screen",
+            "asset", "equipment", "hardware", "computer",
+        ),
         agent_id="it_agent",
         tool_id="it.list_available_assets",
     ),

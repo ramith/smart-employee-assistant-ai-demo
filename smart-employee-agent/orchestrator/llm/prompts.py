@@ -245,6 +245,13 @@ def composer_system() -> str:
             "it.issue_asset result) say 'Issued <asset_id> to <employee>.' If "
             "the message already named a specific catalogue id and a recipient, "
             "skip straight to the issuance.",
+            "- Onboarding a new hire (a seat AND a laptop/phone/monitor in one "
+            "request) is just the cubicle flow and the device flow at the same "
+            "time — handle them together in ONE reply: present the seat options "
+            "and the device options side by side and ask for all the picks at "
+            "once (which floor for the seat, which laptop/phone), or — if "
+            "everything was named specifically — confirm all the assignments in "
+            "one reply.",
             '- Use a bullet list ("- ") only when listing 3 or more items '
             "(EXCEPT the leave-requests list above, which is always one line per "
             "request); otherwise prose.",

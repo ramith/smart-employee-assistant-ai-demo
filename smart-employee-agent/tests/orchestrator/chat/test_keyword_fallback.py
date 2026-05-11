@@ -118,6 +118,23 @@ def test_route_available_laptops() -> None:
     assert result == [_it_call()]
 
 
+def test_route_device_type_keywords_hit_available_assets() -> None:
+    """S5.16: 'phone' / 'monitor' / 'screen' (and a multi-device onboarding ask)
+    route to the IT catalogue browse tool, same as 'laptop'."""
+    router = KeywordRouter()
+    for msg in (
+        "is there a spare phone",
+        "what monitors are available",
+        "show me the screens",
+        "give the new hire a laptop and a phone",  # multi-device — IT side fires once
+    ):
+        it_calls = [c for c in router.route(msg) if c.agent_id == "it_agent"]
+        assert it_calls, msg
+        # Any IT route is acceptable for the onboarding phrasing ("give" also
+        # matches it.issue_asset); for the plain ones it must be the catalogue.
+        assert any(c.tool_id == "it.list_available_assets" for c in it_calls) or "give" in msg, msg
+
+
 # ---------------------------------------------------------------------------
 # Test 3 — combined message → HR first, IT second (rule order preserved)
 # ---------------------------------------------------------------------------
