@@ -66,6 +66,44 @@ _DEFAULT_LEAVE_BALANCE = {
     "personal": 5,
 }
 
+# S5.11 — canonical per-user key for the in-memory stores.
+#
+# Different OAuth apps in this demo emit a *different* OIDC ``sub`` for the same
+# user: ``orchestrator-mcp-client`` (the token the SPA-proxied REST endpoints
+# carry — token-A) uses an email-style subject ``<username>@example.com``, while
+# the specialist-agent apps (the CIBA OBO tokens — token-C, used by the MCP
+# tools) use the WSO2 user-id UUID. So a leave applied via the agent (keyed on
+# the UUID) was invisible to the "My Leaves" panel (which reads under the email).
+# ``user_key`` collapses every known representation of a demo user to one key
+# (the UUID); unknown subs pass through unchanged (still consistent within one
+# token issuer). The real fix is IS-side — make all the OAuth apps use the same
+# subject claim — but this keeps the demo coherent without touching IS.
+_DEMO_USERNAME_TO_UUID: Dict[str, str] = {
+    "employee_user": "2048ad8c-16a6-4ec1-bb63-b38300118f28",
+    "hr_admin_user": "15fab9e7-18ec-4f6b-be0f-7aa1ddcebfb7",
+}
+_DEMO_UUIDS = frozenset(_DEMO_USERNAME_TO_UUID.values())
+
+
+def user_key(sub: str) -> str:
+    """Collapse a token ``sub`` to the canonical per-user store key.
+
+    - A known demo user-id UUID → itself (the canonical form).
+    - ``<username>@domain`` where ``<username>`` is a known demo user → that
+      user's UUID.
+    - Anything else (other UUIDs, federated subjects, test fixtures) → unchanged.
+    """
+    if not sub:
+        return ""
+    if sub in _DEMO_UUIDS:
+        return sub
+    if "@" in sub:
+        local = sub.split("@", 1)[0]
+        mapped = _DEMO_USERNAME_TO_UUID.get(local)
+        if mapped:
+            return mapped
+    return sub
+
 # Sprint 4 S4.1 — pre-seeded named demo users (lookup_employee fodder).
 # Keys are JWT sub (UUID-shaped); values include the human identifiers used
 # by UC-11. The auto-register path (ensure_user) still populates additional

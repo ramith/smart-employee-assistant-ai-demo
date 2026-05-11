@@ -330,3 +330,61 @@ async def test_get_all_cubicle_assignments_never_returns_sub() -> None:
     jane_row = next(r for r in rows if r["username"] == "jane.doe")
     assert jane_row["cubicle_id"] == "C-027"
     assert jane_row["floor"] == 2
+
+
+# ---------------------------------------------------------------------------
+# S5.11 — user_key canonicalisation: token-A (email-style sub) and token-C
+# (UUID sub) must hit the same leave/cubicle records.
+# ---------------------------------------------------------------------------
+
+_EMP_UUID = "2048ad8c-16a6-4ec1-bb63-b38300118f28"
+_EMP_EMAIL = "employee_user@example.com"
+
+
+def test_user_key_collapses_demo_sub_forms() -> None:
+    assert _store.user_key(_EMP_UUID) == _EMP_UUID
+    assert _store.user_key(_EMP_EMAIL) == _EMP_UUID
+    assert _store.user_key("hr_admin_user@example.com") == "15fab9e7-18ec-4f6b-be0f-7aa1ddcebfb7"
+    # Unknown subs pass through unchanged.
+    assert _store.user_key("00000000-0000-0000-0000-000000000000") == "00000000-0000-0000-0000-000000000000"
+    assert _store.user_key("someone@elsewhere.org") == "someone@elsewhere.org"
+    assert _store.user_key("plain_username") == "plain_username"
+    assert _store.user_key("") == ""
+
+
+@pytest.mark.asyncio
+async def test_leave_applied_via_uuid_is_visible_via_email_sub() -> None:
+    """A leave applied with the agent's UUID sub (token-C) shows up when the My
+    Leaves panel reads it with the orchestrator's email-style sub (token-A)."""
+    res = await _svc.apply_leave(
+        sub=_EMP_UUID, first_name="Employee", last_name="User",
+        leave_type="Sick Leave", start_date="2026-06-10", end_date="2026-06-12", reason="surgery",
+    )
+    assert res.get("success") is True
+    rid = res["request_id"]
+    # Read back the same way the /api/me/leaves panel does — but with token-A's sub.
+    rows_via_email = await _svc.get_my_leave_requests(sub=_EMP_EMAIL, first_name="", last_name="")
+    assert any(r["request_id"] == rid for r in rows_via_email), rows_via_email
+    # And via the UUID directly.
+    rows_via_uuid = await _svc.get_my_leave_requests(sub=_EMP_UUID, first_name="", last_name="")
+    assert any(r["request_id"] == rid for r in rows_via_uuid)
+
+
+@pytest.mark.asyncio
+async def test_leave_balance_consistent_across_sub_forms() -> None:
+    # Apply 3 days of sick leave via the UUID, then read the balance via the email sub.
+    await _svc.apply_leave(
+        sub=_EMP_UUID, first_name="Employee", last_name="User",
+        leave_type="Sick Leave", start_date="2026-07-01", end_date="2026-07-03", reason="x",
+    )
+    b_uuid = await _svc.get_my_leave_balance(_EMP_UUID, "Employee", "User")
+    b_email = await _svc.get_my_leave_balance(_EMP_EMAIL, "", "")
+    assert b_uuid["balance"] == b_email["balance"]  # same underlying record
+
+
+@pytest.mark.asyncio
+async def test_get_my_cubicle_matches_via_email_sub() -> None:
+    # C-005 is seeded to employee_user with assigned_to_sub = the UUID.
+    res = await _svc.get_my_cubicle(sub=_EMP_EMAIL)
+    assert res["assigned"] is True
+    assert res["cubicle_id"] == "C-005"

@@ -179,16 +179,43 @@ def lookup_user_by_username(username: str) -> Dict | None:
     return None
 
 
-def lookup_user_by_sub(sub: str) -> Dict | None:
-    """Return the user record keyed by JWT ``sub``, or ``None``.
+# S5.11 — canonical per-user key. Mirrors hr_server/service/store.user_key: the
+# orchestrator-mcp-client token (token-A, used by the /api/me/assets sidebar
+# proxy) carries an email-style sub <username>@example.com, while the it_agent
+# CIBA token (token-C, used by the it.get_my_assets MCP tool) carries the
+# user-id UUID — both must resolve to the same user. Unknown subs pass through.
+_DEMO_USERNAME_TO_UUID: Dict[str, str] = {
+    "employee_user": "2048ad8c-16a6-4ec1-bb63-b38300118f28",
+    "hr_admin_user": "15fab9e7-18ec-4f6b-be0f-7aa1ddcebfb7",
+}
+_DEMO_UUIDS = frozenset(_DEMO_USERNAME_TO_UUID.values())
 
-    The self-service IT-asset path resolves ``sub`` → ``username`` here:
-    OBO/CIBA tokens carry only ``sub``, while the asset rows are keyed by
-    ``username``.
+
+def user_key(sub: str) -> str:
+    """Collapse a token ``sub`` to the canonical per-user key (the demo user-id
+    UUID for the demo users; unchanged for anything else)."""
+    if not sub:
+        return ""
+    if sub in _DEMO_UUIDS:
+        return sub
+    if "@" in sub:
+        mapped = _DEMO_USERNAME_TO_UUID.get(sub.split("@", 1)[0])
+        if mapped:
+            return mapped
+    return sub
+
+
+def lookup_user_by_sub(sub: str) -> Dict | None:
+    """Return the user record for a JWT ``sub`` (canonicalised), or ``None``.
+
+    The self-service IT-asset path resolves ``sub`` → ``username`` here. Tokens
+    from different OAuth apps emit different ``sub`` forms for the same user
+    (UUID vs ``<username>@example.com``); ``user_key`` collapses them so the
+    seed (keyed by UUID) is found either way.
     """
     if not sub:
         return None
-    return users.get(sub)
+    return users.get(user_key(sub)) or users.get(sub)
 
 
 # Initialize on import.
