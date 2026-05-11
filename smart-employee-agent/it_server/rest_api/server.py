@@ -221,8 +221,9 @@ def build_rest_router(deps: ITRestRouterDeps) -> APIRouter:
         """Return the authenticated user's own IT assets.
 
         Sprint 4 (UC-12 / sidebar). Bearer token-A; scope
-        ``it_assets_self_rest``. Identity is the ``username`` claim.
-        Returns ``{assets: [...], total: N}`` (it_service shape).
+        ``it_assets_self_rest``. Identity is resolved from ``sub`` (the only
+        claim OBO tokens reliably carry) with the ``username`` profile claim
+        as a fallback. Returns ``{assets: [...], total: N}`` (it_service shape).
         """
         ctx = await _authenticate(request, deps.validator)
         if isinstance(ctx, JSONResponse):
@@ -230,11 +231,13 @@ def build_rest_router(deps: ITRestRouterDeps) -> APIRouter:
         err = _require_scope(ctx, "it_assets_self_rest")
         if err:
             return err
-        if not ctx.username:
+        if not ctx.sub:
             return JSONResponse(
-                {"error_id": "ERR-AUTH-claim-missing", "detail": "username claim absent"},
+                {"error_id": "ERR-AUTH-claim-missing", "detail": "sub claim absent"},
                 status_code=401,
             )
-        return JSONResponse(it_service.get_my_assets(ctx.username))
+        return JSONResponse(
+            it_service.get_my_assets(ctx.username or "", sub=ctx.sub)
+        )
 
     return router

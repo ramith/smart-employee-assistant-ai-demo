@@ -110,7 +110,7 @@ build_it_mcp_router = _it_tools_mod.build_it_mcp_router
 ISSUER = "https://api.asgardeo.io/t/ddademo/oauth2/token"
 IT_AGENT_CLIENT_ID = "it_agent-oauth-client-uuid"
 IT_AGENT_UUID = "it_agent-identity-uuid-0001"
-SUBJECT = "employee_user-sub-uuid-0001"  # Sprint 4 S4.2: store keys by username now
+SUBJECT = "2048ad8c-16a6-4ec1-bb63-b38300118f28"  # employee_user's seeded sub (matches store._SEED_USERS)
 JTI = "jti-it-mcp-test-001"
 REQUEST_ID = "req-test-uuid-it-001"
 
@@ -542,19 +542,19 @@ async def test_get_my_assets_missing_self_scope_returns_401(rsa_keypair, sign_to
 
 
 # ---------------------------------------------------------------------------
-# T-IT-MCP-14: Sprint 4 S4.2 — username claim absent → fail-closed 401
+# T-IT-MCP-14: Sprint 4 — username claim absent → fall back to sub→username
+# (revised: WSO2 IS OBO/CIBA tokens carry only `sub`, not the `username`
+# profile claim, so the self-service path resolves sub→username via the seed).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_my_assets_missing_username_claim_returns_401(rsa_keypair, sign_token, it_self_payload):
-    """T-IT-MCP-14: Sprint 4 S4.2 — username claim required by Stage 5 §E1.
-
-    No fallback to ``sub`` (deliberately fail-closed per the design lock).
-    """
+async def test_get_my_assets_resolves_username_from_sub(rsa_keypair, sign_token, it_self_payload):
+    """T-IT-MCP-14: ``username`` claim absent, ``sub`` resolves to a seeded
+    user → that user's assets are returned (200)."""
     _, public_jwk = rsa_keypair
     payload = dict(it_self_payload)
-    payload.pop("username")
+    payload.pop("username")  # token carries only `sub` (= employee_user's seed sub)
     token = sign_token(payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
@@ -565,10 +565,32 @@ async def test_get_my_assets_missing_username_claim_returns_401(rsa_keypair, sig
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
-    assert resp.status_code == 401
-    body = resp.json()
-    detail = body.get("detail", body)
-    assert detail["error_id"] == "ERR-AUTH-007"
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2  # employee_user has 2 seeded assets
+    assert "AST-12345" in {a["asset_id"] for a in data["assets"]}
+
+
+@pytest.mark.asyncio
+async def test_get_my_assets_unresolvable_sub_returns_empty(rsa_keypair, sign_token, it_self_payload):
+    """``username`` absent and ``sub`` matches no seeded user → empty list (200),
+    not a 500/401 — the caller simply has no assets on record."""
+    _, public_jwk = rsa_keypair
+    payload = dict(it_self_payload)
+    payload.pop("username")
+    payload["sub"] = "00000000-0000-0000-0000-000000000000"
+    token = sign_token(payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_my_assets",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"assets": [], "total": 0}
 
 
 # ---------------------------------------------------------------------------

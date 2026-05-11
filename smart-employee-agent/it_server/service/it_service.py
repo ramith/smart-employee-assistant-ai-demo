@@ -26,19 +26,21 @@ def list_available_assets(asset_type: Optional[str] = None) -> list:
     return store.get_asset_catalogue(asset_type)
 
 
-def get_my_assets(username: str) -> dict:
-    """Return assets assigned to *username* (UC-12 IT leg).
+def get_my_assets(username: str = "", *, sub: str = "") -> dict:
+    """Return assets assigned to the caller (UC-12 IT leg).
 
-    Sprint 4 S4.2: replaces ``get_employee_assets(employee_id)`` /
-    ``get_assigned_assets(employee_id)`` from Sprint 1. Identity is now
-    keyed by ``username`` per sprint-4.md §7.
-
-    Returns ``{assets, total}`` with an empty list when no rows match.
+    Identity resolution: prefer the ``username`` profile claim when present;
+    otherwise resolve ``sub`` → ``username`` via the user seed (OBO/CIBA
+    tokens carry only ``sub``). Returns ``{assets, total}`` with an empty
+    list when nothing resolves or no rows match.
     """
-    rows = store.get_assets_for_username(username)
+    if not username and sub:
+        record = store.lookup_user_by_sub(sub)
+        username = (record or {}).get("username", "") if record else ""
+    rows = store.get_assets_for_username(username) if username else []
     logger.info(
-        "[IT QUERY] get_my_assets username=%s returned=%d",
-        username, len(rows),
+        "[IT QUERY] get_my_assets username=%s sub=%s returned=%d",
+        username or "(unresolved)", sub or "(none)", len(rows),
     )
     return {"assets": rows, "total": len(rows)}
 

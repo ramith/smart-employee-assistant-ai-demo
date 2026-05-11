@@ -281,12 +281,12 @@ async def test_lookup_employee_unknown_returns_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_get_my_cubicle_unassigned() -> None:
-    result = await _svc.get_my_cubicle("jane.doe")
-    assert result == {"assigned": False}
+    assert await _svc.get_my_cubicle(username="jane.doe") == {"assigned": False}
+    assert await _svc.get_my_cubicle(sub="no-such-sub") == {"assigned": False}
 
 
 # ---------------------------------------------------------------------------
-# 13. get_my_cubicle — after assignment.
+# 13. get_my_cubicle — after assignment (matched by sub *and* by username).
 # ---------------------------------------------------------------------------
 
 
@@ -298,10 +298,13 @@ async def test_get_my_cubicle_after_assignment() -> None:
         employee_email="jane.doe@example.com",
         sub="sub-1",
     )
-    result = await _svc.get_my_cubicle("jane.doe")
-    assert result["assigned"] is True
-    assert result["cubicle_id"] == "C-027"
-    assert result["floor"] == 2
+    by_sub = await _svc.get_my_cubicle(sub="sub-1")
+    assert by_sub["assigned"] is True
+    assert by_sub["cubicle_id"] == "C-027"
+    assert by_sub["floor"] == 2
+
+    by_username = await _svc.get_my_cubicle(username="jane.doe")
+    assert by_username["cubicle_id"] == "C-027"
 
 
 # ---------------------------------------------------------------------------

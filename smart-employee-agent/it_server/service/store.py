@@ -38,20 +38,23 @@ _SEED_ASSETS: List[Dict] = [
 ]
 
 # Sprint 4 S4.2 — pre-seeded named demo users; mirror hr_server/service/store.py.
-# Keys are JWT sub (UUID-shaped) so a future ``ensure_user(sub, ...)`` path
-# (analogous to HR's) can look up by sub. The reporting helper joins on
-# ``username``, so the value dict carries both.
+# Keys are the JWT ``sub`` so the self-service path can resolve sub → username
+# (OBO/CIBA tokens carry only ``sub``, not the ``username`` profile claim). The
+# two users that actually authenticate use their real WSO2 IS user IDs (these
+# match ``hr_server/service/store._SEED_CUBICLE_ASSIGNMENTS``); jane.doe /
+# bob.smith are report-table filler and never sign in, so their subs are stable
+# placeholders. The reporting helper joins on ``username``.
 _SEED_USERS = [
     {
         "username": "employee_user",
         "email": "employee.user@example.com",
-        "sub": "employee_user-sub-uuid-0001",
+        "sub": "2048ad8c-16a6-4ec1-bb63-b38300118f28",
         "name": "Employee User",
     },
     {
         "username": "hr_admin_user",
         "email": "hr.admin.user@example.com",
-        "sub": "hr_admin_user-sub-uuid-0002",
+        "sub": "15fab9e7-18ec-4f6b-be0f-7aa1ddcebfb7",
         "name": "HR Admin User",
     },
     {
@@ -174,6 +177,18 @@ def lookup_user_by_username(username: str) -> Dict | None:
         if record.get("username") == username:
             return record
     return None
+
+
+def lookup_user_by_sub(sub: str) -> Dict | None:
+    """Return the user record keyed by JWT ``sub``, or ``None``.
+
+    The self-service IT-asset path resolves ``sub`` → ``username`` here:
+    OBO/CIBA tokens carry only ``sub``, while the asset rows are keyed by
+    ``username``.
+    """
+    if not sub:
+        return None
+    return users.get(sub)
 
 
 # Initialize on import.

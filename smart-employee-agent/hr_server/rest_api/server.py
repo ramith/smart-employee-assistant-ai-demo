@@ -245,8 +245,9 @@ def build_rest_router(deps: RestApiDeps) -> APIRouter:
         """Return the authenticated user's own cubicle assignment.
 
         Sprint 4 (UC-12 / sidebar). Bearer token-A; scope ``hr_self_rest``.
-        Identity is the ``username`` claim. Returns the assignment record
-        or ``{assigned: false}`` — no envelope wrapping (single record).
+        Identity is resolved from ``sub`` (the only claim OBO tokens reliably
+        carry), with the ``username`` profile claim as a fallback. Returns the
+        assignment record or ``{assigned: false}`` — no envelope wrapping.
         """
         ctx = await authenticate(request)
         if isinstance(ctx, JSONResponse):
@@ -254,12 +255,14 @@ def build_rest_router(deps: RestApiDeps) -> APIRouter:
         err = _require_scope(ctx, "hr_self_rest")
         if err:
             return err
-        if not ctx.username:
+        if not ctx.sub:
             return JSONResponse(
-                {"error_id": "ERR-AUTH-claim-missing", "detail": "username claim absent"},
+                {"error_id": "ERR-AUTH-claim-missing", "detail": "sub claim absent"},
                 status_code=401,
             )
-        return JSONResponse(await hr_service.get_my_cubicle(ctx.username))
+        return JSONResponse(
+            await hr_service.get_my_cubicle(sub=ctx.sub, username=ctx.username)
+        )
 
     @router.get("/api/reports/leave-requests")
     async def get_pending_leave_requests(request: Request):

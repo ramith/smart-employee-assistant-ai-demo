@@ -566,11 +566,67 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
     data = result.data
 
     if tool_id == "hr.read_balance":
+        balance = data.get("balance")
+        if isinstance(balance, dict):
+            return (
+                f"Your leave balance: {balance.get('annual', '?')} annual, "
+                f"{balance.get('sick', '?')} sick, "
+                f"{balance.get('personal', '?')} personal day(s) remaining."
+            )
+        # Legacy / canned shape fallback.
         days = data.get("leave_days", "?")
         leave_type = data.get("leave_type", "annual")
         as_of = data.get("as_of_date", "")
         date_clause = f" (as of {as_of})" if as_of else ""
         return f"You have {days} days of {leave_type} leave remaining{date_clause}."
+
+    if tool_id == "hr.cubicle_lookup_self":
+        if data.get("assigned"):
+            return (
+                f"Your cubicle is {data.get('cubicle_id', '?')} "
+                f"on floor {data.get('floor', '?')}."
+            )
+        return "You don't have a cubicle assigned yet."
+
+    if tool_id == "hr.cubicle_summary":
+        floors = sorted(
+            (k for k in data.keys() if k.startswith("floor_")),
+            key=lambda k: int(k.split("_")[1]) if k.split("_")[1].isdigit() else 0,
+        )
+        if not floors:
+            return "No cubicle data available."
+        parts = []
+        for fk in floors:
+            stats = data.get(fk, {})
+            parts.append(
+                f"Floor {fk.split('_')[1]}: {stats.get('vacant', '?')} vacant "
+                f"of {stats.get('total', '?')}"
+            )
+        return "Vacant cubicles by floor — " + "; ".join(parts) + "."
+
+    if tool_id == "hr.cubicle_list_floor":
+        if data.get("error"):
+            return data.get("message") or "That floor is not valid (use 1–4)."
+        vacant = data.get("vacant", [])
+        floor = data.get("floor", "?")
+        if not vacant:
+            return f"Floor {floor} has no vacant cubicles."
+        return f"Floor {floor} has {len(vacant)} vacant cubicle(s): " + ", ".join(vacant) + "."
+
+    if tool_id == "hr.cubicle_assign":
+        if data.get("error") == "cubicle_already_occupied":
+            holder = data.get("current_holder", {})
+            return (
+                f"That cubicle is already assigned to "
+                f"{holder.get('username', 'someone else')}."
+            )
+        if data.get("error"):
+            return data.get("message") or "Could not assign that cubicle."
+        assigned_to = data.get("assigned_to", {})
+        return (
+            f"Assigned {data.get('cubicle_id', '?')} (floor {data.get('floor', '?')}) "
+            f"to {assigned_to.get('username', '?')}."
+        )
 
     if tool_id == "hr.read_history":
         entries = data.get("entries", [])
@@ -618,7 +674,7 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
             if isinstance(a, dict):
                 lines.append(
                     f"  • {a.get('model', '?')} ({a.get('asset_id', '?')})"
-                    f" — {a.get('type', '?')}, assigned since {a.get('assigned_since', '?')}"
+                    f" — {a.get('type', '?')}, {a.get('status', '?')}"
                 )
             else:
                 lines.append(f"  • {a}")

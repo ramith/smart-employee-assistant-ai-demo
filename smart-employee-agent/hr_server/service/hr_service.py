@@ -350,18 +350,23 @@ async def get_vacant_cubicles_on_floor(floor: int) -> Dict:
     return {"floor": floor, "vacant": vacant}
 
 
-async def get_my_cubicle(username: str) -> Dict:
+async def get_my_cubicle(sub: str = "", username: str | None = None) -> Dict:
     """Return the caller's cubicle assignment, if any.
 
-    ``username`` is the primary identifier (Sprint 4 §7). Returns
-    ``{assigned: False}`` when the caller has no cubicle.
+    Match priority: ``sub`` (the JWT subject — always present on OBO/CIBA
+    tokens) then ``username`` (a fallback for tokens that carry the profile
+    claim). Returns ``{assigned: False}`` when the caller has no cubicle.
     """
-    if not username:
+    sub_needle = (sub or "").strip()
+    name_needle = (username or "").strip().lower()
+    if not sub_needle and not name_needle:
         return {"assigned": False}
-    needle = username.strip().lower()
     for row in store.cubicles:
-        existing = (row["assigned_to_username"] or "").strip().lower()
-        if row["occupied"] and existing == needle:
+        if not row["occupied"]:
+            continue
+        row_sub = (row["assigned_to_sub"] or "").strip()
+        row_name = (row["assigned_to_username"] or "").strip().lower()
+        if (sub_needle and row_sub == sub_needle) or (name_needle and row_name == name_needle):
             return {
                 "assigned": True,
                 "cubicle_id": row["cubicle_id"],

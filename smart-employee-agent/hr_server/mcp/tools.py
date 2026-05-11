@@ -814,8 +814,9 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
 
-        username = _username_for(claims)
-        result = await hr_service.get_my_cubicle(username)
+        result = await hr_service.get_my_cubicle(
+            sub=claims.sub, username=getattr(claims, "username", None)
+        )
         return GetMyCubicleResult(**result)
 
     # ── assign_cubicle (D3, hr_assets_write_rest) ─────────────────────────────
