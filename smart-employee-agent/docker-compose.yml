@@ -30,6 +30,11 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
       - HR_SERVER_HOST=0.0.0.0
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,hr_server"
+      # Sprint 4 OQ-3: the REST endpoints (/api/me/leaves, /api/reports/*)
+      # receive token-A whose aud is the orchestrator-mcp-client ID. The
+      # REST validator's audience list = [expected_aud(=hr_agent client)]
+      # + these extras. The MCP-tool validator stays strict (hr_agent only).
+      - HR_SERVER_REST_VALID_AUDIENCES=${ORCHESTRATOR_MCP_CLIENT_ID:-Ry9Wx_Q7w2FSi27miUpYr3O0xR4a}
       # Sprint 0: introspection feature-flagged OFF (Sprint 2 turns ON)
       - HR_INTROSPECT_ENABLED=${HR_INTROSPECT_ENABLED:-false}
       # Sprint 3 3A.2: shared secret for /internal/events fan-out (BLOCK-B simple).
@@ -203,6 +208,10 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
       - IT_SERVER_HOST=0.0.0.0
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,it_server"
+      # Sprint 4 OQ-3: REST endpoints (/api/reports/device-assignments)
+      # accept token-A (aud=orchestrator-mcp-client). MCP-tool validator
+      # stays strict (it_agent client only).
+      - IT_SERVER_REST_VALID_AUDIENCES=${ORCHESTRATOR_MCP_CLIENT_ID:-Ry9Wx_Q7w2FSi27miUpYr3O0xR4a}
       # Sprint 3 3A.2.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
       - UVICORN_WORKERS=1
