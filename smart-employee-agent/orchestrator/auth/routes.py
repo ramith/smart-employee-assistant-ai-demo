@@ -695,12 +695,15 @@ def _make_exchange_relay_html(
           body: JSON.stringify({{ code: '{safe_code}', state: '{safe_state}' }})
         }});
         if (resp.ok) {{
-          // Persist session_id + user name so SPA's resume-from-localStorage path works.
-          // (Cookie alone isn't enough — SPA reads orch_session_id from localStorage on init.)
+          // Persist session_id + user name + scopes so SPA's resume-from-
+          // localStorage path works. (Cookie alone isn't enough — SPA reads
+          // orch_session_id from localStorage on init; orch_scopes drives the
+          // Reports nav gate via scopes.includes("hr_approve_rest").)
           try {{
             const data = await resp.json();
             if (data.session_id) localStorage.setItem('orch_session_id', data.session_id);
             if (data.user_display_name) localStorage.setItem('orch_user_name', data.user_display_name);
+            if (Array.isArray(data.scopes)) localStorage.setItem('orch_scopes', JSON.stringify(data.scopes));
           }} catch (e) {{ /* fall through; cookie still authenticates */ }}
           window.location.href = '{safe_redirect}';
         }} else {{
