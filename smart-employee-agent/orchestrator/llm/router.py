@@ -24,7 +24,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from orchestrator.chat.keyword_fallback import ToolCall
-from orchestrator.llm.client import LLMError, RoutedToolCall, ToolCatalogueEntry
+from orchestrator.llm.client import ChatHistory, LLMError, RoutedToolCall, ToolCatalogueEntry
 
 if TYPE_CHECKING:  # pragma: no cover
     from orchestrator.chat.routes import ChatRouterDeps
@@ -95,17 +95,27 @@ def _validate(routed: list[RoutedToolCall], deps: "ChatRouterDeps") -> list[Tool
     return out
 
 
-async def resolve_tool_calls(user_message: str, deps: "ChatRouterDeps") -> list[ToolCall]:
+async def resolve_tool_calls(
+    user_message: str,
+    deps: "ChatRouterDeps",
+    *,
+    history: ChatHistory | None = None,
+) -> list[ToolCall]:
     """Resolve the user's message to an ordered list of ``ToolCall``s.
 
-    LLM-primary when configured; the keyword router is the fallback for an LLM
-    failure, an empty/all-invalid LLM response, or keyword-mode deployments.
+    LLM-primary when configured (the prior chat turns in *history* are replayed
+    into the router prompt so follow-ups like "it will be a sick leave" resolve
+    correctly); the keyword router is the fallback for an LLM failure, an
+    empty/all-invalid LLM response, or keyword-mode deployments. The keyword
+    router is single-shot and ignores history (acceptable — it's the fallback).
     """
     use_llm = getattr(deps.config, "llm_fallback_mode", "keyword") == "llm" and deps.llm_client is not None
     if use_llm:
         try:
             catalogue = build_catalogue(deps.agent_registry)
-            routed = await deps.llm_client.route(user_message, catalogue)  # type: ignore[union-attr]
+            routed = await deps.llm_client.route(  # type: ignore[union-attr]
+                user_message, catalogue, history=history
+            )
             tool_calls = _validate(routed, deps)
             if tool_calls:
                 logger.info("llm_router_ok tools=%s", [tc.tool_id for tc in tool_calls])

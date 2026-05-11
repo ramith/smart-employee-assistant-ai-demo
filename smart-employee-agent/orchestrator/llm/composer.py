@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from orchestrator.llm.client import LLMError, ToolOutcome
+from orchestrator.llm.client import ChatHistory, LLMError, ToolOutcome
 
 if TYPE_CHECKING:  # pragma: no cover
     from orchestrator.chat.routes import ChatRouterDeps
@@ -30,12 +30,15 @@ async def compose_reply(
     outcomes: list[ToolOutcome],
     fallback_text: str,
     deps: "ChatRouterDeps",
+    *,
+    history: ChatHistory | None = None,
 ) -> str:
     """Return the chat reply.
 
     LLM-composed when ``LLM_FALLBACK_MODE=llm``, an ``llm_client`` is wired, and
-    there is at least one outcome to talk about; otherwise (and on any LLM
-    failure) ``fallback_text``.
+    there is at least one outcome to talk about (the prior chat turns in
+    *history* are replayed into the composer prompt so the reply reads as part
+    of the conversation); otherwise (and on any LLM failure) ``fallback_text``.
     """
     use_llm = (
         getattr(deps.config, "llm_fallback_mode", "keyword") == "llm"
@@ -44,7 +47,9 @@ async def compose_reply(
     )
     if use_llm:
         try:
-            reply = await deps.llm_client.compose(user_message, outcomes)  # type: ignore[union-attr]
+            reply = await deps.llm_client.compose(  # type: ignore[union-attr]
+                user_message, outcomes, history=history
+            )
             logger.info("llm_composer_ok outcomes=%d", len(outcomes))
             return reply
         except (LLMError, Exception) as exc:  # noqa: BLE001 — any LLM failure → fallback text

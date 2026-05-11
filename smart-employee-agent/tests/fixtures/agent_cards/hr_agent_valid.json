@@ -10,7 +10,7 @@
     {
       "id": "hr.read_policy",
       "name": "Get leave policy and how to apply",
-      "description": "Return the company leave policy — the leave types you can apply for (Annual Leave, Sick Leave, Personal Leave), each with its rules (max days per year, minimum notice in days), and the information you must provide to submit a leave request (the leave type, the start and end dates in YYYY-MM-DD, and an optional reason). Use this whenever the user asks about leave types, the leave policy, the leave rules, how to apply for leave, or what information they need to give to apply for a leave. (To actually submit a leave request — when the user has given a type and dates — use hr.apply_leave instead.)",
+      "description": "Return the company leave policy — the leave types (Annual Leave, Sick Leave, Personal Leave), each with its rules (max days per year, minimum notice in days), and the information needed to submit a leave request (the leave type, the start and end dates in YYYY-MM-DD, an optional reason). Use this for purely informational questions: 'what leaves can I apply for', 'what's the leave policy', 'what are the leave rules', 'how do I apply for leave', 'what information do I need to apply for a leave'. Do NOT use this if the user actually wants to apply for leave (any expression of intent to apply / book / take leave, even without all the details) — use hr.apply_leave for that.",
       "scope": "hr_basic_rest",
       "required_scopes": ["hr_basic_rest"],
       "args": []
@@ -34,7 +34,7 @@
     {
       "id": "hr.apply_leave",
       "name": "Apply for leave",
-      "description": "Submit a leave request for the authenticated user. Needs the leave type (one of: Annual Leave, Sick Leave, Personal Leave) and the start and end dates (YYYY-MM-DD); reason is optional.",
+      "description": "Submit a leave request for the authenticated user. Use this whenever the user wants to apply for / book / take / request leave — even if they have only given some of the details so far (e.g. just the dates, or just the type, or a follow-up like 'it will be a sick leave' after an earlier message gave the dates). It needs the leave type (one of: Annual Leave, Sick Leave, Personal Leave) and the start and end dates (YYYY-MM-DD); reason is optional. Provide whatever the conversation has supplied and omit the rest — the system will tell the user what's still missing. Compute relative dates from today's date given in the system prompt (e.g. 'next Monday', 'this Friday').",
       "scope": "hr_self_rest",
       "required_scopes": ["hr_self_rest"],
       "args": ["leave_type", "start_date", "end_date", "reason"]

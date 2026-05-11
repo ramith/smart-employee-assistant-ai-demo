@@ -11,20 +11,51 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 
 # Module-top langchain imports are fine here precisely because this module is
 # only imported when LLM mode is active (the prod image has the deps).
-from langchain_core.messages import HumanMessage, SystemMessage  # type: ignore[import-not-found]
+from langchain_core.messages import (  # type: ignore[import-not-found]
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore[import-not-found]
 
-from datetime import date
-
 from orchestrator.llm import prompts as _prompts
-from orchestrator.llm.client import LLMError, RoutedToolCall, ToolCatalogueEntry, ToolOutcome
+from orchestrator.llm.client import (
+    ChatHistory,
+    LLMError,
+    RoutedToolCall,
+    ToolCatalogueEntry,
+    ToolOutcome,
+)
 
 __all__ = ["GeminiLLMClient"]
 
 logger = logging.getLogger(__name__)
+
+
+def _history_messages(history: ChatHistory | None) -> list[BaseMessage]:
+    """Map ``[(role, text), ...]`` prior turns to LangChain messages.
+
+    Per the LangChain "conversation history" pattern: prior user turns become
+    ``HumanMessage``, prior assistant turns become ``AIMessage``, in order,
+    placed between the ``SystemMessage`` and the current ``HumanMessage`` when
+    invoking the chat model. Empty/blank texts are skipped (a degenerate turn
+    shouldn't break the sequence).
+    """
+    out: list[BaseMessage] = []
+    for role, text in history or []:
+        text = (text or "").strip()
+        if not text:
+            continue
+        if role == "assistant":
+            out.append(AIMessage(content=text))
+        else:  # "user" (or anything else — treat as user input)
+            out.append(HumanMessage(content=text))
+    return out
 
 
 class GeminiLLMClient:
@@ -60,15 +91,23 @@ class GeminiLLMClient:
     # -- LLMClient -----------------------------------------------------------
 
     async def route(
-        self, user_message: str, catalogue: list[ToolCatalogueEntry]
+        self,
+        user_message: str,
+        catalogue: list[ToolCatalogueEntry],
+        *,
+        history: ChatHistory | None = None,
     ) -> list[RoutedToolCall]:
         system = _prompts.router_system(catalogue, today=date.today().isoformat())
+        # Canonical LangChain conversation sequence: system, then the prior
+        # turns (HumanMessage / AIMessage), then the current user message.
+        messages = [
+            SystemMessage(content=system),
+            *_history_messages(history),
+            HumanMessage(content=user_message),
+        ]
         try:
             resp = await asyncio.wait_for(
-                self._router_llm.ainvoke(
-                    [SystemMessage(content=system), HumanMessage(content=user_message)]
-                ),
-                timeout=self._timeout_s,
+                self._router_llm.ainvoke(messages), timeout=self._timeout_s
             )
             return _prompts.parse_router_output(getattr(resp, "content", None))
         except LLMError:
@@ -76,18 +115,23 @@ class GeminiLLMClient:
         except Exception as exc:  # noqa: BLE001 — langchain raises a zoo; any failure → fall back
             raise LLMError(f"router call failed: {type(exc).__name__}: {str(exc)[:200]}") from exc
 
-    async def compose(self, user_message: str, outcomes: list[ToolOutcome]) -> str:
+    async def compose(
+        self,
+        user_message: str,
+        outcomes: list[ToolOutcome],
+        *,
+        history: ChatHistory | None = None,
+    ) -> str:
         system = _prompts.composer_system()
         body = _prompts.render_outcomes(outcomes)
+        messages = [
+            SystemMessage(content=system),
+            *_history_messages(history),
+            HumanMessage(content=f"{body}\n\nThe user just said: {user_message}"),
+        ]
         try:
             resp = await asyncio.wait_for(
-                self._composer_llm.ainvoke(
-                    [
-                        SystemMessage(content=system),
-                        HumanMessage(content=f"{body}\n\nThe user said: {user_message}"),
-                    ]
-                ),
-                timeout=self._timeout_s,
+                self._composer_llm.ainvoke(messages), timeout=self._timeout_s
             )
             text = _prompts._coerce_text(getattr(resp, "content", None)).strip()
             if not text:

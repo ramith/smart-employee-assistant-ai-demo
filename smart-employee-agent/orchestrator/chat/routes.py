@@ -65,7 +65,7 @@ from orchestrator.events.sse import (
 # S5 — LLM routing + composition. These modules are stdlib-only (no langchain
 # import); the concrete GeminiLLMClient is imported lazily by main.py only when
 # LLM_FALLBACK_MODE=llm + a key is configured.
-from orchestrator.llm.client import LLMClient, ToolOutcome
+from orchestrator.llm.client import ChatHistory, LLMClient, ToolOutcome
 from orchestrator.llm.composer import compose_reply
 from orchestrator.llm.router import resolve_tool_calls
 
@@ -265,6 +265,7 @@ async def _run_serial_fan_out(
     deps: ChatRouterDeps,
     *,
     user_message: str = "",
+    history: ChatHistory | None = None,
 ) -> None:
     """Execute tool calls one by one and push SSE events for each outcome.
 
@@ -610,9 +611,13 @@ async def _run_serial_fan_out(
     else:
         fallback_text = "I was unable to retrieve any results. Please try again."
 
+    published_content = fallback_text
     try:
-        final_content = await compose_reply(user_message, outcomes, fallback_text, deps)
+        final_content = await compose_reply(
+            user_message, outcomes, fallback_text, deps, history=history
+        )
         await channel.publish(ChatMessageEvent(content=final_content, request_id=request_id))
+        published_content = final_content
     except Exception as exc:  # noqa: BLE001 — never let the chat hang on a terminal failure
         _logger.error(
             "chat_fan_out | terminal_compose_or_publish_failed request_id=%s error=%r",
@@ -622,6 +627,10 @@ async def _run_serial_fan_out(
             await channel.publish(ChatMessageEvent(content=fallback_text, request_id=request_id))
         except Exception:  # noqa: BLE001 — best-effort; nothing more we can do
             pass
+
+    # S5.6: record this turn's assistant reply so the next turn's router/composer
+    # see it (the user message was recorded by post_chat before the fan-out spawned).
+    session.record_chat_turn("assistant", published_content)
 
     _logger.info(
         "chat_fan_out | done request_id=%s tools=%d",
@@ -890,25 +899,39 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
             len(body.message),
         )
 
-        # Routing — LLM-primary (with keyword fallback) or keyword-only.
-        tool_calls: list[ToolCall] = await resolve_tool_calls(body.message, deps)
+        # S5.6: snapshot the prior turns *before* recording this one — the
+        # router/composer want the conversation up to but not including the
+        # current message.
+        prior_history: ChatHistory = session.history_snapshot()
+
+        # Routing — LLM-primary (history-aware, with keyword fallback) or keyword-only.
+        tool_calls: list[ToolCall] = await resolve_tool_calls(
+            body.message, deps, history=prior_history
+        )
 
         if not tool_calls:
             _logger.info(
                 "chat_request | no_route request_id=%s", request_id
             )
+            no_route_reply = "I don't know how to help with that."
             channel = SseChannel(session.sse_queue)
             await channel.publish(
-                ChatMessageEvent(
-                    content="I don't know how to help with that.",
-                    request_id=request_id,
-                )
+                ChatMessageEvent(content=no_route_reply, request_id=request_id)
             )
+            session.record_chat_turn("user", body.message)
+            session.record_chat_turn("assistant", no_route_reply)
             return ChatAck(request_id=request_id)
+
+        # Record the user turn now (the assistant turn is recorded by the
+        # fan-out once the reply is published).
+        session.record_chat_turn("user", body.message)
 
         # Spawn fan-out task; return ack immediately.
         asyncio.create_task(
-            _run_serial_fan_out(session, tool_calls, request_id, deps, user_message=body.message),
+            _run_serial_fan_out(
+                session, tool_calls, request_id, deps,
+                user_message=body.message, history=prior_history,
+            ),
             name=f"fan_out:{request_id}",
         )
 

@@ -15,8 +15,18 @@ __all__ = [
     "ToolCatalogueEntry",
     "RoutedToolCall",
     "ToolOutcome",
+    "ChatTurn",
+    "ChatHistory",
     "LLMClient",
 ]
+
+# S5.6: a chat turn is ``(role, text)`` where ``role`` is ``"user"`` or
+# ``"assistant"``; a history is the chronologically-ordered list of prior turns
+# (not including the current message). Replayed into the LLM router/composer
+# prompts as the canonical LangChain message sequence (SystemMessage, then
+# alternating HumanMessage/AIMessage, then the current HumanMessage).
+ChatTurn = tuple[str, str]
+ChatHistory = list[ChatTurn]
 
 
 class LLMError(Exception):
@@ -83,11 +93,23 @@ class LLMClient(Protocol):
     tests inject a ``FakeLLMClient``."""
 
     async def route(
-        self, user_message: str, catalogue: list[ToolCatalogueEntry]
+        self,
+        user_message: str,
+        catalogue: list[ToolCatalogueEntry],
+        *,
+        history: ChatHistory | None = None,
     ) -> list[RoutedToolCall]:
-        """Pick zero or more tools + extract their args. Raises ``LLMError`` on failure."""
+        """Pick zero or more tools + extract their args, given the prior turns.
+        Raises ``LLMError`` on failure."""
         ...
 
-    async def compose(self, user_message: str, outcomes: list[ToolOutcome]) -> str:
-        """Turn the tool outcomes into one natural-language reply. Raises ``LLMError`` on failure."""
+    async def compose(
+        self,
+        user_message: str,
+        outcomes: list[ToolOutcome],
+        *,
+        history: ChatHistory | None = None,
+    ) -> str:
+        """Turn the tool outcomes into one natural-language reply, given the
+        prior turns. Raises ``LLMError`` on failure."""
         ...

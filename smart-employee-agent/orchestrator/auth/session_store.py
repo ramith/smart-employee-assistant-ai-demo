@@ -37,6 +37,13 @@ def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+# S5.6: how many recent chat turns (user + assistant messages, interleaved) to
+# keep per session and replay into the LLM router/composer prompts. 12 ≈ 6
+# exchanges — enough for follow-ups like "it will be a sick leave", bounded so
+# the prompt and the session memory stay small.
+_MAX_CHAT_HISTORY = 12
+
+
 # ---------------------------------------------------------------------------
 # PendingCIBA
 # ---------------------------------------------------------------------------
@@ -160,10 +167,28 @@ class Session:
     # ``SessionStore.consume_pending_logout_reason``; consumed once by
     # the chat fan-out path on the next CIBA, then nulled.
     last_logout_reason: str | None = None
+    # S5.6: rolling transcript for LLM-mode follow-ups ("it will be a sick
+    # leave" needs the prior turns to make sense). List of (role, text) where
+    # role is "user" | "assistant"; trimmed to the last _MAX_CHAT_HISTORY
+    # entries by record_chat_turn(). Not used by the keyword router. The
+    # reply text is plain (rendered via textContent on the SPA), so storing
+    # it is safe; it never leaves the orchestrator except into the Gemini
+    # prompts in llm-mode (same trust boundary as the user's messages).
+    chat_history: list[tuple[str, str]] = field(default_factory=list)
 
     def touch(self) -> None:
         """Update ``last_seen_at`` to the current UTC time."""
         self.last_seen_at = _utc_now()
+
+    def record_chat_turn(self, role: str, text: str) -> None:
+        """Append a chat turn and trim to the last ``_MAX_CHAT_HISTORY`` entries."""
+        self.chat_history.append((role, text))
+        if len(self.chat_history) > _MAX_CHAT_HISTORY:
+            del self.chat_history[:-_MAX_CHAT_HISTORY]
+
+    def history_snapshot(self) -> list[tuple[str, str]]:
+        """Return a shallow copy of the current chat history (for passing to the LLM)."""
+        return list(self.chat_history)
 
     def is_expired(self, max_idle_seconds: int) -> bool:
         """Return ``True`` if the session has been idle longer than *max_idle_seconds*.

@@ -228,3 +228,33 @@ async def test_resolve_uses_keyword_only_when_no_llm_client(agent_registry) -> N
     deps = make_deps(llm_client=None, mode="llm", agent_registry=agent_registry)
     result = await resolve_tool_calls("what's my leave balance", deps)
     assert [tc.tool_id for tc in result] == ["hr.read_balance"]
+
+
+# ── S5.6: chat-history is threaded through to the LLM router ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_resolve_passes_history_to_llm(agent_registry) -> None:
+    llm = FakeLLMClient(route_result=[RoutedToolCall("hr_agent", "hr.apply_leave", {
+        "leave_type": "Sick Leave", "start_date": "2026-05-18", "end_date": "2026-05-20",
+    })])
+    deps = make_deps(llm_client=llm, mode="llm", agent_registry=agent_registry)
+    history = [
+        ("user", "I want to apply for leave next monday to wednesday"),
+        ("assistant", "Sure — what type of leave? Annual, Sick, or Personal?"),
+    ]
+    result = await resolve_tool_calls("it will be a sick leave", deps, history=history)
+    assert result == [ToolCall(agent_id="hr_agent", tool_id="hr.apply_leave", args={
+        "leave_type": "Sick Leave", "start_date": "2026-05-18", "end_date": "2026-05-20",
+    })]
+    # The fake recorded (user_message, catalogue, history).
+    assert llm.route_calls[0][0] == "it will be a sick leave"
+    assert llm.route_calls[0][2] == history
+
+
+@pytest.mark.asyncio
+async def test_resolve_history_defaults_to_none(agent_registry) -> None:
+    llm = FakeLLMClient(route_result=[RoutedToolCall("hr_agent", "hr.read_balance", {})])
+    deps = make_deps(llm_client=llm, mode="llm", agent_registry=agent_registry)
+    await resolve_tool_calls("what's my balance", deps)
+    assert llm.route_calls[0][2] is None

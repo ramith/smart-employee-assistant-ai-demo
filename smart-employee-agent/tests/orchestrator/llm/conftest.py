@@ -21,7 +21,8 @@ _FIXTURE_CARDS_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "agent_c
 
 
 class FakeLLMClient:
-    """An ``LLMClient`` stand-in for tests."""
+    """An ``LLMClient`` stand-in for tests. Records the ``history`` it was
+    handed so tests can assert the prior turns were threaded through."""
 
     def __init__(
         self,
@@ -31,19 +32,31 @@ class FakeLLMClient:
     ) -> None:
         self._route_result = [] if route_result is None else route_result
         self._compose_result = compose_result
-        self.route_calls: list[tuple[str, list[ToolCatalogueEntry]]] = []
-        self.compose_calls: list[tuple[str, list[ToolOutcome]]] = []
+        # Each entry: (user_message, catalogue, history)
+        self.route_calls: list[tuple[str, list[ToolCatalogueEntry], list | None]] = []
+        # Each entry: (user_message, outcomes, history)
+        self.compose_calls: list[tuple[str, list[ToolOutcome], list | None]] = []
 
     async def route(
-        self, user_message: str, catalogue: list[ToolCatalogueEntry]
+        self,
+        user_message: str,
+        catalogue: list[ToolCatalogueEntry],
+        *,
+        history: list | None = None,
     ) -> list[RoutedToolCall]:
-        self.route_calls.append((user_message, catalogue))
+        self.route_calls.append((user_message, catalogue, history))
         if isinstance(self._route_result, Exception):
             raise self._route_result
         return list(self._route_result)
 
-    async def compose(self, user_message: str, outcomes: list[ToolOutcome]) -> str:
-        self.compose_calls.append((user_message, outcomes))
+    async def compose(
+        self,
+        user_message: str,
+        outcomes: list[ToolOutcome],
+        *,
+        history: list | None = None,
+    ) -> str:
+        self.compose_calls.append((user_message, outcomes, history))
         if isinstance(self._compose_result, Exception):
             raise self._compose_result
         return self._compose_result
