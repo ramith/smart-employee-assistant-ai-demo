@@ -385,3 +385,32 @@ def test_route_dual_agent_self_service_uc12() -> None:
     assert result[0].tool_id == "hr.cubicle_lookup_self"
     assert result[1].agent_id == "it_agent"
     assert result[1].tool_id == "it.get_my_assets"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 manual-gate fix — "apply for leave" / "leave types" → hr.read_policy
+# (must not collapse to the balance read).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "I want to apply for a leave",
+        "what are the leaves I can apply for ?",
+        "what leave types are there",
+        "show me the leave policy",
+    ],
+)
+def test_route_leave_policy_intent(message: str) -> None:
+    router = KeywordRouter()
+    result = router.route(message)
+    assert result == [ToolCall(agent_id="hr_agent", tool_id="hr.read_policy", args={})]
+
+
+def test_route_leave_balance_still_routes_to_balance() -> None:
+    """Regression: a plain balance question must still hit hr.read_balance,
+    not the new policy rule (which is keyed on policy/apply phrasings)."""
+    router = KeywordRouter()
+    assert router.route("what's my leave balance") == [_hr_call()]
+    assert router.route("how much vacation do I have left") == [_hr_call()]

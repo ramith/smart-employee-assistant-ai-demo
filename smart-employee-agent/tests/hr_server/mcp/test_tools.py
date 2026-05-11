@@ -831,3 +831,62 @@ async def test_reject_leave_with_hr_approve_rest(rsa_keypair, sign_token, hr_wri
     # The store reflects the rejection + reason.
     assert _hr_store_mod.leave_requests[request_id]["status"] == "Rejected"
     assert _hr_store_mod.leave_requests[request_id]["rejection_reason"] == "Insufficient notice"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 manual-gate fix — get_leave_policy (hr_basic_rest tier)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hr_basic_payload() -> dict[str, Any]:
+    """Valid JWT payload with hr_basic_rest scope (lowest read tier)."""
+    now = int(time.time())
+    return {
+        "iss": ISSUER,
+        "sub": SUBJECT,
+        "aud": HR_AGENT_CLIENT_ID,
+        "exp": now + 300,
+        "iat": now,
+        "jti": JTI + "-b",
+        "scope": "openid hr_basic_rest",
+        "act": {"sub": HR_AGENT_UUID},
+        "username": "Probe",
+        "email": "probe.user@example.com",
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_leave_policy_with_hr_basic_rest(rsa_keypair, sign_token, hr_basic_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_basic_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_leave_policy",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    types = {t["leave_type"] for t in data["leave_types"]}
+    assert types == {"Annual Leave", "Sick Leave", "Personal Leave"}
+    annual = next(t for t in data["leave_types"] if t["leave_type"] == "Annual Leave")
+    assert annual["max_days_per_year"] == 20
+    assert annual["min_notice_days"] == 7
+
+
+@pytest.mark.asyncio
+async def test_get_leave_policy_requires_a_token(rsa_keypair):
+    _, public_jwk = rsa_keypair
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_leave_policy",
+        json={},
+        headers={"X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error_id"] == "ERR-AUTH-006"

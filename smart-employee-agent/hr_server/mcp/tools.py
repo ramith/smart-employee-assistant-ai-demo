@@ -87,12 +87,36 @@ __all__ = [
     "AssignCubicleResult",
     "LookupEmployeeArgs",
     "LookupEmployeeResult",
+    # hr_basic leave policy
+    "GetLeavePolicyArgs",
+    "LeavePolicyEntry",
+    "GetLeavePolicyResult",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models — Sprint 4 reshape (D1, RR-1)
 # ---------------------------------------------------------------------------
+
+
+class GetLeavePolicyArgs(BaseModel):
+    """Request body for ``get_leave_policy`` — no fields (parameter-less read)."""
+
+
+class LeavePolicyEntry(BaseModel):
+    """One leave-type entry. Mirrors a ``hr_service.get_leave_policy`` row."""
+
+    leave_type: str
+    max_days_per_year: int
+    requires_approval: bool
+    min_notice_days: int
+    description: str
+
+
+class GetLeavePolicyResult(BaseModel):
+    """Response for ``get_leave_policy`` — the full company leave policy."""
+
+    leave_types: list[LeavePolicyEntry]
 
 
 class GetLeaveBalanceArgs(BaseModel):
@@ -403,13 +427,49 @@ def _username_for(claims) -> str:  # type: ignore[no-untyped-def]
 
 
 def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
-    """Return a FastAPI ``APIRouter`` with eight HR tool endpoints.
+    """Return a FastAPI ``APIRouter`` with the HR tool endpoints.
 
     All endpoints are mounted under the prefix supplied by the caller (typically
     ``/mcp/tools``).  Each handler validates the inbound token via
     ``deps.validator.validate_token()`` before delegating to ``hr_service``.
     """
     router = APIRouter()
+
+    # ── get_leave_policy (hr_basic_rest — company leave types + rules) ────────
+
+    @router.post("/get_leave_policy", response_model=GetLeavePolicyResult)
+    async def get_leave_policy(
+        body: GetLeavePolicyArgs,  # noqa: ARG001 — parameter-less
+        request: Request,
+    ) -> GetLeavePolicyResult:
+        """Return the company leave policy (leave types + rules). Scope: hr_basic_rest."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("get_leave_policy missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_basic_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "get_leave_policy validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        policy = await hr_service.get_leave_policy()
+        return GetLeavePolicyResult(
+            leave_types=[LeavePolicyEntry(**row) for row in policy]
+        )
 
     # ── get_leave_balance ─────────────────────────────────────────────────────
 

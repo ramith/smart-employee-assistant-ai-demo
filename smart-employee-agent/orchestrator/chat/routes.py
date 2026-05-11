@@ -580,6 +580,26 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
         date_clause = f" (as of {as_of})" if as_of else ""
         return f"You have {days} days of {leave_type} leave remaining{date_clause}."
 
+    if tool_id == "hr.read_policy":
+        types = data.get("leave_types") or []
+        if not types:
+            return "No leave policy is configured."
+        lines = ["You can apply for these leave types:"]
+        for t in types:
+            if isinstance(t, dict):
+                name = t.get("leave_type", "?")
+                maxd = t.get("max_days_per_year", "?")
+                notice = t.get("min_notice_days", 0)
+                suffix = f", {notice} day(s) notice required" if notice else ""
+                lines.append(f"  • {name} — up to {maxd} day(s) per year{suffix}")
+            else:
+                lines.append(f"  • {t}")
+        lines.append(
+            'To apply, ask the HR agent with a type and dates — e.g. '
+            '"annual leave from 2026-06-10 to 2026-06-14".'
+        )
+        return "\n".join(lines)
+
     if tool_id == "hr.cubicle_lookup_self":
         if data.get("assigned"):
             return (

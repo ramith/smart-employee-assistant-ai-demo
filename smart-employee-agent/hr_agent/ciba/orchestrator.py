@@ -104,6 +104,14 @@ def _jti_of(token: object) -> str:
 
 
 _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] = {
+    # hr_basic tier — company leave policy (not user-specific). Scope-override
+    # to hr_basic_rest so the CIBA token-C carries exactly what the tool needs.
+    "hr.read_policy": (
+        "View the company leave policy",
+        "get_leave_policy",
+        lambda args: {},
+        "openid hr_basic_rest",
+    ),
     "hr.read_balance": (
         "View your leave balance",
         "get_leave_balance",

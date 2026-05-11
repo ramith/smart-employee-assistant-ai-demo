@@ -8,6 +8,13 @@
   "api_version": "1.0.0",
   "skills": [
     {
+      "id": "hr.read_policy",
+      "name": "Get leave policy",
+      "description": "Return the company leave policy: available leave types and their rules.",
+      "scope": "hr_basic_rest",
+      "required_scopes": ["hr_basic_rest"]
+    },
+    {
       "id": "hr.read_balance",
       "name": "Get leave balance",
       "description": "Return the remaining leave balance for the authenticated user.",

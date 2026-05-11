@@ -150,6 +150,25 @@ class HRMcpClient:
 
     # ── Public tool methods ───────────────────────────────────────────────────
 
+    async def get_leave_policy(
+        self,
+        *,
+        token_b: OAuthToken,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST /mcp/tools/get_leave_policy``. Scope: ``hr_basic_rest``.
+
+        Parameter-less read of the company leave policy (leave types + rules).
+        Returns ``{"leave_types": [{leave_type, max_days_per_year,
+        requires_approval, min_notice_days, description}, ...]}``.
+        """
+        return await self._post(
+            "/mcp/tools/get_leave_policy",
+            token_b=token_b,
+            request_id=request_id,
+            body={},
+        )
+
     async def get_leave_balance(
         self,
         *,

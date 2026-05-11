@@ -137,6 +137,20 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         agent_id="it_agent",
         tool_id="it.issue_asset",
     ),
+    # Sprint 4 manual-gate fix: "what leaves can I apply for" / "leave types" /
+    # "I want to apply for a leave" → show the company leave policy. (The full
+    # apply-leave flow needs LLM-mode slot-filling for type + dates; in keyword
+    # fallback we surface the available types plus a how-to-phrase-it hint.)
+    # Must precede the generic `leave` rule below so these phrasings don't
+    # collapse to the balance read.
+    KeywordRule(
+        keywords=(
+            "leave types", "leave policy", "types of leave", "kinds of leave",
+            "what leaves", "which leaves", "what leave can", "apply for",
+        ),
+        agent_id="hr_agent",
+        tool_id="hr.read_policy",
+    ),
     KeywordRule(
         keywords=("leave", "vacation", "time off", "pto"),
         agent_id="hr_agent",
