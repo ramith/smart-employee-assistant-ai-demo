@@ -193,6 +193,20 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         lambda args: {},
         None,
     ),
+    # ── Sprint 5 — HR Admin list all leave requests (hr.read_all_leaves) ──────
+    # Scope: hr_approve_rest (same as approve/reject — whoever can approve is
+    # who would ask). Employee role lacks this scope → IS denies CIBA consent →
+    # ERR-CIBA-005 / ERR-MCP-003 path surfaces "no permission" copy.
+    # No required args (both status and employee_name are optional filters).
+    "hr.read_all_leaves": (
+        "View all leave requests",
+        "get_all_leaves",
+        lambda args: {
+            "status": args.get("status"),
+            "employee_name": args.get("employee_name"),
+        },
+        "openid hr_approve_rest",
+    ),
 }
 
 

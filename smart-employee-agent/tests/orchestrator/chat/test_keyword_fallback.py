@@ -414,3 +414,65 @@ def test_route_leave_balance_still_routes_to_balance() -> None:
     router = KeywordRouter()
     assert router.route("what's my leave balance") == [_hr_call()]
     assert router.route("how much vacation do I have left") == [_hr_call()]
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — hr.read_all_leaves keyword routing
+# ---------------------------------------------------------------------------
+
+
+def test_route_all_leave_requests_intent() -> None:
+    """'show me all the leave requests' → hr.read_all_leaves with no status filter."""
+    router = KeywordRouter()
+    result = router.route("show me all the leave requests")
+    assert len(result) == 1
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {}
+
+
+def test_route_pending_leave_requests_sets_pending_status() -> None:
+    """'are there any leave requests I need to approve?' → hr.read_all_leaves with status=Pending."""
+    router = KeywordRouter()
+    result = router.route("are there any leave requests I need to approve?")
+    assert len(result) == 1
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {"status": "Pending"}
+
+
+def test_route_pending_leaves_phrase_sets_pending_status() -> None:
+    """'show me pending leaves' → hr.read_all_leaves with status=Pending."""
+    router = KeywordRouter()
+    result = router.route("show me pending leaves")
+    assert len(result) == 1
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {"status": "Pending"}
+
+
+def test_route_approve_leave_id_still_hits_approve_leave() -> None:
+    """Regression: 'approve LV-004' must still route to hr.approve_leave, not hr.read_all_leaves."""
+    router = KeywordRouter()
+    result = router.route("approve LV-004")
+    # One HR call, and it must be the specific-leave approve tool.
+    hr_calls = [c for c in result if c.agent_id == "hr_agent"]
+    assert len(hr_calls) == 1
+    assert hr_calls[0].tool_id == "hr.approve_leave"
+    assert hr_calls[0].args.get("leave_id") == "LV-004"
+
+
+def test_route_leaves_to_approve_without_id_hits_read_all_leaves() -> None:
+    """'leaves to approve' (no id) → hr.read_all_leaves with status=Pending."""
+    router = KeywordRouter()
+    result = router.route("leaves to approve")
+    assert len(result) == 1
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {"status": "Pending"}
+
+
+def test_route_all_leaves_phrase() -> None:
+    """'all leaves' → hr.read_all_leaves."""
+    router = KeywordRouter()
+    result = router.route("all leaves")
+    assert len(result) == 1
+    assert result[0].tool_id == "hr.read_all_leaves"

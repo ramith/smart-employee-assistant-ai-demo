@@ -472,3 +472,75 @@ async def test_apply_leave_default_reason_empty(httpx_mock: HTTPXMock, config: A
         )
     body = json.loads(_last_request(httpx_mock).content)
     assert body["reason"] == ""
+
+
+# ── Test: get_all_leaves (Sprint 5 hr.read_all_leaves) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_all_leaves_posts_to_correct_url_with_bearer(
+    httpx_mock: HTTPXMock, config: Any
+) -> None:
+    """get_all_leaves must POST to /mcp/tools/get_all_leave_requests with Bearer token."""
+    token_b = _make_token("admin-obo-token")
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE_URL}/mcp/tools/get_all_leave_requests",
+        json={"leave_requests": []},
+    )
+
+    async with httpx.AsyncClient() as http:
+        client = HRMcpClient(config, http=http)
+        result = await client.get_all_leaves(token_b, request_id="rid-all-leaves")
+
+    req = _last_request(httpx_mock)
+    assert str(req.url) == f"{_BASE_URL}/mcp/tools/get_all_leave_requests"
+    assert req.headers["authorization"] == "Bearer admin-obo-token"
+    assert req.headers["x-request-id"] == "rid-all-leaves"
+    assert result == {"leave_requests": []}
+
+
+@pytest.mark.asyncio
+async def test_get_all_leaves_omits_none_filters_from_body(
+    httpx_mock: HTTPXMock, config: Any
+) -> None:
+    """When status and employee_name are None, the body must be empty (no null keys)."""
+    token_b = _make_token()
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE_URL}/mcp/tools/get_all_leave_requests",
+        json={"leave_requests": []},
+    )
+
+    async with httpx.AsyncClient() as http:
+        client = HRMcpClient(config, http=http)
+        await client.get_all_leaves(token_b, status=None, employee_name=None)
+
+    body = json.loads(_last_request(httpx_mock).content)
+    assert "status" not in body
+    assert "employee_name" not in body
+
+
+@pytest.mark.asyncio
+async def test_get_all_leaves_includes_status_filter_when_provided(
+    httpx_mock: HTTPXMock, config: Any
+) -> None:
+    """When status='Pending', the body must include status='Pending'."""
+    token_b = _make_token()
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE_URL}/mcp/tools/get_all_leave_requests",
+        json={"leave_requests": [{"request_id": "LR001", "employee": "Alice",
+                                   "type": "Annual Leave", "start_date": "2026-06-10",
+                                   "end_date": "2026-06-14", "days_requested": 5,
+                                   "status": "Pending"}]},
+    )
+
+    async with httpx.AsyncClient() as http:
+        client = HRMcpClient(config, http=http)
+        result = await client.get_all_leaves(token_b, status="Pending")
+
+    body = json.loads(_last_request(httpx_mock).content)
+    assert body["status"] == "Pending"
+    assert "employee_name" not in body
+    assert len(result["leave_requests"]) == 1

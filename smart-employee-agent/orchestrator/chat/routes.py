@@ -768,11 +768,40 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
                 lines.append(f"  • {e}")
         return "\n".join(lines)
 
+    if tool_id == "hr.read_all_leaves":
+        rows = data.get("leave_requests", [])
+        if not rows:
+            return "No leave requests found."
+        lines = ["Leave requests:"]
+        for row in rows:
+            if isinstance(row, dict):
+                lines.append(
+                    f"  • {row.get('request_id', '?')} — "
+                    f"{row.get('employee', '?')} — "
+                    f"{row.get('type', '?')} "
+                    f"{row.get('start_date', '?')}→{row.get('end_date', '?')} "
+                    f"({row.get('days_requested', '?')}d) "
+                    f"[{row.get('status', '?')}]"
+                )
+            else:
+                lines.append(f"  • {row}")
+        return "\n".join(lines)
+
     if tool_id == "hr.approve_leave":
-        leave_id = data.get("leave_id", "?")
-        approved_at = data.get("approved_at", "")
-        date_clause = f" on {approved_at[:10]}" if approved_at else ""
-        return f"Leave request {leave_id} has been approved{date_clause}."
+        if not data.get("success"):
+            return data.get("message") or "That leave request could not be approved."
+        rid = data.get("request_id") or data.get("leave_id") or "?"
+        emp = data.get("employee")
+        return f"You approved leave request {rid}" + (f" for {emp}." if emp else ".")
+
+    if tool_id == "hr.reject_leave":
+        if not data.get("success"):
+            return data.get("message") or "That leave request could not be rejected."
+        rid = data.get("request_id") or data.get("leave_id") or "?"
+        emp = data.get("employee")
+        reason = data.get("rejection_reason") or data.get("reason")
+        tail = (f" for {emp}" if emp else "") + (f" (reason: {reason})" if reason else "") + "."
+        return f"You rejected leave request {rid}" + tail
 
     if tool_id == "it.list_available_assets":
         assets = data.get("assets", [])

@@ -127,6 +127,32 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         agent_id="hr_agent",
         tool_id="hr.cubicle_assign",
     ),
+    # Sprint 5 — HR Admin list-all-leaves intent (hr.read_all_leaves).
+    #
+    # Placed BEFORE the bare approve/approval rule so that multi-word
+    # list-intent phrases like "leave requests I need to approve" and
+    # "leaves to approve" route here rather than to hr.approve_leave.
+    #
+    # "approve LV-004" does NOT match because it contains no multi-word
+    # phrase from this rule's keyword list — it doesn't say "leave requests",
+    # "all leaves", "pending leaves", etc. — so it falls through to the
+    # approve_leave rule below. Verified by test.
+    #
+    # The _extract_inline_args handler sets status="Pending" when the message
+    # signals a pending filter ("pending", "need to approve", etc.).
+    KeywordRule(
+        keywords=(
+            "leave requests",
+            "all leaves",
+            "leaves to approve",
+            "leaves others submitted",
+            "pending leaves",
+            "need to approve",
+            "others submitted",
+        ),
+        agent_id="hr_agent",
+        tool_id="hr.read_all_leaves",
+    ),
     KeywordRule(
         keywords=("approve", "approval"),
         agent_id="hr_agent",
@@ -200,6 +226,12 @@ _RECIPIENT_RE = re.compile(r"\b(?:to|for)\s+(\S+)", re.IGNORECASE)
 # Sprint 4 S4.1 (UC-11): cubicle ID (C-027) + floor number.
 _CUBICLE_ID_RE = re.compile(r"\bC-\d{3}\b", re.IGNORECASE)
 _FLOOR_NUM_RE = re.compile(r"\bfloor\s+(\d+)\b", re.IGNORECASE)
+# Sprint 5: detect "pending" intent in a list-leaves message. Matches
+# "pending", "need to approve", "to approve", "awaiting approval" phrasing.
+_PENDING_INTENT_RE = re.compile(
+    r"\b(pending|need\s+to\s+approve|to\s+approve|awaiting\s+approval)\b",
+    re.IGNORECASE,
+)
 
 
 def _extract_inline_args(tool_id: str, message: str) -> dict:
@@ -240,6 +272,12 @@ def _extract_inline_args(tool_id: str, message: str) -> dict:
             # Strip trailing punctuation; the remainder is the username.
             out2["employee_username"] = m_recip2.group(1).rstrip(".,;:!?")
         return out2
+    if tool_id == "hr.read_all_leaves":
+        # Extract optional status=Pending when the message signals a list of
+        # items awaiting approval ("pending", "need to approve", etc.).
+        if _PENDING_INTENT_RE.search(message):
+            return {"status": "Pending"}
+        return {}
     return {}
 
 

@@ -1054,3 +1054,129 @@ async def test_apply_leave_malformed_body_returns_422(rsa_keypair, sign_token, h
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — get_all_leave_requests (hr.read_all_leaves, scope hr_approve_rest)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_all_leave_requests_happy_path(rsa_keypair, sign_token, hr_write_payload):
+    """T-HR-MCP-ALL-01: hr_approve_rest token → returns leave rows without sub."""
+    _, public_jwk = rsa_keypair
+
+    # Seed two leave requests from different "users" via the store directly
+    # (to exercise the all-requests path, not the per-user path).
+    _hr_store_mod.ensure_user("alice-sub", "Alice", "", username="alice", email="alice@example.com")
+    _hr_store_mod.ensure_user("bob-sub", "Bob", "", username="bob", email="bob@example.com")
+    await _hr_service_mod.apply_leave(
+        sub="alice-sub",
+        first_name="Alice",
+        last_name="",
+        leave_type="Annual Leave",
+        start_date=_dt(10),
+        end_date=_dt(12),
+        reason="Holiday",
+    )
+    await _hr_service_mod.apply_leave(
+        sub="bob-sub",
+        first_name="Bob",
+        last_name="",
+        leave_type="Sick Leave",
+        start_date=_dt(2),
+        end_date=_dt(2),
+        reason="Doctor",
+    )
+
+    token = sign_token(hr_write_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_all_leave_requests",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "leave_requests" in data
+    rows = data["leave_requests"]
+    assert len(rows) == 2
+    # Rows must not contain sub or user_sub — only display-safe fields.
+    for row in rows:
+        assert "sub" not in row
+        assert "user_sub" not in row
+        assert "request_id" in row
+        assert "employee" in row
+        assert "type" in row
+        assert "start_date" in row
+        assert "end_date" in row
+        assert "days_requested" in row
+        assert "status" in row
+
+
+@pytest.mark.asyncio
+async def test_get_all_leave_requests_status_filter(rsa_keypair, sign_token, hr_write_payload):
+    """T-HR-MCP-ALL-02: status filter returns only matching rows."""
+    _, public_jwk = rsa_keypair
+
+    _hr_store_mod.ensure_user("carol-sub", "Carol", "", username="carol", email="carol@example.com")
+    pending_result = await _hr_service_mod.apply_leave(
+        sub="carol-sub",
+        first_name="Carol",
+        last_name="",
+        leave_type="Annual Leave",
+        start_date=_dt(10),
+        end_date=_dt(11),
+        reason="Trip",
+    )
+    # Manually approve LR001 so we have both Pending and Approved rows.
+    await _hr_service_mod.approve_leave_request(
+        request_id=pending_result["request_id"],
+        reviewer_sub="admin-sub",
+        reviewer_name="Admin",
+    )
+    # Submit a second leave that stays Pending.
+    await _hr_service_mod.apply_leave(
+        sub="carol-sub",
+        first_name="Carol",
+        last_name="",
+        leave_type="Sick Leave",
+        start_date=_dt(20),
+        end_date=_dt(20),
+        reason="Cold",
+    )
+
+    token = sign_token(hr_write_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    # Filter for Pending only.
+    resp = client.post(
+        "/mcp/tools/get_all_leave_requests",
+        json={"status": "Pending"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["leave_requests"]
+    assert all(r["status"] == "Pending" for r in rows)
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_all_leave_requests_missing_scope_returns_401(rsa_keypair, sign_token, hr_read_payload):
+    """T-HR-MCP-ALL-03: hr_self_rest-only token → 401 ERR-MCP-003 (Employee path)."""
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)  # has hr_self_rest only, not hr_approve_rest
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_all_leave_requests",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 401
+    detail = resp.json().get("detail", resp.json())
+    assert detail["error_id"] == "ERR-MCP-003"

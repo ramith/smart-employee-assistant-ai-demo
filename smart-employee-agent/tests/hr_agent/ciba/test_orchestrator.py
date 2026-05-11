@@ -747,3 +747,96 @@ async def test_apply_leave_missing_dates_returns_err_agent_002_before_ciba(
     assert result.error_id == "ERR-AGENT-002"
     assert "start_date" in result.reason and "end_date" in result.reason
     ciba_client.initiate.assert_not_called()
+
+
+# ── Sprint 5 — hr.read_all_leaves dispatcher tests ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_read_all_leaves_uses_hr_approve_rest_scope(
+    dispatcher: HRDispatcher,
+    ciba_client: MagicMock,
+) -> None:
+    """hr.read_all_leaves → ConsentRequiredPayload with scope=openid hr_approve_rest."""
+    # Wire mcp_client.get_all_leaves on the dispatcher's deps (mcp_client fixture
+    # is a MagicMock — we add the expected AsyncMock return here).
+    dispatcher._deps.mcp_client.get_all_leaves = AsyncMock(
+        return_value={"leave_requests": []}
+    )
+    _, pending_register = _make_pending_register()
+    result = await dispatcher(
+        tool="hr.read_all_leaves",
+        args={},
+        user_sub="admin-sub-001",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-all-leaves-1",
+        pending_register=pending_register,
+    )
+    assert isinstance(result, ConsentRequiredPayload)
+    # The scope override must be hr_approve_rest, not the env default (hr.read).
+    assert result.scope == "openid hr_approve_rest"
+    # Verify action_text matches the registry entry.
+    assert result.action == "View all leave requests"
+    # CIBA initiate must have been called with the correct scope.
+    init_kwargs = ciba_client.initiate.call_args.kwargs
+    assert init_kwargs["scope"] == "openid hr_approve_rest"
+
+
+@pytest.mark.asyncio
+async def test_read_all_leaves_with_status_arg_calls_mcp_with_status(
+    dispatcher: HRDispatcher,
+    ciba_client: MagicMock,
+) -> None:
+    """hr.read_all_leaves with status='Pending' → mcp_client.get_all_leaves receives status."""
+    returned_rows = [
+        {"request_id": "LR001", "employee": "Alice", "type": "Annual Leave",
+         "start_date": "2026-06-10", "end_date": "2026-06-14",
+         "days_requested": 5, "status": "Pending"},
+    ]
+    dispatcher._deps.mcp_client.get_all_leaves = AsyncMock(
+        return_value={"leave_requests": returned_rows}
+    )
+    # Use a fresh token so the poll completes.
+    ciba_client.poll_for_token = AsyncMock(return_value=_make_oauth_token("token-b-all"))
+    captured, pending_register = _make_pending_register()
+    await dispatcher(
+        tool="hr.read_all_leaves",
+        args={"status": "Pending"},
+        user_sub="admin-sub-002",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-all-leaves-2",
+        pending_register=pending_register,
+    )
+    state = captured[0]
+    await asyncio.wait_for(state.completion.wait(), timeout=2.0)
+
+    # mcp_client.get_all_leaves must have been called with status="Pending".
+    assert dispatcher._deps.mcp_client.get_all_leaves.called
+    call_kwargs = dispatcher._deps.mcp_client.get_all_leaves.call_args.kwargs
+    assert call_kwargs.get("status") == "Pending"
+    # Result payload must carry the rows.
+    assert state.result is not None
+    assert isinstance(state.result, ResultPayload)
+    assert state.result.data == {"leave_requests": returned_rows}
+
+
+@pytest.mark.asyncio
+async def test_read_all_leaves_has_no_required_args(
+    dispatcher: HRDispatcher,
+    ciba_client: MagicMock,
+) -> None:
+    """hr.read_all_leaves with empty args must NOT return ERR-AGENT-002 (no required args)."""
+    dispatcher._deps.mcp_client.get_all_leaves = AsyncMock(
+        return_value={"leave_requests": []}
+    )
+    _, pending_register = _make_pending_register()
+    result = await dispatcher(
+        tool="hr.read_all_leaves",
+        args={},
+        user_sub="admin-sub-003",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-all-leaves-3",
+        pending_register=pending_register,
+    )
+    # Must get a ConsentRequiredPayload, not an error about missing args.
+    assert isinstance(result, ConsentRequiredPayload)

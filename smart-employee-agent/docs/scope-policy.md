@@ -26,7 +26,7 @@ There is **one tier**: the same scope name is requested at CIBA initiation by th
 | `hr_basic_rest` | hr_server-api | `Employee`, `HR Admin` | hr_server holiday/policy reads (general info) |
 | `hr_self_rest` | hr_server-api | `Employee`, `HR Admin` | hr_server reads of the calling user's own leave/profile |
 | `hr_read_rest` | hr_server-api | `HR Admin` | hr_server reads of *any* employee's HR data |
-| `hr_approve_rest` | hr_server-api | `HR Admin` | hr_server `approve_leave` (write) |
+| `hr_approve_rest` | hr_server-api | `HR Admin` | hr_server `approve_leave` + `reject_leave` (write) + `get_all_leave_requests` (`hr.read_all_leaves` chat skill) |
 | `it_assets_read_rest` | it_server-api | `Employee`, `HR Admin` | it_server asset list / lookup |
 | `it_assets_write_rest` | it_server-api | `HR Admin` | it_server `issue_asset` (write — assigns assets) |
 

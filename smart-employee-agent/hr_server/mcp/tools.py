@@ -1,4 +1,4 @@
-"""HR-server MCP tool endpoints — Sprint 1 Wave 6 / Sprint 4 S4.0 + S4.1.
+"""HR-server MCP tool endpoints — Sprint 1 Wave 6 / Sprint 4 S4.0 + S4.1 / Sprint 5.
 
 Exposes FastAPI POST endpoints under ``/mcp/tools/``:
 
@@ -11,6 +11,7 @@ Exposes FastAPI POST endpoints under ``/mcp/tools/``:
     POST /mcp/tools/assign_cubicle                 scope: hr_assets_write_rest [S4.1 D3]
     POST /mcp/tools/get_my_cubicle                 scope: hr_self_rest        [S4.1 D4]
     POST /mcp/tools/lookup_employee                scope: hr_read_rest        [S4.1 D5]
+    POST /mcp/tools/get_all_leave_requests         scope: hr_approve_rest     [S5 hr.read_all_leaves]
 
 Sprint 4 S4.0 reconciliation (D1): handlers delegate to ``hr_service``
 (the canonical in-memory implementation backed by ``service/store.py``)
@@ -78,6 +79,10 @@ __all__ = [
     # Sprint 5 S5.1 apply_leave (UC-13 chat path)
     "ApplyLeaveArgs",
     "ApplyLeaveResult",
+    # Sprint 5 hr.read_all_leaves (HR Admin chat path)
+    "GetAllLeaveRequestsArgs",
+    "AllLeaveRequestEntry",
+    "GetAllLeaveRequestsResult",
     # Sprint 4 S4.1 cubicle models
     "GetCubicleSummaryArgs",
     "CubicleFloorCounts",
@@ -280,6 +285,49 @@ class ApplyLeaveResult(BaseModel):
     request_id: str | None = None
     error: str | None = None
     message: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — get_all_leave_requests (hr.read_all_leaves, HR Admin chat path)
+# ---------------------------------------------------------------------------
+
+
+class GetAllLeaveRequestsArgs(BaseModel):
+    """Request body for ``get_all_leave_requests``.
+
+    Both fields are optional — omitting them returns all leave requests
+    regardless of status or employee name.
+    """
+
+    status: str | None = Field(
+        default=None,
+        description="Optional status filter, e.g. 'Pending', 'Approved', 'Rejected'.",
+    )
+    employee_name: str | None = Field(
+        default=None,
+        description="Optional employee name substring filter.",
+    )
+
+
+class AllLeaveRequestEntry(BaseModel):
+    """A single leave request row returned by ``get_all_leave_requests``.
+
+    Never contains ``sub`` or ``user_sub`` — only display-safe fields.
+    """
+
+    request_id: str
+    employee: str
+    type: str
+    start_date: str
+    end_date: str
+    days_requested: int
+    status: str
+
+
+class GetAllLeaveRequestsResult(BaseModel):
+    """Response for ``get_all_leave_requests``."""
+
+    leave_requests: list[AllLeaveRequestEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -1113,5 +1161,57 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
 
         result = await hr_service.lookup_employee(body.username_or_email)
         return LookupEmployeeResult(**result)
+
+    # ── get_all_leave_requests (Sprint 5, hr.read_all_leaves, hr_approve_rest) ──
+    #
+    # HR Admin read: list all leave requests, optionally filtered by status and/or
+    # employee_name. Scope: hr_approve_rest (same as approve/reject — whoever can
+    # approve is who'd ask). Employees lack this scope → IS denies CIBA consent →
+    # the existing ERR-MCP-003 / ERR-CIBA-005 path surfaces "you don't have
+    # permission" copy in the SPA. No ``sub`` is returned in any row.
+
+    @router.post("/get_all_leave_requests", response_model=GetAllLeaveRequestsResult)
+    async def get_all_leave_requests(
+        body: GetAllLeaveRequestsArgs,
+        request: Request,
+    ) -> GetAllLeaveRequestsResult:
+        """List all employees' leave requests (HR Admin only, scope hr_approve_rest)."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("get_all_leave_requests missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+
+        logger.debug(
+            "get_all_leave_requests tool_entry rid=%s required_scopes=%s",
+            rid,
+            ["hr_approve_rest"],
+        )
+
+        try:
+            await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_approve_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "get_all_leave_requests validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        rows = await hr_service.get_all_leave_requests(
+            status=body.status,
+            employee_name=body.employee_name,
+        )
+        return GetAllLeaveRequestsResult(
+            leave_requests=[AllLeaveRequestEntry(**row) for row in rows]
+        )
 
     return router

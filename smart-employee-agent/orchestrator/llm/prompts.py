@@ -213,8 +213,22 @@ def composer_system() -> str:
             "minimum notice period, and — if the result includes a 'to_apply' "
             "list — tell the user exactly what they need to provide to apply for "
             "leave (the leave type, the start and end dates, and an optional reason).",
-            '- Use a bullet list ("- ") only when listing 3 or more items; '
-            "otherwise prose.",
+            "- If a tool result has a 'leave_requests' array (the HR-admin list of "
+            "leave requests), show EACH request on its own line — even if there's "
+            "only one — with: the request id, the employee who applied (use the "
+            "'employee' field — do NOT write \"you\" / \"for you\" unless that "
+            "employee is literally the person asking), the leave type, the start "
+            "and end dates, the number of days, and the status. Don't compress it "
+            "into a single sentence. If the array is empty, say there are no "
+            "matching leave requests.",
+            "- If an approve or reject of a leave request succeeded, confirm the "
+            "action you just took: \"You approved leave request <request_id> for "
+            "<employee>.\" (or \"You rejected …\") — use the 'request_id' and "
+            "'employee' fields from the result; include the rejection reason if "
+            "one is present.",
+            '- Use a bullet list ("- ") only when listing 3 or more items '
+            "(EXCEPT the leave-requests list above, which is always one line per "
+            "request); otherwise prose.",
             "- Keep it under about 6 sentences for simple cases.",
         ]
     )

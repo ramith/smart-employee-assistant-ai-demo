@@ -1075,3 +1075,42 @@ def test_no_route_turn_is_recorded() -> None:
         ("user", "what's the weather"),
         ("assistant", "I don't know how to help with that."),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — _render_result for hr.read_all_leaves
+# ---------------------------------------------------------------------------
+
+_render_result = _routes_mod._render_result
+
+
+def test_render_result_read_all_leaves_non_empty() -> None:
+    """hr.read_all_leaves with rows → bullet-list format."""
+    rows = [
+        {
+            "request_id": "LR007",
+            "employee": "Jane Doe",
+            "type": "Annual Leave",
+            "start_date": "2026-06-10",
+            "end_date": "2026-06-14",
+            "days_requested": 5,
+            "status": "Pending",
+        }
+    ]
+    payload = _result_payload({"leave_requests": rows})
+    text = _render_result("HR Agent", "hr.read_all_leaves", payload)
+    assert "Leave requests:" in text
+    assert "LR007" in text
+    assert "Jane Doe" in text
+    assert "Annual Leave" in text
+    assert "2026-06-10" in text
+    assert "2026-06-14" in text
+    assert "5d" in text
+    assert "Pending" in text
+
+
+def test_render_result_read_all_leaves_empty() -> None:
+    """hr.read_all_leaves with empty list → 'No leave requests found.'"""
+    payload = _result_payload({"leave_requests": []})
+    text = _render_result("HR Agent", "hr.read_all_leaves", payload)
+    assert text == "No leave requests found."

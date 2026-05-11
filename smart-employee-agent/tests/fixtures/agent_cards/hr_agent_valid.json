@@ -86,6 +86,14 @@
       "scope": "hr_self_rest",
       "required_scopes": ["hr_self_rest"],
       "args": []
+    },
+    {
+      "id": "hr.read_all_leaves",
+      "name": "List all leave requests",
+      "description": "List all employees' leave requests; optional `status` filter (e.g. `Pending` for items awaiting approval) and optional `employee_name` filter. HR Admin only. Use for questions like 'show me all the leave requests', 'are there any leaves I need to approve', 'pending leave requests', 'leaves others submitted'.",
+      "scope": "hr_approve_rest",
+      "required_scopes": ["hr_approve_rest"],
+      "args": ["status", "employee_name"]
     }
   ],
   "capabilities": {

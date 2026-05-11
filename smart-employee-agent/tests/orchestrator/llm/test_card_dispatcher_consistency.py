@@ -40,6 +40,7 @@ _EXPECTED_ARGS = {
     "hr.cubicle_list_floor": {"floor"},
     "hr.cubicle_assign": {"cubicle_id", "employee_username", "employee_email"},
     "hr.cubicle_lookup_self": set(),
+    "hr.read_all_leaves": {"status", "employee_name"},
     "it.list_available_assets": {"asset_type"},
     "it.get_my_assets": set(),
     "it.issue_asset": {"asset_id", "employee_id"},

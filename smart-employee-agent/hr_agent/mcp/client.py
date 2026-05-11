@@ -441,6 +441,46 @@ class HRMcpClient:
             body={"username_or_email": username_or_email},
         )
 
+    async def get_all_leaves(
+        self,
+        token_b: OAuthToken,
+        *,
+        status: str | None = None,
+        employee_name: str | None = None,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST {base_url}/mcp/tools/get_all_leave_requests`` with Bearer token-B.
+
+        Required scope on token-B: ``hr_approve_rest`` (enforced by hr_server).
+        Lists all employees' leave requests; optionally filtered by status (e.g.
+        ``"Pending"``) and/or employee_name substring. HR Admin only — an Employee
+        token lacks this scope and will produce a 401 from hr_server.
+
+        Args:
+            token_b: User-OBO token (must carry ``hr_approve_rest``).
+            status: Optional status filter (e.g. ``"Pending"``). Omit for all.
+            employee_name: Optional employee name substring filter. Omit for all.
+            request_id: Optional ``X-Request-ID`` propagation override.
+
+        Returns:
+            Tool result body — ``{"leave_requests": [{request_id, employee, type,
+            start_date, end_date, days_requested, status}, ...]}``.
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx response (including 401 scope denial).
+        """
+        body: dict = {}
+        if status is not None:
+            body["status"] = status
+        if employee_name is not None:
+            body["employee_name"] = employee_name
+        return await self._post(
+            "/mcp/tools/get_all_leave_requests",
+            token_b=token_b,
+            request_id=request_id,
+            body=body,
+        )
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def aclose(self) -> None:
