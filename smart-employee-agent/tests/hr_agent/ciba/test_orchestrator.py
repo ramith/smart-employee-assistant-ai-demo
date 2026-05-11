@@ -729,6 +729,35 @@ async def test_apply_leave_full_args_returns_consent_with_self_scope(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        ("hr.cubicle_summary", {}),
+        ("hr.cubicle_list_floor", {"floor": 3}),
+        ("hr.lookup_employee", {"name": "jane.doe"}),
+    ],
+)
+async def test_cubicle_read_tools_use_hr_read_rest_scope(
+    dispatcher: HRDispatcher, tool: str, args: dict,
+) -> None:
+    """The cubicle/seat reads are admin-grade — their CIBA scope must be
+    ``openid hr_read_rest`` (the hr_server MCP tools require it; the env default
+    ``hr_self_rest`` is rejected with ERR-MCP-003). Regression for the scope
+    mismatch that surfaced once the entry-phrasing routing started working."""
+    _, pending_register = _make_pending_register()
+    result = await dispatcher(
+        tool=tool,
+        args=args,
+        user_sub="user-sub-001",
+        orchestrator_act_sub="orch-sub",
+        request_id=f"req-{tool}",
+        pending_register=pending_register,
+    )
+    assert isinstance(result, ConsentRequiredPayload), result
+    assert result.scope == "openid hr_read_rest", (tool, result.scope)
+
+
+@pytest.mark.asyncio
 async def test_apply_leave_missing_dates_returns_err_agent_002_before_ciba(
     dispatcher: HRDispatcher,
     ciba_client: MagicMock,

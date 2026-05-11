@@ -296,6 +296,34 @@ def test_my_cubicle_returns_assignment_for_assigned_user() -> None:
     assert "sub" not in body and "assigned_to_sub" not in body
 
 
+def test_my_cubicle_matches_when_token_a_has_only_email_sub() -> None:
+    """Realistic case: token-A's access token carries `sub` = the user's email
+    but NO `username` claim; the cubicle was assigned via chat with
+    `assigned_to_username` set and `assigned_to_sub` = None (assign_cubicle
+    gets sub=None). `_AuthContext` must derive `username` from the email
+    local-part so the username branch of get_my_cubicle still matches."""
+    payload = {
+        "sub": "employee_user@example.com",
+        "scope": "openid hr_self_rest",
+        # no `username` / `given_name` / `email` claim — derived from `sub`
+    }
+    for row in _store.cubicles:
+        if row["cubicle_id"] == "C-100":
+            row["occupied"] = True
+            row["assigned_to_username"] = "employee_user"
+            row["assigned_to_email"] = "employee_user@example.com"
+            row["assigned_to_sub"] = None  # assign_cubicle stores sub=None
+            row["assigned_at"] = "2026-05-11T10:00:00+00:00"
+            break
+    client = _build_app(payload)
+    resp = client.get("/api/me/cubicle", headers={"Authorization": "Bearer fake-tok-A"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body.get("cubicle_id") == "C-100"
+    assert body.get("floor") == 4
+    assert "sub" not in body and "assigned_to_sub" not in body
+
+
 def test_my_cubicle_unassigned_user_returns_not_assigned() -> None:
     payload = {
         "sub": "user-sub-nobody",

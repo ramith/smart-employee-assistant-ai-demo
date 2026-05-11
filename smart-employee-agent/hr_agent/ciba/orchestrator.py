@@ -158,17 +158,21 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "openid hr_approve_rest",
     ),
     # ── Sprint 4 S4.1 cubicle tools (UC-11) ──────────────────────────────────
+    # The cubicle/seat *reads* are admin-grade (whole-org view): the hr_server
+    # MCP tools require ``hr_read_rest``, so the CIBA token-C MUST carry it —
+    # the env default (``hr_self_rest``) is NOT enough (→ ERR-MCP-003). Employee
+    # role lacks ``hr_read_rest`` → IS denies the CIBA consent → "no permission".
     "hr.cubicle_summary": (
         "View vacant cubicles by floor",
         "get_cubicle_summary",
         lambda args: {},
-        None,
+        "openid hr_read_rest",
     ),
     "hr.cubicle_list_floor": (
         "View vacant cubicles on floor",
         "get_vacant_cubicles_on_floor",
         lambda args: {"floor": int(args.get("floor", 1))},
-        None,
+        "openid hr_read_rest",
     ),
     "hr.cubicle_assign": (
         "Assign cubicle to employee",
@@ -184,7 +188,7 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "Look up an employee",
         "lookup_employee",
         lambda args: {"username_or_email": args.get("name", "")},
-        None,
+        "openid hr_read_rest",  # hr_server lookup_employee requires hr_read_rest
     ),
     # ── Sprint 4 S4.2 cubicle self-service (UC-12 HR leg) ─────────────────────
     "hr.cubicle_lookup_self": (

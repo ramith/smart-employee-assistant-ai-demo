@@ -77,12 +77,18 @@ class _AuthContext:
         self.last_name = last
         self.full_name = f"{first} {last}".strip() or "User"
 
-        # Sprint 4: identity surfaces for username/email-keyed business logic.
-        # Control-char / length sanitisation happens earlier in the common
-        # JWT validator (security audit F-03); REST validator path uses
-        # raw payload, so apply minimal defensive defaults here.
-        self.username: str | None = payload.get("username") or None
-        self.email: str | None = payload.get("email") or None
+        # Sprint 4/S5.12: identity surfaces for username/email-keyed business
+        # logic. token-A's access token may not carry the `username`/`email`
+        # profile claims (some IS configs keep them ID-token-only). Since S5.12
+        # the OIDC subject IS the user's email and the IS username == the
+        # email's local-part, so derive both from `sub` when the claims are
+        # absent. (Control-char / length sanitisation happens earlier in the
+        # common JWT validator — security audit F-03.)
+        self.email: str | None = payload.get("email") or (self.sub if "@" in self.sub else None)
+        self.username: str | None = (
+            payload.get("username")
+            or (self.sub.split("@", 1)[0] if "@" in self.sub else None)
+        )
 
 
 async def _authenticate(

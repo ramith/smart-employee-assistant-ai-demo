@@ -70,8 +70,18 @@ class _AuthContext:
     def __init__(self, payload: dict):
         self.payload = payload
         self.sub: str = payload.get("sub") or ""
-        self.username: str | None = payload.get("username") or None
-        self.email: str | None = payload.get("email") or None
+        # token-A's access token may not carry the `username` / `email` profile
+        # claims (some IS configs keep them ID-token-only). Since S5.12 the OIDC
+        # subject IS the user's email and the IS username == the email's
+        # local-part, so derive both from `sub` when the claims are absent —
+        # keeps username-keyed lookups (cubicle/seat match, lookup_employee,
+        # asset resolution) working on the SPA REST path the same way the
+        # MCP-tool path's _username_for(claims) already does.
+        self.email: str | None = payload.get("email") or (self.sub if "@" in self.sub else None)
+        self.username: str | None = (
+            payload.get("username")
+            or (self.sub.split("@", 1)[0] if "@" in self.sub else None)
+        )
         self.scopes: list[str] = (
             payload.get("scope", "").split() if payload.get("scope") else []
         )

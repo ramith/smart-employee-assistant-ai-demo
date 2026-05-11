@@ -58,7 +58,7 @@
     {
       "id": "hr.cubicle_summary",
       "name": "Cubicle vacancy summary",
-      "description": "Return the per-floor count of total and vacant cubicles across all 4 floors (HR Admin).",
+      "description": "Show the per-floor cubicle vacancy summary — total and vacant cubicles on each of the 4 floors (HR Admin). NOTE: 'cubicle', 'seat' and 'seating (arrangement)' all mean the same thing here — treat them identically. This is the STARTING POINT for allocating a cubicle/seat: use it whenever an HR admin wants to assign/allocate a cubicle/seat but hasn't named a floor or a specific seat yet — e.g. 'I need to allocate a cubicle', 'show me the cubicle assignments', 'what seats are free', 'cubicle allocation', 'the seating arrangement'. The reply asks which floor they want.",
       "scope": "hr_read_rest",
       "required_scopes": ["hr_read_rest"],
       "args": []
@@ -66,7 +66,7 @@
     {
       "id": "hr.cubicle_list_floor",
       "name": "List vacant cubicles on a floor",
-      "description": "Return the list of vacant cubicle ids on a given floor (1-4) (HR Admin). Needs floor.",
+      "description": "Show the vacant (available) cubicle/seat ids on ONE specific floor (1-4) (HR Admin). ('cubicle' == 'seat'.) Use when the HR admin has named a floor — 'floor 3', \"what's free on floor 2\", 'show me the seats on floor 1' — including as a short-circuit straight from 'allocate a cubicle on floor 3'. The reply asks which seat (and for which employee). Needs `floor`.",
       "scope": "hr_read_rest",
       "required_scopes": ["hr_read_rest"],
       "args": ["floor"]
@@ -74,7 +74,7 @@
     {
       "id": "hr.cubicle_assign",
       "name": "Assign a cubicle to an employee",
-      "description": "Assign a cubicle to an employee (HR Admin, write). Needs cubicle_id and employee_username; employee_email optional.",
+      "description": "Assign ONE specific cubicle/seat to ONE specific employee — the FINAL step of cubicle/seat allocation (HR Admin, write). ('cubicle' == 'seat'.) Use ONLY when the message names BOTH a cubicle id (e.g. C-027 — a bare number like 'seat 27' means C-027) AND an employee (e.g. 'assign C-027 to jane.doe', 'give seat 14 to bob.smith'). If either is missing, use hr.cubicle_summary (no floor/seat picked yet) or hr.cubicle_list_floor (floor known) instead. Needs `cubicle_id` (the C-NNN id) and `employee_username`; `employee_email` optional.",
       "scope": "hr_assets_write_rest",
       "required_scopes": ["hr_assets_write_rest"],
       "args": ["cubicle_id", "employee_username", "employee_email"]

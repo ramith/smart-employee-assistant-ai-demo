@@ -25,8 +25,9 @@ There is **one tier**: the same scope name is requested at CIBA initiation by th
 |---|---|---|---|
 | `hr_basic_rest` | hr_server-api | `Employee`, `HR Admin` | hr_server holiday/policy reads (general info) |
 | `hr_self_rest` | hr_server-api | `Employee`, `HR Admin` | hr_server reads of the calling user's own leave/profile |
-| `hr_read_rest` | hr_server-api | `HR Admin` | hr_server reads of *any* employee's HR data |
+| `hr_read_rest` | hr_server-api | `HR Admin` | hr_server reads of *any* employee's HR data — `get_cubicle_summary`, `get_vacant_cubicles_on_floor`, `lookup_employee` (cubicle/seat allocation flow) |
 | `hr_approve_rest` | hr_server-api | `HR Admin` | hr_server `approve_leave` + `reject_leave` (write) + `get_all_leave_requests` (`hr.read_all_leaves` chat skill) |
+| `hr_assets_write_rest` | hr_server-api | `HR Admin` | hr_server `assign_cubicle` (write — cubicle/seat assignments). NOTE: this scope must exist on the `hr_server-api` API Resource in IS and be authorised on the `hr-agent` OAuth app; verify with `scripts/check-is-config.py`. |
 | `it_assets_read_rest` | it_server-api | `Employee`, `HR Admin` | it_server asset list / lookup |
 | `it_assets_write_rest` | it_server-api | `HR Admin` | it_server `issue_asset` (write — assigns assets) |
 

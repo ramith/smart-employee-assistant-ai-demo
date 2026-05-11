@@ -352,6 +352,52 @@ def test_route_cubicle_assign_extracts_id_and_username() -> None:
     assert hr_calls[0].args.get("employee_username") == "jane.doe"
 
 
+def test_route_vague_cubicle_intents_go_to_summary() -> None:
+    """Vague cubicle/seat phrasings (no floor, no C-NNN) — incl. a typo and the
+    'seat'/'seating' synonyms — route to hr.cubicle_summary, the entry point of
+    the allocation flow; the more specific rules still win (rule-order)."""
+    router = KeywordRouter()
+    for msg in (
+        "show me all the cubicle assinments",  # typo for "assignments"
+        "I need to allocate a cubicle.",
+        "cubicle allocation please",
+        "what cubicles are there",
+        "show me the seating arrangement",
+        "I need a seat for the new hire",
+        "what seats are free",
+        "give me the seating layout",
+    ):
+        result = router.route(msg)
+        hr_calls = [c for c in result if c.agent_id == "hr_agent"]
+        assert hr_calls and hr_calls[0].tool_id == "hr.cubicle_summary", msg
+    # The specific rules still take precedence:
+    assert router.route("where is my cubicle")[0].tool_id == "hr.cubicle_lookup_self"
+    assert router.route("where is my seat")[0].tool_id == "hr.cubicle_lookup_self"
+    floor_hr = [c for c in router.route("allocate a seat on floor 3") if c.agent_id == "hr_agent"]
+    # "floor 3" should win the floor rule, but "seat" appears too — rule order
+    # means whichever fires first per agent wins; both are acceptable entry
+    # points, so just assert it's one of the cubicle tools.
+    assert floor_hr and floor_hr[0].tool_id in {"hr.cubicle_list_floor", "hr.cubicle_summary"}
+
+
+def test_route_assign_seat_by_bare_number_normalises_to_c_id() -> None:
+    """'assign seat 27 to jane.doe' → hr.cubicle_assign with cubicle_id=C-027."""
+    router = KeywordRouter()
+    cases = {
+        "assign seat 27 to jane.doe": ("C-027", "jane.doe"),
+        "assign seat 14 to bob.smith": ("C-014", "bob.smith"),
+        "assign cubicle 5 to jane.doe": ("C-005", "jane.doe"),
+    }
+    for msg, (want_cid, want_user) in cases.items():
+        hr_calls = [c for c in router.route(msg) if c.agent_id == "hr_agent"]
+        assert hr_calls and hr_calls[0].tool_id == "hr.cubicle_assign", msg
+        assert hr_calls[0].args.get("cubicle_id") == want_cid, (msg, hr_calls[0].args)
+        assert hr_calls[0].args.get("employee_username") == want_user, (msg, hr_calls[0].args)
+    # An explicit C-NNN still works (and wins over the bare-number path).
+    hr_calls = [c for c in router.route("assign C-005 to jane.doe") if c.agent_id == "hr_agent"]
+    assert hr_calls[0].args.get("cubicle_id") == "C-005"
+
+
 # ---------------------------------------------------------------------------
 # Sprint 4 S4.2 — UC-12 cubicle.lookup_self + IT self-service
 # ---------------------------------------------------------------------------

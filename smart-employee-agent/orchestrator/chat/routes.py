@@ -726,7 +726,10 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
                 f"Floor {fk.split('_')[1]}: {stats.get('vacant', '?')} vacant "
                 f"of {stats.get('total', '?')}"
             )
-        return "Vacant cubicles by floor — " + "; ".join(parts) + "."
+        return (
+            "Vacant cubicles by floor — " + "; ".join(parts) + ". "
+            "Which floor would you like to allocate on?"
+        )
 
     if tool_id == "hr.cubicle_list_floor":
         if data.get("error"):
@@ -734,8 +737,11 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
         vacant = data.get("vacant", [])
         floor = data.get("floor", "?")
         if not vacant:
-            return f"Floor {floor} has no vacant cubicles."
-        return f"Floor {floor} has {len(vacant)} vacant cubicle(s): " + ", ".join(vacant) + "."
+            return f"Floor {floor} has no vacant cubicles. Try another floor (1–4)."
+        return (
+            f"Floor {floor} has {len(vacant)} vacant cubicle(s): " + ", ".join(vacant) + ". "
+            "Which seat would you like, and for which employee?"
+        )
 
     if tool_id == "hr.cubicle_assign":
         if data.get("error") == "cubicle_already_occupied":

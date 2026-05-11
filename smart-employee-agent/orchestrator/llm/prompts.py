@@ -226,6 +226,15 @@ def composer_system() -> str:
             "<employee>.\" (or \"You rejected …\") — use the 'request_id' and "
             "'employee' fields from the result; include the rejection reason if "
             "one is present.",
+            "- 'Cubicle', 'seat' and 'seating (arrangement)' all mean the same "
+            "thing — mirror whichever word the user used.",
+            "- Cubicle/seat allocation is a guided flow — keep it moving: after a "
+            "per-floor cubicle vacancy summary, end by asking which floor they "
+            "want to allocate on. After a floor's vacant-seat list, end by asking "
+            "which seat (and for which employee). After a successful assignment, "
+            "confirm '<cubicle_id> on floor <floor> is now assigned to "
+            "<employee>.' If the message already named a floor or a seat, skip "
+            "straight ahead.",
             '- Use a bullet list ("- ") only when listing 3 or more items '
             "(EXCEPT the leave-requests list above, which is always one line per "
             "request); otherwise prose.",

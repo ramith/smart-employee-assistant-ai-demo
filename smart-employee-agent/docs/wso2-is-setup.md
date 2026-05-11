@@ -169,14 +169,15 @@ The scope structure mirrors the existing `hr_server/service/hr_service.py` 4-tie
 ### 5.1 HR API
 - **Identifier:** `urn:hr:api`
 - **Display name:** HR API
-- **Scopes (4 — full tier model):**
+- **Scopes (5):**
 
 | Scope | Display name | Description | Tier / who has it |
 |---|---|---|---|
 | `hr_basic_rest` | View company HR info | Holidays, leave policy | every employee |
 | `hr_self_rest` | View own leave info | Own leave balance + own requests | every employee (default Sprint 1 demo path) |
-| `hr_read_rest` | View all leave requests | Dashboard view across all employees | **HR Admin only** |
-| `hr_approve_rest` | Approve/reject leave | Modify leave requests | **HR Admin only** |
+| `hr_read_rest` | View all leave requests | Dashboard view across all employees + cubicle/seat reads (`get_cubicle_summary`, `get_vacant_cubicles_on_floor`, `lookup_employee`) | **HR Admin only** |
+| `hr_approve_rest` | Approve/reject leave | Modify leave requests; also `get_all_leave_requests` (the `hr.read_all_leaves` chat skill) | **HR Admin only** |
+| `hr_assets_write_rest` | Assign cubicles/seats | `assign_cubicle` (the cubicle/seat-assign chat flow) | **HR Admin only** |
 
 ### 5.2 IT API
 - **Identifier:** `urn:it:api`
@@ -223,10 +224,10 @@ For each agent's **auto-created OAuth Application**:
 
 | Subscribe app | To resource | Authorized scopes |
 |---|---|---|
-| `hr-agent`'s OAuth App | HR API | all 4: `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest` |
-| `it-agent`'s OAuth App | IT API | both: `it_assets_read_rest`, `it_assets_write_rest` |
+| `hr-agent`'s OAuth App | HR API | **all 5**: `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`, `hr_assets_write_rest` |
+| `it-agent`'s OAuth App | IT API | **all of**: `it_assets_read_rest`, `it_assets_write_rest`, `it_assets_self_rest` |
 
-(The agent's CIBA initiation requests a SUBSET of these per-tool; the IS consent screen narrows further to what the user's role permits. So an Employee asking for `hr_approve_rest` will be denied by IS even though hr-agent's OAuth App is subscribed to it.)
+(The agent's CIBA initiation requests a SUBSET of these per-tool; the IS consent screen narrows further to what the user's role permits. So an Employee asking for `hr_approve_rest` will be denied by IS even though hr-agent's OAuth App is subscribed to it. **Conversely, if the OAuth app is NOT subscribed to a scope a tool requests, IS silently strips it from the issued token-C — the failure surfaces as a 401/ERR-MCP-003 from the MCP server, not at CIBA initiation.** `hr_assets_write_rest` is easy to miss here — `scripts/check-is-config.py` Section 4c verifies it.)
 
 Console → Applications → that app → **API Authorization** tab → **+ Authorize resource** → pick the API → check the scopes → **Add**.
 
