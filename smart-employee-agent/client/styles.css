@@ -224,8 +224,11 @@ textarea, input {
 
 #app-header {
   height: var(--header-h);
-  background: var(--surface);
+  /* Subtle warmth: a barely-there top-to-bottom lift instead of flat white. */
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
   border-bottom: 1px solid var(--border);
+  /* A faint lift so the header reads as "alive" above the content. */
+  box-shadow: 0 1px 0 rgba(31, 35, 40, 0.04), 0 1px 3px rgba(31, 35, 40, 0.05);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -236,10 +239,40 @@ textarea, input {
   z-index: 10;
 }
 
+/* Brand accent strip — a thin two-tone bar in the product's own blue→green.
+   Muted brand colors, 3px: a polished-product signature, not a flashy band. */
+#app-header::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--primary) 0%, var(--success-emph) 100%);
+}
+
 .header-left {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.6rem;
+}
+
+/* Mini app mark — a small rounded square in the accent blue. Gives the
+   header a warm focal point of colour without shouting. */
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--primary) 0%, #1f6feb 100%);
+  color: #ffffff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(9, 105, 218, 0.25);
 }
 
 .product-name,
@@ -256,6 +289,7 @@ textarea, input {
   padding: 0;
   cursor: pointer;
   font-family: inherit;
+  transition: color 0.12s ease;
 }
 .product-name-btn:hover {
   color: var(--primary);
