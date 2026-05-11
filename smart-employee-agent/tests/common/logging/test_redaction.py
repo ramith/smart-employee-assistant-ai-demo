@@ -392,7 +392,7 @@ class TestGoogleApiKeyRedaction:
     must be stripped from any log line — e.g. if a langchain/google transport
     error embeds ?key=AIza… in a URL."""
 
-    _SAMPLE_KEY = "<redacted-leaked-google-api-key-ROTATE-IT>"  # syntactically-shaped sentinel
+    _SAMPLE_KEY = "AIza" + "x" * 35  # 39-char sentinel of the Google-API-key shape; NOT a real key
 
     def test_api_key_stripped_from_url_in_log_line(self) -> None:
         from common.logging.redaction import redact

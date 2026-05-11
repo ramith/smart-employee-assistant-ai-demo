@@ -4,9 +4,15 @@ httpx~=0.27.0
 pydantic~=2.11.7
 python-dotenv~=1.0.0
 PyJWT[crypto]>=2.12.0
-# LangChain stack — pinned per milestone-plan §2.4
+# S5: LLM-driven chat routing/composition uses langchain-google-genai's
+# ChatGoogleGenerativeAI + langchain_core.messages (in orchestrator/llm/gemini.py,
+# which is imported lazily only when LLM_FALLBACK_MODE=llm). langchain-core is a
+# transitive dep of langchain-google-genai but is named explicitly here so the
+# import is on a declared dependency. The umbrella `langchain` package is kept
+# for parity with the milestone-plan pin (not used by S5 directly).
+# NOTE (S5 retro follow-up): consider pinning these to exact versions and
+# adding a lockfile. `langchain-mcp-adapters` was dropped — S5 confirmed the
+# v4 topology (orchestrator → A2A → agent → CIBA → MCP) doesn't use it.
 langchain>=1.2.11
+langchain-core>=0.3
 langchain-google-genai>=3.2.0
-# CRITICAL: 0.1.18+ required for per-request header injection (PR #313)
-# See milestone-plan §2.4 + smoke test in tests/test_mcp_header_injection.py
-langchain-mcp-adapters>=0.1.18

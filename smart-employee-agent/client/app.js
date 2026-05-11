@@ -1752,6 +1752,13 @@ async function sendMessage(text) {
   routingCount = 0;
   setComposerEnabled(false);
 
+  // S5: in LLM mode the orchestrator makes a Gemini routing call *before* the
+  // first SSE event, so show a transient "thinking" affordance straight away.
+  // It is replaced by the first routing / ciba_url / chat_message event
+  // (showRoutingLine / hideRoutingLine already manage #routing-line), or by the
+  // error bubble below on a failed POST.
+  showRoutingLine(COPY.routingThinking);
+
   // Generate the X-Request-ID at the user-action boundary so the audit trail
   // originates one hop earlier than the orchestrator. The middleware accepts
   // and echoes it; if absent it auto-generates with WARN.
@@ -1770,6 +1777,7 @@ async function sendMessage(text) {
     });
 
     if (resp.status === 429) {
+      hideRoutingLine();
       appendErrorMessage("Too many requests. Please wait a moment before trying again.");
       requestInFlight = false;
       setComposerEnabled(true);
@@ -1777,6 +1785,7 @@ async function sendMessage(text) {
     }
 
     if (!resp.ok) {
+      hideRoutingLine();
       const body = await resp.json().catch(() => ({}));
       appendErrorMessage(body.message || "Something went wrong handling your request.");
       requestInFlight = false;
@@ -1784,9 +1793,11 @@ async function sendMessage(text) {
       return;
     }
 
-    // Ack received — full response comes via SSE
+    // Ack received — full response comes via SSE (the "thinking" line stays
+    // until the first SSE event for this request).
 
   } catch (e) {
+    hideRoutingLine();
     logErr("[chat]", "sendMessage error:", e);
     appendErrorMessage("Something went wrong handling your request.");
     requestInFlight = false;
