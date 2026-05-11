@@ -697,3 +697,53 @@ async def test_cache_hit_mcp_rejects_falls_back_to_re_ciba(
     assert result.prior_consent_at == prior_iat
     # Cache entry was evicted.
     assert cache_key not in dispatcher._token_cache
+
+
+# ── S5.1: hr.apply_leave dispatcher behaviour ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_full_args_returns_consent_with_self_scope(
+    dispatcher: HRDispatcher,
+) -> None:
+    """hr.apply_leave with all required args → ConsentRequiredPayload whose
+    action_text and CIBA scope come from the server-side _TOOL_REGISTRY entry
+    (not the env default, not the LLM)."""
+    _, pending_register = _make_pending_register()
+    result = await dispatcher(
+        tool="hr.apply_leave",
+        args={
+            "leave_type": "Annual Leave",
+            "start_date": "2026-06-10",
+            "end_date": "2026-06-14",
+            "reason": "family trip",
+        },
+        user_sub="user-sub-001",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-apply-1",
+        pending_register=pending_register,
+    )
+    assert isinstance(result, ConsentRequiredPayload)
+    assert result.action == "Apply for leave on your behalf"
+    assert result.scope == "openid hr_self_rest"
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_missing_dates_returns_err_agent_002_before_ciba(
+    dispatcher: HRDispatcher,
+    ciba_client: MagicMock,
+) -> None:
+    """hr.apply_leave with only leave_type → ERR-AGENT-002 and NO CIBA round-trip."""
+    _, pending_register = _make_pending_register()
+    result = await dispatcher(
+        tool="hr.apply_leave",
+        args={"leave_type": "Annual Leave"},
+        user_sub="user-sub-001",
+        orchestrator_act_sub="orch-sub",
+        request_id="req-apply-2",
+        pending_register=pending_register,
+    )
+    assert isinstance(result, ErrorPayload)
+    assert result.error_id == "ERR-AGENT-002"
+    assert "start_date" in result.reason and "end_date" in result.reason
+    ciba_client.initiate.assert_not_called()

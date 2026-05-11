@@ -241,6 +241,48 @@ class HRMcpClient:
             body=body,
         )
 
+    async def apply_leave(
+        self,
+        *,
+        token_b: OAuthToken,
+        leave_type: str,
+        start_date: str,
+        end_date: str,
+        reason: str = "",
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST {base_url}/mcp/tools/apply_leave`` with Bearer token-B.
+
+        Required scope on token-B: ``hr_self_rest`` (enforced by hr_server).
+        Submits a leave request for the authenticated user (UC-13 chat path).
+
+        Args:
+            token_b: The user-OBO token (must carry ``hr_self_rest``).
+            leave_type: One of "Annual Leave" / "Sick Leave" / "Personal Leave".
+            start_date: ``YYYY-MM-DD``.
+            end_date: ``YYYY-MM-DD``; on or after ``start_date``.
+            reason: Optional free-text reason.
+            request_id: Optional ``X-Request-ID`` propagation override.
+
+        Returns:
+            Tool result body — ``{"success": true, "request_id": "LRxxx"}`` or
+            ``{"success": false, "error": "...", "message": "..."}``.
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx response.
+        """
+        return await self._post(
+            "/mcp/tools/apply_leave",
+            token_b=token_b,
+            request_id=request_id,
+            body={
+                "leave_type": leave_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "reason": reason,
+            },
+        )
+
     async def approve_leave(
         self,
         *,

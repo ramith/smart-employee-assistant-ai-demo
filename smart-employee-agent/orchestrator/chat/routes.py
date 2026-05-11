@@ -600,6 +600,13 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
         )
         return "\n".join(lines)
 
+    if tool_id == "hr.apply_leave":
+        if data.get("success"):
+            ref = data.get("request_id", "?")
+            return f"Your leave request has been submitted (ref {ref}) and is pending approval."
+        # Business rejection: surface the service's message verbatim.
+        return data.get("message") or "Your leave request could not be submitted."
+
     if tool_id == "hr.cubicle_lookup_self":
         if data.get("assigned"):
             return (

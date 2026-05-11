@@ -416,3 +416,59 @@ async def test_get_leave_history_sends_employee_id(
     body = json.loads(req.content)
     assert body["employee_id"] == "emp-99"
     assert result["employee_id"] == "emp-99"
+
+
+# ── Test 8: apply_leave (S5.1) posts the right body to the right path ────────
+
+@pytest.mark.asyncio
+async def test_apply_leave_posts_expected_body(
+    httpx_mock: HTTPXMock, config: Any
+) -> None:
+    """apply_leave POSTs {leave_type, start_date, end_date, reason} with the
+    Bearer token-B header to /mcp/tools/apply_leave, and returns the parsed body."""
+    token_b = _make_token("obo-apply")
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE_URL}/mcp/tools/apply_leave",
+        json={"success": True, "request_id": "LR007"},
+    )
+
+    async with httpx.AsyncClient() as http:
+        client = HRMcpClient(config, http=http)
+        result = await client.apply_leave(
+            token_b=token_b,
+            leave_type="Annual Leave",
+            start_date="2026-06-10",
+            end_date="2026-06-14",
+            reason="family trip",
+        )
+
+    req = _last_request(httpx_mock)
+    assert str(req.url) == f"{_BASE_URL}/mcp/tools/apply_leave"
+    assert req.headers["authorization"] == "Bearer obo-apply"
+    body = json.loads(req.content)
+    assert body == {
+        "leave_type": "Annual Leave",
+        "start_date": "2026-06-10",
+        "end_date": "2026-06-14",
+        "reason": "family trip",
+    }
+    assert result == {"success": True, "request_id": "LR007"}
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_default_reason_empty(httpx_mock: HTTPXMock, config: Any) -> None:
+    token_b = _make_token()
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{_BASE_URL}/mcp/tools/apply_leave",
+        json={"success": True, "request_id": "LR008"},
+    )
+    async with httpx.AsyncClient() as http:
+        client = HRMcpClient(config, http=http)
+        await client.apply_leave(
+            token_b=token_b, leave_type="Sick Leave",
+            start_date="2026-06-10", end_date="2026-06-10",
+        )
+    body = json.loads(_last_request(httpx_mock).content)
+    assert body["reason"] == ""

@@ -29,6 +29,14 @@
       "required_scopes": ["hr_self_rest"]
     },
     {
+      "id": "hr.apply_leave",
+      "name": "Apply for leave",
+      "description": "Submit a leave request for the authenticated user. Needs the leave type (Annual Leave, Sick Leave, or Personal Leave) and the start and end dates (YYYY-MM-DD); reason is optional.",
+      "scope": "hr_self_rest",
+      "required_scopes": ["hr_self_rest"],
+      "args": ["leave_type", "start_date", "end_date", "reason"]
+    },
+    {
       "id": "hr.approve_leave",
       "name": "Approve leave request",
       "description": "Approve a pending leave request by id (HR Admin only).",

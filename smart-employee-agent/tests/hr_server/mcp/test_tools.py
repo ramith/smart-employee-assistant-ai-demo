@@ -890,3 +890,163 @@ async def test_get_leave_policy_requires_a_token(rsa_keypair):
     )
     assert resp.status_code == 401
     assert resp.json()["detail"]["error_id"] == "ERR-AUTH-006"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 S5.1 — apply_leave MCP tool (UC-13 chat path, scope hr_self_rest)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_success_creates_request(rsa_keypair, sign_token, hr_read_payload):
+    """A well-formed request with sufficient notice + balance → 200 success and
+    a new Pending leave request in the store."""
+    from datetime import date as _date, timedelta as _td
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)  # carries hr_self_rest
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    start = (_date.today() + _td(days=30)).isoformat()
+    end = (_date.today() + _td(days=32)).isoformat()
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Annual Leave", "start_date": start, "end_date": end, "reason": "family trip"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is True
+    rid = data["request_id"]
+    assert rid in _hr_store_mod.leave_requests
+    rec = _hr_store_mod.leave_requests[rid]
+    assert rec["status"] == "Pending"
+    assert rec["leave_type"] == "Annual Leave"
+    assert rec["days_requested"] == 3
+    assert rec["user_sub"] == SUBJECT
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_invalid_leave_type_returns_business_rejection(rsa_keypair, sign_token, hr_read_payload):
+    from datetime import date as _date, timedelta as _td
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    start = (_date.today() + _td(days=30)).isoformat()
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Study Leave", "start_date": start, "end_date": start},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is False
+    assert data["error"] == "invalid_leave_type"
+    assert "Study Leave" in (data["message"] or "")
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_insufficient_notice_returns_business_rejection(rsa_keypair, sign_token, hr_read_payload):
+    from datetime import date as _date, timedelta as _td
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    tomorrow = (_date.today() + _td(days=1)).isoformat()
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Annual Leave", "start_date": tomorrow, "end_date": tomorrow},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is False
+    assert data["error"] == "insufficient_notice"
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_invalid_dates_returns_business_rejection(rsa_keypair, sign_token, hr_read_payload):
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Annual Leave", "start_date": "2026-09-14", "end_date": "2026-09-10"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is False
+    assert data["error"] == "invalid_dates"
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_insufficient_balance_returns_business_rejection(rsa_keypair, sign_token, hr_read_payload):
+    from datetime import date as _date, timedelta as _td
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    start = (_date.today() + _td(days=10)).isoformat()
+    end = (_date.today() + _td(days=19)).isoformat()  # 10 days; Personal Leave balance is 5
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Personal Leave", "start_date": start, "end_date": end},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["success"] is False
+    assert data["error"] == "insufficient_balance"
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_missing_scope_returns_401(rsa_keypair, sign_token, hr_read_rest_payload):
+    """A token with hr_read_rest (admin read) but not hr_self_rest cannot apply."""
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_rest_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Annual Leave", "start_date": "2026-09-10", "end_date": "2026-09-12"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error_id"] == "ERR-MCP-003"
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_no_bearer_returns_401(rsa_keypair):
+    _, public_jwk = rsa_keypair
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Annual Leave", "start_date": "2026-09-10", "end_date": "2026-09-12"},
+        headers={"X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error_id"] == "ERR-AUTH-006"
+
+
+@pytest.mark.asyncio
+async def test_apply_leave_malformed_body_returns_422(rsa_keypair, sign_token, hr_read_payload):
+    """Missing a required field (end_date) → FastAPI 422 (auth not even reached)."""
+    _, public_jwk = rsa_keypair
+    token = sign_token(hr_read_payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        "/mcp/tools/apply_leave",
+        json={"leave_type": "Annual Leave", "start_date": "2026-09-10"},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+    assert resp.status_code == 422

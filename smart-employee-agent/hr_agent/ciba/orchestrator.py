@@ -78,6 +78,10 @@ __all__ = ["HRDispatcherDeps", "HRDispatcher"]
 _REQUIRED_ARGS: dict[str, list[str]] = {
     "hr.approve_leave": ["leave_id"],
     "hr.reject_leave": ["leave_id", "reason"],
+    # S5.1: a partial LLM call (e.g. "I want leave" with no dates) fails here,
+    # before any CIBA round-trip, with ERR-AGENT-002 — the composer then asks
+    # the user for the missing dates.
+    "hr.apply_leave": ["leave_type", "start_date", "end_date"],
 }
 
 
@@ -123,6 +127,19 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "get_leave_history",
         lambda args: {"employee_id": args.get("employee_id")},
         None,
+    ),
+    # S5.1: UC-13 chat path. Self-service write → explicit hr_self_rest scope
+    # override (the same self scope the read tools use, per scope-policy.md).
+    "hr.apply_leave": (
+        "Apply for leave on your behalf",
+        "apply_leave",
+        lambda args: {
+            "leave_type": args.get("leave_type"),
+            "start_date": args.get("start_date"),
+            "end_date": args.get("end_date"),
+            "reason": args.get("reason", ""),
+        },
+        "openid hr_self_rest",
     ),
     "hr.approve_leave": (
         "Approve a leave request on your behalf",

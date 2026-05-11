@@ -75,6 +75,9 @@ __all__ = [
     "ApproveLeaveResult",
     "RejectLeaveArgs",
     "RejectLeaveResult",
+    # Sprint 5 S5.1 apply_leave (UC-13 chat path)
+    "ApplyLeaveArgs",
+    "ApplyLeaveResult",
     # Sprint 4 S4.1 cubicle models
     "GetCubicleSummaryArgs",
     "CubicleFloorCounts",
@@ -226,6 +229,45 @@ class RejectLeaveResult(BaseModel):
     error: str | None = None
     message: str | None = None
     rejected_by: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 S5.1 — apply_leave (UC-13 chat path; the dispatcher requires
+# leave_type/start_date/end_date so a partial LLM call fails pre-CIBA).
+# ---------------------------------------------------------------------------
+
+
+class ApplyLeaveArgs(BaseModel):
+    """Request body for ``apply_leave``.
+
+    ``leave_type`` must be a key of ``store.leave_policy`` (Annual Leave /
+    Sick Leave / Personal Leave); ``start_date`` / ``end_date`` are
+    ``YYYY-MM-DD`` with ``end_date >= start_date``. Validation of those
+    business rules happens in ``hr_service.apply_leave`` (returns a 200 with
+    ``success=False`` + ``error`` on rejection); a structurally-malformed
+    body (missing a required field, wrong type) → 422 from FastAPI.
+    """
+
+    leave_type: str = Field(description="One of: Annual Leave, Sick Leave, Personal Leave.")
+    start_date: str = Field(description="YYYY-MM-DD.")
+    end_date: str = Field(description="YYYY-MM-DD; on or after start_date.")
+    reason: str = Field(default="", description="Optional free-text reason.")
+
+
+class ApplyLeaveResult(BaseModel):
+    """Response for ``apply_leave``.
+
+    Mirrors ``hr_service.apply_leave``: happy path → ``success=True`` +
+    ``request_id``; business-layer rejection (invalid_leave_type /
+    invalid_dates / insufficient_notice / insufficient_balance) → 200 with
+    ``success=False`` + ``error`` + ``message`` (same envelope rule as
+    :class:`AssignCubicleResult`).
+    """
+
+    success: bool = True
+    request_id: str | None = None
+    error: str | None = None
+    message: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +791,58 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             error=result.get("error"),
             message=result.get("message"),
             rejected_by=act_sub or claims.sub,
+        )
+
+    # ── apply_leave (S5.1, UC-13 chat path, hr_self_rest) ─────────────────────
+
+    @router.post("/apply_leave", response_model=ApplyLeaveResult)
+    async def apply_leave(
+        body: ApplyLeaveArgs,
+        request: Request,
+    ) -> ApplyLeaveResult:
+        """Submit a leave request for the authenticated user. Scope: hr_self_rest."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("apply_leave missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            claims = await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_self_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "apply_leave token validation failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        logger.debug(
+            "apply_leave validation_ok rid=%s sub=%s leave_type=%s start=%s end=%s",
+            rid, claims.sub, body.leave_type, body.start_date, body.end_date,
+        )
+        result = await hr_service.apply_leave(
+            claims.sub,
+            _username_for(claims),
+            "",
+            body.leave_type,
+            body.start_date,
+            body.end_date,
+            body.reason,
+        )
+        if result.get("success"):
+            return ApplyLeaveResult(success=True, request_id=result["request_id"])
+        return ApplyLeaveResult(
+            success=False,
+            error=result.get("error"),
+            message=result.get("message"),
         )
 
     # ── Sprint 4 S4.1 cubicle handlers (UC-11) ────────────────────────────────
