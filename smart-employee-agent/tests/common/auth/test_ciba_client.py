@@ -753,3 +753,64 @@ class TestAcquireOboReturnShape:
         assert isinstance(token, OAuthToken)
         assert ciba_req.auth_req_id == AUTH_REQ_ID
         assert token.access_token == "obo-access-token"
+
+
+# ── _normalize_login_hint: email-style sub → bare username ────────────────────
+
+
+class TestLoginHintNormalization:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("employee_user", "employee_user"),                       # bare username — unchanged
+            ("2048ad8c-16a6-4ec1-bb63-b38300118f28", "2048ad8c-16a6-4ec1-bb63-b38300118f28"),  # UUID — unchanged
+            ("employee_user@example.com", "employee_user"),           # email-style sub → username
+            ("hr_admin_user@example.com", "hr_admin_user"),
+            ("employee_user@carbon.super", "employee_user"),          # tenant-qualified → username (default tenant)
+            ("weird@thing", "weird@thing"),                            # no dot in "domain" — left alone
+            ("@example.com", "@example.com"),                          # empty local part — left alone
+        ],
+    )
+    def test_normalize(self, raw: str, expected: str) -> None:
+        from common.auth.ciba_client import _normalize_login_hint  # type: ignore[attr-defined]
+        assert _normalize_login_hint(raw) == expected
+
+    @pytest.mark.asyncio
+    async def test_initiate_sends_normalized_login_hint(
+        self, httpx_mock: pytest_httpx.HTTPXMock
+    ) -> None:
+        """initiate() called with an email-style sub must POST the bare username."""
+        httpx_mock.add_response(method="POST", url=CIBA_URL, json=_ciba_success_body())
+        client = _make_client(httpx_mock)
+        await client.initiate(
+            oauth_client_id=OAUTH_CLIENT_ID,
+            oauth_client_secret=OAUTH_CLIENT_SECRET,
+            login_hint="employee_user@example.com",
+            binding_message=BINDING_MSG,
+            actor_token=ACTOR_TOKEN,
+        )
+        await client.aclose()
+
+        [request] = httpx_mock.get_requests()
+        body = request.content.decode()
+        assert "login_hint=employee_user" in body
+        # the @ (url-encoded %40) must NOT survive anywhere in the body's login_hint
+        assert "%40" not in body
+        assert "@example.com" not in body
+
+    @pytest.mark.asyncio
+    async def test_initiate_passes_uuid_login_hint_through(
+        self, httpx_mock: pytest_httpx.HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(method="POST", url=CIBA_URL, json=_ciba_success_body())
+        client = _make_client(httpx_mock)
+        await client.initiate(
+            oauth_client_id=OAUTH_CLIENT_ID,
+            oauth_client_secret=OAUTH_CLIENT_SECRET,
+            login_hint="2048ad8c-16a6-4ec1-bb63-b38300118f28",
+            binding_message=BINDING_MSG,
+            actor_token=ACTOR_TOKEN,
+        )
+        await client.aclose()
+        [request] = httpx_mock.get_requests()
+        assert "login_hint=2048ad8c-16a6-4ec1-bb63-b38300118f28" in request.content.decode()

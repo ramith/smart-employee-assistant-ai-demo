@@ -82,6 +82,33 @@ def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+def _normalize_login_hint(value: str) -> str:
+    """Coerce a CIBA ``login_hint`` to a form WSO2 IS resolves to a *local* user.
+
+    Callers pass the inbound token's ``sub`` claim. Depending on the OAuth-app
+    config that can be a user-id UUID (``2048ad8c-…``) or an email-style
+    ``localpart@domain`` (e.g. ``employee_user@example.com`` when the app uses
+    email as the subject). IS's ``login_hint`` resolver reads ``user@something``
+    as ``user`` in tenant ``something`` — so ``employee_user@example.com`` makes
+    IS look for a tenant ``example.com``, fails to, and rejects the request with
+    *"external notification channel is not supported for federated users"*.
+
+    Rule: if ``value`` is ``localpart@domain`` with a non-empty ``localpart`` and
+    a ``domain`` that looks like a DNS/email domain (contains a ``.``), use just
+    ``localpart`` (the username, resolved in the default tenant). UUIDs and bare
+    usernames (no ``@``) — and odd forms like ``weird@thing`` with no dot — pass
+    through unchanged.
+    """
+    if "@" not in value:
+        return value
+    local, _, domain = value.partition("@")
+    if local and "." in domain:
+        if local != value:
+            logger.debug("ciba_login_hint_normalized | from=%s to=%s", value, local)
+        return local
+    return value
+
+
 # ── CIBARequest ───────────────────────────────────────────────────────────────
 
 
@@ -210,9 +237,15 @@ class CIBAClient:
         """
         assert self.http is not None  # guaranteed by __post_init__
 
+        # IS resolves ``user@something`` as "user in tenant something" — so an
+        # email-style sub (e.g. employee_user@example.com) must be reduced to the
+        # bare username, else IS rejects CIBA as a "federated user". UUID / bare
+        # usernames pass through unchanged.
+        effective_login_hint = _normalize_login_hint(login_hint)
+
         form_data: dict[str, str] = {
             "scope": scope,
-            "login_hint": login_hint,
+            "login_hint": effective_login_hint,
             "binding_message": binding_message,
             "actor_token": actor_token,
             "actor_token_type": "urn:ietf:params:oauth:token-type:access_token",
@@ -222,7 +255,8 @@ class CIBAClient:
             form_data["resource"] = resource
 
         logger.debug(
-            "ciba_initiate | login_hint=%s scope=%s channel=%s",
+            "ciba_initiate | login_hint=%s (from sub=%s) scope=%s channel=%s",
+            effective_login_hint,
             login_hint,
             scope,
             self.config.notification_channel,
