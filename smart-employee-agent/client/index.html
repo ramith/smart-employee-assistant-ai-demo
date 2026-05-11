@@ -46,7 +46,7 @@
     <!-- Header -->
     <header id="app-header">
       <div class="header-left">
-        <span class="product-name">Smart Employee Assistant</span>
+        <button type="button" id="product-name-home" class="product-name-btn" title="Back to assistant">Smart Employee Assistant</button>
       </div>
       <div class="header-right">
         <!-- Connection status indicator -->
@@ -60,8 +60,8 @@
         <!-- User identity + sign-out -->
         <span class="user-display" id="user-display-name"></span>
         <!-- Sprint 4 S4.4: Reports nav, gated on hr_approve_rest scope -->
-        <button class="btn-ghost btn-sm" id="reports-nav-btn" hidden>Reports</button>
-        <button class="btn-ghost btn-sm" id="home-nav-btn" hidden>Home</button>
+        <button class="nav-btn" id="reports-nav-btn" hidden>Reports →</button>
+        <button class="nav-btn" id="home-nav-btn" hidden>← Home</button>
         <button
           class="btn-ghost btn-sm trace-toggle"
           id="trace-toggle-btn"

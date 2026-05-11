@@ -100,26 +100,57 @@ _SEED_USERS = [
 ]
 
 
+# A handful of pre-assigned cubicles so the UC-16 Cubicles report isn't
+# empty on a fresh start (mirrors how it_server seeds asset assignments).
+# C-027 is deliberately LEFT VACANT — it's the target of the UC-11 manual
+# walkthrough ("assign C-027 to jane.doe"); jane.doe is also unassigned so
+# that flow stays clean. cubicle_id → (username, email, sub).
+_SEED_CUBICLE_ASSIGNMENTS: Dict[str, tuple] = {
+    "C-005": ("employee_user", "employee.user@example.com", "2048ad8c-16a6-4ec1-bb63-b38300118f28"),
+    "C-030": ("hr_admin_user", "hr.admin.user@example.com", "15fab9e7-18ec-4f6b-be0f-7aa1ddcebfb7"),
+    "C-052": ("bob.smith", "bob.smith@example.com", "bob.smith-sub-uuid-0004"),
+}
+
+
 def _seed_cubicles() -> List[Dict]:
-    """Build the 100-cubicle seed (4 floors, 25 each, all initially vacant).
+    """Build the 100-cubicle seed (4 floors, 25 each).
 
     Distribution: floor 1 → C-001..C-025, floor 2 → C-026..C-050,
-    floor 3 → C-051..C-075, floor 4 → C-076..C-100.
+    floor 3 → C-051..C-075, floor 4 → C-076..C-100. A few are
+    pre-assigned per ``_SEED_CUBICLE_ASSIGNMENTS`` so the reporting
+    dashboard has rows out of the box; the rest are vacant.
     """
+    seeded_at = str(dt_date.today()) + "T00:00:00Z"
     rows: List[Dict] = []
     for n in range(1, 101):
         floor = ((n - 1) // 25) + 1
-        rows.append(
-            {
-                "cubicle_id": f"C-{n:03d}",
-                "floor": floor,
-                "occupied": False,
-                "assigned_to_username": None,
-                "assigned_to_email": None,
-                "assigned_to_sub": None,
-                "assigned_at": None,
-            }
-        )
+        cid = f"C-{n:03d}"
+        assignment = _SEED_CUBICLE_ASSIGNMENTS.get(cid)
+        if assignment:
+            uname, email, sub = assignment
+            rows.append(
+                {
+                    "cubicle_id": cid,
+                    "floor": floor,
+                    "occupied": True,
+                    "assigned_to_username": uname,
+                    "assigned_to_email": email,
+                    "assigned_to_sub": sub,
+                    "assigned_at": seeded_at,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "cubicle_id": cid,
+                    "floor": floor,
+                    "occupied": False,
+                    "assigned_to_username": None,
+                    "assigned_to_email": None,
+                    "assigned_to_sub": None,
+                    "assigned_at": None,
+                }
+            )
     return rows
 
 

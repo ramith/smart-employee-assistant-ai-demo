@@ -609,7 +609,9 @@ async def test_cubicle_summary_with_hr_read_rest(rsa_keypair, sign_token, hr_rea
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert data["floor_1"] == {"total": 25, "vacant": 25}
+    # Seed has C-005 (fl 1), C-030 (fl 2), C-052 (fl 3) pre-assigned;
+    # floor 4 fully vacant.
+    assert data["floor_1"] == {"total": 25, "vacant": 24}
     assert data["floor_4"] == {"total": 25, "vacant": 25}
 
 

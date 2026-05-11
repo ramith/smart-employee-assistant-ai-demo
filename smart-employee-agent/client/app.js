@@ -314,6 +314,16 @@ function wireStaticUI() {
   // Sign-in button
   $("signin-btn").addEventListener("click", signIn);
 
+  // Sprint 4: clicking the product name returns to the main (chat) view —
+  // the universal "go home" affordance. No-op when already on the home view.
+  const logoBtn = $("product-name-home");
+  if (logoBtn) {
+    logoBtn.addEventListener("click", () => {
+      const reportsView = $("reports-view");
+      if (reportsView && !reportsView.hidden) showHomeView();
+    });
+  }
+
   // Sign-out button — show confirmation dialog
   $("signout-btn").addEventListener("click", () => {
     const hasCiba = cibaState && ["AWAITING_APPROVAL", "VERIFYING", "WORKING"].includes(cibaState.widgetState);

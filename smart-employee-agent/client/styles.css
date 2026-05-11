@@ -226,11 +226,24 @@ textarea, input {
   gap: 0.5rem;
 }
 
-.product-name {
+.product-name,
+.product-name-btn {
   font-size: 1rem;
   font-weight: 700;
   color: var(--text);
   letter-spacing: -0.01em;
+}
+
+/* Clickable logo — universal "go home" affordance. */
+.product-name-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.product-name-btn:hover {
+  color: var(--primary);
 }
 
 .header-right {
@@ -898,6 +911,23 @@ textarea, input {
   color: var(--text);
 }
 
+/* Header view-toggle (Reports ↔ Home) — more prominent than btn-ghost. */
+.nav-btn {
+  appearance: none;
+  border: 1px solid var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: var(--radius-sm);
+  padding: 0.32rem 0.7rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.nav-btn:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
 .btn-sm {
   padding: 0.3rem 0.65rem;
   font-size: 0.8rem;
@@ -947,7 +977,7 @@ textarea, input {
 /* ── Responsive ─────────────────────────────────────────────────────────────── */
 
 @media (max-width: 600px) {
-  .product-name { font-size: 0.9rem; }
+  .product-name, .product-name-btn { font-size: 0.9rem; }
   .user-display { display: none; }
   .conn-label   { display: none; }
   .chat-transcript { padding: 0.9rem; }

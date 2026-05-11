@@ -86,8 +86,13 @@ def test_cubicles_seed_has_100_rows_across_4_floors() -> None:
     for floor in range(1, 5):
         rows = [r for r in _store.cubicles if r["floor"] == floor]
         assert len(rows) == 25
-    # All initially vacant.
-    assert all(not r["occupied"] for r in _store.cubicles)
+    # 3 pre-assigned in the seed (C-005, C-030, C-052); the rest vacant.
+    occupied = [r for r in _store.cubicles if r["occupied"]]
+    assert {r["cubicle_id"] for r in occupied} == {"C-005", "C-030", "C-052"}
+    assert len(_store.cubicles) - len(occupied) == 97
+    # C-027 (UC-11 walkthrough target) must be vacant.
+    c027 = next(r for r in _store.cubicles if r["cubicle_id"] == "C-027")
+    assert not c027["occupied"]
     # IDs are C-001 .. C-100.
     ids = [r["cubicle_id"] for r in _store.cubicles]
     assert ids[0] == "C-001"
@@ -100,11 +105,14 @@ def test_cubicles_seed_has_100_rows_across_4_floors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_summary_aggregates_per_floor_initially_all_vacant() -> None:
+async def test_summary_aggregates_per_floor_with_seed_assignments() -> None:
     summary = await _svc.get_cubicle_summary()
     assert set(summary.keys()) == {"floor_1", "floor_2", "floor_3", "floor_4"}
-    for k, v in summary.items():
-        assert v == {"total": 25, "vacant": 25}, f"unexpected {k}={v}"
+    # Seed: C-005 (floor 1), C-030 (floor 2), C-052 (floor 3) pre-assigned.
+    assert summary["floor_1"] == {"total": 25, "vacant": 24}
+    assert summary["floor_2"] == {"total": 25, "vacant": 24}
+    assert summary["floor_3"] == {"total": 25, "vacant": 24}
+    assert summary["floor_4"] == {"total": 25, "vacant": 25}
 
 
 # ---------------------------------------------------------------------------
@@ -113,13 +121,16 @@ async def test_summary_aggregates_per_floor_initially_all_vacant() -> None:
 
 
 @pytest.mark.asyncio
-async def test_vacant_floor_2_returns_25_ids() -> None:
+async def test_vacant_floor_2_returns_24_ids() -> None:
     result = await _svc.get_vacant_cubicles_on_floor(2)
     assert result["floor"] == 2
     assert "error" not in result
-    assert len(result["vacant"]) == 25
+    # C-030 is pre-assigned in the seed → 24 vacant on floor 2.
+    assert len(result["vacant"]) == 24
     assert "C-026" in result["vacant"]
     assert "C-050" in result["vacant"]
+    assert "C-027" in result["vacant"]   # UC-11 walkthrough target
+    assert "C-030" not in result["vacant"]
 
 
 # ---------------------------------------------------------------------------
@@ -307,10 +318,12 @@ async def test_get_all_cubicle_assignments_never_returns_sub() -> None:
         sub="jane-internal-sub",
     )
     rows = await _svc.get_all_cubicle_assignments()
-    assert len(rows) == 1
-    row = rows[0]
-    assert "sub" not in row
-    assert "assigned_to_sub" not in row
-    assert row["username"] == "jane.doe"
-    assert row["cubicle_id"] == "C-027"
-    assert row["floor"] == 2
+    # 3 seed assignments + the one just added = 4.
+    assert len(rows) == 4
+    for row in rows:
+        assert "sub" not in row
+        assert "assigned_to_sub" not in row
+        assert {"username", "email", "cubicle_id", "floor", "assigned_at"} <= set(row.keys())
+    jane_row = next(r for r in rows if r["username"] == "jane.doe")
+    assert jane_row["cubicle_id"] == "C-027"
+    assert jane_row["floor"] == 2

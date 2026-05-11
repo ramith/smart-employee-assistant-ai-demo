@@ -162,7 +162,8 @@ def test_cubicle_assignments_happy_path_returns_envelope_without_sub() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert set(body.keys()) == {"data", "count"}
-    assert body["count"] == 2
+    # 3 seed assignments (C-005, C-030, C-052) + the 2 this test appended.
+    assert body["count"] == 5
     # Identity surface lock: username + email only; sub never returned.
     for row in body["data"]:
         assert {"username", "email", "cubicle_id", "floor", "assigned_at"} <= set(row.keys())
@@ -170,7 +171,7 @@ def test_cubicle_assignments_happy_path_returns_envelope_without_sub() -> None:
         assert "assigned_to_sub" not in row
         assert "employee_id" not in row
     cubicles_returned = sorted(r["cubicle_id"] for r in body["data"])
-    assert cubicles_returned == ["C-001", "C-002"]
+    assert cubicles_returned == ["C-001", "C-002", "C-005", "C-030", "C-052"]
 
 
 # ---------------------------------------------------------------------------
