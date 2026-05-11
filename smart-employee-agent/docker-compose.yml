@@ -1,16 +1,19 @@
-# Compose topology for the Identity-First AI Agent Governance POC.
+# Compose topology for the Identity-First AI Agent Governance POC (v4).
 #
-# Sprint 0 state (this file):
-#   - hr_server, agent, client     ← existing services; still functional
-#   - orchestrator, hr_agent,
-#     it_agent, it_server          ← v3 scaffolds; /health-only until Sprint 1
+# Five services (Sprint 4):
+#   - orchestrator  : SPA host + chat router + CIBA fan-out + reports proxy
+#                     (http://localhost:8090; also 8123 loopback for the
+#                     BCL reverse-SSH tunnel)
+#   - hr_agent      : HR specialist; per-agent CIBA → hr_server MCP tools
+#   - it_agent      : IT specialist; per-agent CIBA → it_server MCP tools
+#   - hr_server     : HR MCP tools + REST (leave, cubicles, reports)
+#   - it_server     : IT MCP tools + REST (assets, reports)
 #
-# Sprint 1 will:
-#   - Wire orchestrator/hr_agent/it_agent/it_server with real logic
-#   - Reroute the SPA from `agent` to `orchestrator` (port 8080)
-#
-# Sprint 1 DoD: delete `agent/` service from this file; agent/ stays archived
-# in _archive/agent.before-v3/ + git tag pre-v3-orchestrator.
+# The pre-v4 `agent` (5001) and `client` (3001) services were removed in
+# Sprint 4 — the SPA is served by the orchestrator now. Reliable bring-up:
+#   ./scripts/demo-up.sh            # build (cached) + start + smoke
+#   ./scripts/demo-up.sh --clean    # down + no-cache rebuild + start + smoke
+#   ./scripts/demo-down.sh          # stop + remove containers
 
 networks:
   demo-net:
@@ -27,7 +30,7 @@ services:
     env_file:
       - ./hr_server/.env
     environment:
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:8090,http://127.0.0.1:8090}
       - HR_SERVER_HOST=0.0.0.0
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,hr_server"
       # Sprint 4 OQ-3: the REST endpoints (/api/me/leaves, /api/reports/*)
@@ -52,40 +55,11 @@ services:
     networks:
       - demo-net
 
-  agent:
-    build:
-      context: ./agent
-    ports:
-      - "5001:5001"
-    env_file:
-      - ./agent/.env
-    environment:
-      - HR_MCP_SERVER_URL=http://hr_server:8000/mcp
-      - AGENT_SERVER_HOST=0.0.0.0
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
-    depends_on:
-      hr_server:
-        condition: service_healthy
-    networks:
-      - demo-net
+  # NOTE: the Sprint-1 `agent` (port 5001) and `client` (port 3001) services
+  # were removed in Sprint 4 — they were a pre-v4 scaffold. The SPA is served
+  # by the `orchestrator` at http://localhost:8090; there is no separate
+  # client container. (Old containers can be cleared with `docker compose down`.)
 
-  client:
-    build:
-      context: ./client
-    ports:
-      - "${CLIENT_PORT:-3001}:3000"
-    env_file:
-      - ./client/.env
-    environment:
-      - AGENT_SERVER_URL=http://localhost:5001
-      - HR_SERVER_URL=http://localhost:8000
-      - REDIRECT_URI=${REDIRECT_URI:-http://localhost:3001/callback}
-    depends_on:
-      - agent
-    networks:
-      - demo-net
-
-  # ─── v3 scaffolds (Sprint 0 — /health-only) ────────────────────────────────
   orchestrator:
     build:
       context: .
@@ -103,7 +77,7 @@ services:
       - ./orchestrator/.env
     environment:
       - ORCHESTRATOR_HOST=0.0.0.0
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:8090,http://127.0.0.1:8090}
       - AGENT_CARDS_DIR=/app/agent_cards
       # Sprint 3 3A.2: shared secret + fan-out target URLs.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
@@ -205,7 +179,7 @@ services:
     env_file:
       - ./it_server/.env
     environment:
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3001,http://127.0.0.1:3001}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:8090,http://127.0.0.1:8090}
       - IT_SERVER_HOST=0.0.0.0
       - MCP_ALLOWED_HOSTS="127.0.0.1,localhost,it_server"
       # Sprint 4 OQ-3: REST endpoints (/api/reports/device-assignments)

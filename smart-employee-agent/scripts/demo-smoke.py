@@ -53,8 +53,9 @@ SERVICES: Final[list[ServiceSpec]] = [
     ServiceSpec("it_agent",     "http://localhost:8002/healthz"),
     ServiceSpec("hr_server",    "http://localhost:8000/healthz"),
     ServiceSpec("it_server",    "http://localhost:8004/healthz"),
-    # SPA: just check root responds (no /healthz on static server)
-    ServiceSpec("client (SPA)", "http://localhost:3001", expected_status=200),
+    # The SPA is served by the orchestrator (no separate `client` container
+    # since Sprint 4) — confirm the SPA root responds.
+    ServiceSpec("SPA root",     "http://localhost:8090/", expected_status=200),
 ]
 
 # Timeout per request in seconds
