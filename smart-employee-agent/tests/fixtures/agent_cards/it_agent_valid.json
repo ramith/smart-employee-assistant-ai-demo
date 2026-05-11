@@ -10,7 +10,7 @@
     {
       "id": "it.list_available_assets",
       "name": "List the available-device catalogue",
-      "description": "Return the catalogue of IT devices AVAILABLE to be issued to an employee, with how many of each are in stock; optionally filter by asset_type (one of: laptop, monitor, phone). Use this for questions about what hardware can be requested or issued: 'what laptops are available', 'show me the monitors', 'what equipment can I get', 'is there a spare phone'. This is the inventory — it is NOT the devices the user currently has (for that use it.get_my_assets), and it is NOT the act of issuing one (for that use it.issue_asset).",
+      "description": "Return the catalogue of IT devices AVAILABLE to be issued to an employee, with how many of each are in stock; optionally filter by asset_type (one of: laptop, monitor, phone). Use this for questions about what hardware can be requested or issued: 'what laptops are available', 'show me the monitors', 'what equipment can I get', 'is there a spare phone'. ALSO use it as the FIRST STEP of issuing a device when the HR admin named only a TYPE ('issue a laptop to jane.doe', 'give the new hire a phone') and not a specific catalogue id — show the catalogue (filtered by that type) so they can pick which one; the reply asks which one to issue and to whom. This is the inventory — it is NOT the devices the user currently has (for that use it.get_my_assets), and it is NOT itself the act of issuing one (for that use it.issue_asset once a specific id is named).",
       "scope": "it_assets_read_rest",
       "required_scopes": ["it_assets_read_rest"],
       "args": ["asset_type"]
@@ -26,7 +26,7 @@
     {
       "id": "it.issue_asset",
       "name": "Issue an IT device to an employee",
-      "description": "Assign (issue) a physical IT device — a laptop, monitor or phone from the asset catalogue — to an employee. HR Admin only; this is a write action. Needs asset_id (the device's catalogue id, e.g. MBP-14-001) and employee_id (the recipient's username). This is about hardware/equipment only — it has nothing to do with leave, time-off, cubicles, or HR records; do not use it for leave-related requests.",
+      "description": "Assign (issue) a physical IT device to an employee — the FINAL step of issuing a device. HR Admin only; this is a write action. Use ONLY when the message names BOTH a SPECIFIC catalogue id (e.g. MBP-14-001, MON-LG-001, PHN-IP15-001) AND a recipient ('issue MBP-14-001 to jane.doe', 'give MON-LG-001 to bob.smith'). If the HR admin only named a TYPE ('a laptop', 'a phone') and not a specific id, use it.list_available_assets FIRST to show the options, then issue the one they pick — don't guess an id. Needs asset_id (the catalogue id) and employee_id (the recipient's username). This is about hardware/equipment only — nothing to do with leave, time-off, cubicles, or HR records.",
       "scope": "it_assets_write_rest",
       "required_scopes": ["it_assets_write_rest"],
       "args": ["asset_id", "employee_id"]

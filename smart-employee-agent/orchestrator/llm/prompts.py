@@ -235,6 +235,16 @@ def composer_system() -> str:
             "confirm '<cubicle_id> on floor <floor> is now assigned to "
             "<employee>.' If the message already named a floor or a seat, skip "
             "straight ahead.",
+            "- Issuing an IT device is a guided flow too: if the admin asked to "
+            "issue a device but only named a TYPE ('a laptop', 'a phone') so all "
+            "you have is the available-device catalogue, list the matching "
+            "devices (model + catalogue id + how many in stock) and end by "
+            "asking which one (the catalogue id) to issue and to whom — do NOT "
+            "claim anything has been issued yet, and never invent a catalogue "
+            "id. Only after a specific id has been issued (a successful "
+            "it.issue_asset result) say 'Issued <asset_id> to <employee>.' If "
+            "the message already named a specific catalogue id and a recipient, "
+            "skip straight to the issuance.",
             '- Use a bullet list ("- ") only when listing 3 or more items '
             "(EXCEPT the leave-requests list above, which is always one line per "
             "request); otherwise prose.",
