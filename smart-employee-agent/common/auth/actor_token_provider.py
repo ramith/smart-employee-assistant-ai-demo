@@ -249,8 +249,12 @@ class ActorTokenProvider:
         flow_id: str | None = authorize_body.get("flowId")
         next_step: dict = authorize_body.get("nextStep") or {}
         authenticators: list = next_step.get("authenticators") or []
+        _local_auth = next(
+            (a for a in authenticators if a.get("idp") == "LOCAL"),
+            authenticators[0] if authenticators else None,
+        )
         authenticator_id: str | None = (
-            authenticators[0].get("authenticatorId") if authenticators else None
+            _local_auth.get("authenticatorId") if _local_auth else None
         )
 
         if not flow_id or not authenticator_id:

@@ -51,7 +51,7 @@ Documented in `sprint-3-retro.md`. Highlights:
 
 This sprint shipped against an unreleased WSO2 IS RC (`wso2is-7.3.0` packaging path; release-candidate per `project_wso2is_is_release_candidate.md`). Three RC-specific accommodations are now part of the codebase, all behind small documented switches:
 
-- `scripts/set-bcl-url.sh` — sets `back_channel_logout_uri` on `orchestrator-mcp-client` via the Applications REST API because the modern Console UI doesn't expose the field for the MCP Client Application template.
+- `scripts/set-bcl-url.sh` — sets two logout-related fields on `orchestrator-mcp-client` via the Applications REST API because the modern Console UI doesn't expose either for the MCP Client Application template: (1) `backChannelLogoutUrl` (needed for admin-terminate BCL), and (2) ensures `callbackURLs` covers `http://localhost:8090/` via a `regexp=` pattern so IS accepts `post_logout_redirect_uri` at RP-initiated logout without returning `access_denied / Post logout URI does not match`. Script is idempotent (GET → merge → PUT). `check-is-config.py` Section 4b now FAILs if either URL is absent.
 - `bcl_receiver.validate_logout_token` — accepts absent `typ` header (RC emits BCL without it; spec REQUIRES `logout+jwt`). Soft-check; categorical separator is the events claim (#7).
 - SPA-side `binding_message` callout — visible regardless of whether IS surfaces it on the in-browser consent screen (RC behaviour unconfirmed).
 
