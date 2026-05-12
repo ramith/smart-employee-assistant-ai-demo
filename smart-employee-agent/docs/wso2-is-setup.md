@@ -99,6 +99,73 @@ Console → **Applications** → **+ New Application** → **Standard-Based Appl
 - Client ID → `ORCHESTRATOR_MCP_CLIENT_ID`
 - Client Secret → `ORCHESTRATOR_MCP_CLIENT_SECRET`
 
+**After creating the app — run `set-bcl-url.sh` (required, one-time):**
+
+> **Why:** The WSO2 IS 7.x Console UI does not expose two logout-related fields for the "MCP Client Application" template:
+> 1. **`backChannelLogoutUrl`** — the URL IS POSTs a `logout_token` to when an admin terminates a session.
+> 2. **`post_logout_redirect_uri` coverage** — IS validates `post_logout_redirect_uri` against `callbackURLs` at RP-initiated logout. The bare root `http://localhost:8090/` must be covered, but the GUI only shows the auth-code callback and has no separate "Post Logout Redirect URI" field. Without it, IS returns `oauthErrorCode=access_denied` / *"Post logout URI does not match with registered callback URI"*.
+>
+> Both are patched in a single idempotent script that does GET → merge → PUT on the Applications REST API.
+
+```bash
+IS_ADMIN_USER=admin IS_ADMIN_PASS='<your-admin-password>' \
+BCL_URL=http://localhost:8123/backchannel-logout \
+./scripts/set-bcl-url.sh
+```
+
+Expected output:
+```
+→ resolving application id for consumer key prefix=…
+→ application id: <uuid>
+→ fetching current OIDC config to merge…
+→ merging back_channel_logout_uri = …, post_logout_redirect_uri = http://localhost:8090/ …
+→ verifying via GET …
+✓ backChannelLogoutUrl = http://localhost:8123/backchannel-logout
+✓ callbackURLs covers post_logout_redirect_uri http://localhost:8090/
+```
+
+`check-is-config.py` Section 4b will FAIL if either URL is missing; run the script to fix.
+
+---
+
+**After creating the UAE Pass IDP — clear its OIDC logout endpoint (required):**
+
+> **Why:** When a user authenticates via the **UAE Pass** federated IDP, WSO2 IS records "UAE Pass" as the `AuthenticatedIdP`. On RP-initiated logout (`/oidc/logout?id_token_hint=...`), IS detects the federated IDP and tries to propagate the logout to UAE Pass by redirecting the browser to the `OIDCLogoutEPUrl` configured on the IDP. UAE Pass then redirects the browser back to `https://<IS_HOST>/commonauth?sessionDataKey=<newId>`. **But at that point IS has already cleaned up the auth context for the new `sessionDataKey`**, causing `NullPointerException: Cannot invoke "AuthenticationContext.isOrgApplicationLogin()" because "context" is null` in `DefaultRequestCoordinator` — which IS surfaces as `retry.do?crId=<id>`.
+>
+> The logout **does succeed** (IS clears the session — visible in `audit.log`), but the federated logout round-trip to UAE Pass NPEs and the user sees the IS error page instead of being redirected to `post_logout_redirect_uri`.
+>
+> **Fix:** clear `OIDCLogoutEPUrl` on the UAE Pass IDP. IS will still clear the local SSO session; it simply won't redirect the browser to the UAE Pass logout endpoint.
+
+```bash
+IDP_ID=$(curl -sk -u "admin:${IS_ADMIN_PASS}" \
+  "https://${IS_HOST}:9443/api/server/v1/identity-providers?filter=name+eq+UAE+Pass" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['identityProviders'][0]['id'])")
+echo "IDP id: $IDP_ID"
+
+# Fetch current config, clear OIDCLogoutEPUrl, PUT back
+curl -sk -u "admin:${IS_ADMIN_PASS}" \
+  "https://${IS_HOST}:9443/api/server/v1/identity-providers/${IDP_ID}/federated-authenticators/T3BlbklEQ29ubmVjdEF1dGhlbnRpY2F0b3I" \
+  | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+for p in doc['properties']:
+    if p['key'] == 'OIDCLogoutEPUrl':
+        p['value'] = ''
+print(json.dumps(doc))
+" | curl -sk -u "admin:${IS_ADMIN_PASS}" \
+     -X PUT -H 'Content-Type: application/json' \
+     -d @- \
+     "https://${IS_HOST}:9443/api/server/v1/identity-providers/${IDP_ID}/federated-authenticators/T3BlbklEQ29ubmVjdEF1dGhlbnRpY2F0b3I" \
+  | python3 -c "
+import json, sys
+doc = json.load(sys.stdin)
+v = next((p['value'] for p in doc['properties'] if p['key']=='OIDCLogoutEPUrl'), 'NOT FOUND')
+print('✓ OIDCLogoutEPUrl cleared' if v == '' else f'✗ still set: {v}')
+"
+```
+
+This is a one-time fix. The value for the staging environment was already cleared (2026-05-12). If the IS instance is rebuilt from scratch, this step must be repeated.
+
 ---
 
 ## 4. Step 3 — Create the 3 Agent identities

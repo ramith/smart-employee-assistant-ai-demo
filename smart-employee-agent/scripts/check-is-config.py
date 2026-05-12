@@ -18,7 +18,17 @@ Checks (in execution order):
     Section 3 — Mgmt API auth     admin creds work against /api-resources.
     Section 4 — OAuth Apps        all 4 client IDs from orchestrator/.env
                                   registered as Applications.
-    Section 4b — Subscriptions    orchestrator-mcp-client subscribed to HR+IT APIs.
+    Section 4b — Subscriptions    orchestrator-mcp-client subscribed to HR+IT APIs AND
+                                  Role Audience set to ORGANIZATION (so org-scoped roles
+                                  such as `employee` flow into Pattern C access tokens).
+                                  Also verifies OIDC inbound config:
+                                    • backChannelLogoutUrl is set (needed for admin-terminate).
+                                    • callbackURLs covers POST_LOGOUT_REDIRECT_URI (prevents
+                                      IS rejecting RP-initiated logout with access_denied /
+                                      "Post logout URI does not match with registered callback
+                                      URI"). Neither field is exposed in the Console UI for
+                                      the MCP Client Application template; both are patched via
+                                      scripts/set-bcl-url.sh.
     Section 4c — Agent subs       hr-agent/it-agent OAuth apps subscribed to ALL
                                   their API scopes (incl. hr_assets_write_rest).
     Section 4d — Agent auth       each agent's 4-value credential tuple actually
@@ -368,8 +378,12 @@ def check_applications(base_url: str, auth_hdr: str, expected_client_ids: dict[s
             bad(label, f"client_id '{client_id}' not registered as any application")
 
 
-def check_orchestrator_subscriptions(base_url: str, auth_hdr: str, mcp_client_id: str) -> None:
-    """Section 4b — verify orchestrator-mcp-client is subscribed to HR + IT APIs.
+def check_orchestrator_subscriptions(
+    base_url: str, auth_hdr: str, mcp_client_id: str, post_logout_uri: str = "http://localhost:8090/"
+) -> None:
+    """Section 4b — verify orchestrator-mcp-client is subscribed to HR + IT APIs,
+    that its Role Audience is ORGANIZATION, and that its callbackURLs cover
+    the post_logout_redirect_uri.
 
     The SPA's Pattern C login authorize URL requests business scopes; IS will
     strip them unless the OAuth app is subscribed to the API resources that
@@ -377,8 +391,25 @@ def check_orchestrator_subscriptions(base_url: str, auth_hdr: str, mcp_client_id
     token-A only carries `openid profile email` — Reports nav stays hidden,
     My Leaves panel can't load, reports proxy returns 403 on pre-flight.
 
+    Even with subscriptions present, token-A will be under-scoped if the app's
+    Role Audience is set to APPLICATION.  Business scopes are bound to the
+    `employee` and `HR Admin` roles, which are ORGANIZATION-audience roles.
+    When allowedAudience = APPLICATION, IS cannot map those org-level roles to
+    the requested scopes, so it silently omits them from the token.
+
+    IS also validates post_logout_redirect_uri against callbackURLs at
+    RP-initiated logout.  If the URI isn't covered, IS returns
+    oauthErrorCode=access_denied / "Post logout URI does not match with
+    registered callback URI."  The MCP Client Application template exposes no
+    GUI field for this; callbackURLs must be patched via set-bcl-url.sh.
+
     Subscribed via Console → Applications → orchestrator-mcp-client →
     Authorization tab → "+ Authorize resource".
+    Role Audience via Console → Applications → orchestrator-mcp-client →
+    Roles tab → Role Audience → Organization → Update.
+    callbackURLs / BCL URL via:
+        IS_ADMIN_USER=admin IS_ADMIN_PASS=... BCL_URL=http://localhost:8123/backchannel-logout \\
+            ./scripts/set-bcl-url.sh
     """
     hdr("Section 4b — orchestrator-mcp-client API subscriptions")
     if not mcp_client_id:
@@ -454,6 +485,107 @@ def check_orchestrator_subscriptions(base_url: str, auth_hdr: str, mcp_client_id
             f"missing: {sorted(it_missing)} — add via Console → orchestrator-mcp-client → "
             f"Authorization → IT API → tick the scope(s).",
         )
+
+    # Role Audience — must be ORGANIZATION so that org-scoped roles (employee,
+    # HR Admin) are visible to the app and their bound scopes flow into
+    # Pattern C access tokens.  If set to APPLICATION, IS silently omits the
+    # business scopes from token-A even when subscriptions are correct and the
+    # user has the right role.
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications/{app_id}",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        warn("role-audience", f"GET /applications/{app_id} returned {code} — cannot verify Role Audience")
+    else:
+        try:
+            app_doc = json.loads(body)
+        except Exception:
+            warn("role-audience", "invalid JSON from GET /applications/{app_id}")
+            app_doc = None
+        if app_doc is not None:
+            audience = (app_doc.get("associatedRoles") or {}).get("allowedAudience", "APPLICATION")
+            if audience.upper() == "ORGANIZATION":
+                ok("orchestrator-mcp-client Role Audience = ORGANIZATION (org-scoped roles flow into tokens)")
+            else:
+                bad(
+                    "role-audience",
+                    f"orchestrator-mcp-client Role Audience is '{audience}', expected 'ORGANIZATION'. "
+                    "Business scopes (hr_self_rest, it_assets_self_rest, …) are bound to org-audience "
+                    "roles (`employee`, `HR Admin`); with APPLICATION audience IS cannot see those roles "
+                    "and silently strips the scopes from Pattern C tokens, causing 403 on /api/me/* "
+                    "widget endpoints. Fix: Console → Applications → orchestrator-mcp-client → "
+                    "Roles tab → Role Audience → Organization → Update.",
+                )
+
+    # OIDC inbound config — check:
+    #   (a) backChannelLogoutUrl is set (needed for admin-terminate BCL).
+    #   (b) callbackURLs covers the post_logout_redirect_uri.
+    #
+    # Both are set by scripts/set-bcl-url.sh (GET → merge → PUT) because the
+    # WSO2 IS 7.x Console UI does not expose either field for the
+    # "MCP Client Application" template.
+    import re as _re
+
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications/{app_id}/inbound-protocols/oidc",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        warn("oidc-config", f"GET /inbound-protocols/oidc returned {code} — cannot verify logout URLs")
+    else:
+        try:
+            oidc = json.loads(body)
+        except Exception:
+            warn("oidc-config", "invalid JSON from GET /inbound-protocols/oidc")
+            oidc = None
+        if oidc is not None:
+            # (a) Back-channel logout URL.
+            bcl_url = (oidc.get("logout") or {}).get("backChannelLogoutUrl", "")
+            if bcl_url:
+                ok(f"orchestrator-mcp-client backChannelLogoutUrl = {bcl_url}")
+            else:
+                bad(
+                    "bcl-url",
+                    "orchestrator-mcp-client has no backChannelLogoutUrl — admin-terminate "
+                    "BCL will not fire. "
+                    "Fix: IS_ADMIN_USER=admin IS_ADMIN_PASS=... "
+                    "BCL_URL=http://localhost:8123/backchannel-logout "
+                    "./scripts/set-bcl-url.sh",
+                )
+
+            # (b) callbackURLs must cover post_logout_redirect_uri.
+            # IS stores regexp= entries when multiple URIs need to match.
+            callbacks = oidc.get("callbackURLs") or []
+
+            def _covered(uri: str) -> bool:
+                for entry in callbacks:
+                    if entry.startswith("regexp="):
+                        pattern = entry[len("regexp="):]
+                        try:
+                            if _re.fullmatch(pattern, uri):
+                                return True
+                        except _re.error:
+                            pass
+                    elif entry == uri:
+                        return True
+                return False
+
+            if _covered(post_logout_uri):
+                ok(f"orchestrator-mcp-client callbackURLs covers post_logout_redirect_uri ({post_logout_uri})")
+            else:
+                bad(
+                    "post-logout-uri",
+                    f"orchestrator-mcp-client callbackURLs does not cover '{post_logout_uri}'. "
+                    "IS returns oauthErrorCode=access_denied / "
+                    "'Post logout URI does not match with registered callback URI' "
+                    "when the SPA redirects to /oidc/logout. "
+                    "The MCP Client Application template has no GUI field for this. "
+                    "Fix: IS_ADMIN_USER=admin IS_ADMIN_PASS=... "
+                    f"BCL_URL=http://localhost:8123/backchannel-logout "
+                    f"POST_LOGOUT_URI={post_logout_uri} "
+                    "./scripts/set-bcl-url.sh",
+                )
 
 
 def _app_authorized_scopes_by_api(
@@ -603,7 +735,8 @@ def _appnative_auth_probe(
         return False, f"step 1 /oauth2/authorize → 200 but body is not JSON: {body[:200]}"
     flow_id = doc.get("flowId")
     authenticators = ((doc.get("nextStep") or {}).get("authenticators")) or []
-    authenticator_id = authenticators[0].get("authenticatorId") if authenticators else None
+    _local_auth = next((a for a in authenticators if a.get("idp") == "LOCAL"), authenticators[0] if authenticators else None)
+    authenticator_id = _local_auth.get("authenticatorId") if _local_auth else None
     if not flow_id or not authenticator_id:
         return False, f"step 1 /oauth2/authorize → 200 but flowId/authenticatorId absent: {body[:200]}"
 
@@ -1051,6 +1184,7 @@ def main(argv: list[str] | None = None) -> int:
     it_name = os.environ.get("IT_API_RESOURCE_NAME", "it_server-api")
 
     mcp_client_id = _resolved("ORCHESTRATOR_MCP_CLIENT_ID", env_file)
+    post_logout_uri = _resolved("POST_LOGOUT_REDIRECT_URI", env_file, "http://localhost:8090/")
 
     expected_client_ids = {
         "orchestrator-mcp-client": mcp_client_id,
@@ -1110,7 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     check_applications(base_url, auth_hdr, expected_client_ids)
-    check_orchestrator_subscriptions(base_url, auth_hdr, mcp_client_id)
+    check_orchestrator_subscriptions(base_url, auth_hdr, mcp_client_id, post_logout_uri)
     check_agent_app_subscriptions(
         base_url, auth_hdr,
         _resolved("HR_AGENT_OAUTH_CLIENT_ID", env_file),
