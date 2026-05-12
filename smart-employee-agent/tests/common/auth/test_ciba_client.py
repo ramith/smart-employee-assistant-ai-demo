@@ -755,48 +755,49 @@ class TestAcquireOboReturnShape:
         assert token.access_token == "obo-access-token"
 
 
-# ── _normalize_login_hint: email-style sub → bare username ────────────────────
+# ── login_hint is sent verbatim (S5.18 — IS Multi-Attribute Login resolves the email) ──
 
 
-class TestLoginHintNormalization:
+class TestLoginHintVerbatim:
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "raw,expected",
+        "hint",
         [
-            ("employee_user", "employee_user"),                       # bare username — unchanged
-            ("2048ad8c-16a6-4ec1-bb63-b38300118f28", "2048ad8c-16a6-4ec1-bb63-b38300118f28"),  # UUID — unchanged
-            ("employee_user@example.com", "employee_user"),           # email-style sub → username
-            ("hr_admin_user@example.com", "hr_admin_user"),
-            ("employee_user@carbon.super", "employee_user"),          # tenant-qualified → username (default tenant)
-            ("weird@thing", "weird@thing"),                            # no dot in "domain" — left alone
-            ("@example.com", "@example.com"),                          # empty local part — left alone
+            "employee_user@example.com",            # email sub — resolved by IS MAL
+            "sivanoly@wso2.com",                    # email sub, username != local-part
+            "Nesaratnam",                           # bare username
+            "2048ad8c-16a6-4ec1-bb63-b38300118f28",  # user-id UUID
         ],
     )
-    def test_normalize(self, raw: str, expected: str) -> None:
-        from common.auth.ciba_client import _normalize_login_hint  # type: ignore[attr-defined]
-        assert _normalize_login_hint(raw) == expected
-
-    @pytest.mark.asyncio
-    async def test_initiate_sends_normalized_login_hint(
-        self, httpx_mock: pytest_httpx.HTTPXMock
+    async def test_initiate_sends_login_hint_unchanged(
+        self, httpx_mock: pytest_httpx.HTTPXMock, hint: str
     ) -> None:
-        """initiate() called with an email-style sub must POST the bare username."""
+        """initiate() POSTs the login_hint exactly as given — no @domain stripping.
+
+        Since S5.18 IS resolves an email login_hint via Multi-Attribute Login
+        (and a UUID via its userid branch), so we no longer mangle the value.
+        """
         httpx_mock.add_response(method="POST", url=CIBA_URL, json=_ciba_success_body())
         client = _make_client(httpx_mock)
         await client.initiate(
             oauth_client_id=OAUTH_CLIENT_ID,
             oauth_client_secret=OAUTH_CLIENT_SECRET,
-            login_hint="employee_user@example.com",
+            login_hint=hint,
             binding_message=BINDING_MSG,
             actor_token=ACTOR_TOKEN,
         )
         await client.aclose()
 
         [request] = httpx_mock.get_requests()
-        body = request.content.decode()
-        assert "login_hint=employee_user" in body
-        # the @ (url-encoded %40) must NOT survive anywhere in the body's login_hint
-        assert "%40" not in body
-        assert "@example.com" not in body
+        # urllib.parse.parse_qs decodes %40 → @ so we compare the real value.
+        from urllib.parse import parse_qs
+        sent = parse_qs(request.content.decode())["login_hint"][0]
+        assert sent == hint
+
+    def test_normalize_helper_removed(self) -> None:
+        """The S5.9-era ``_normalize_login_hint`` workaround is gone (S5.18)."""
+        import common.auth.ciba_client as _mod
+        assert not hasattr(_mod, "_normalize_login_hint")
 
     @pytest.mark.asyncio
     async def test_initiate_passes_uuid_login_hint_through(

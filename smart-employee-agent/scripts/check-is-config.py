@@ -795,22 +795,12 @@ def check_user_attributes(base_url: str, auth_hdr: str) -> None:
             if (isinstance(e, dict) and e.get("value")) or (isinstance(e, str) and e)
         ]
         has_email = bool(email_vals)
+        _ = uname_bare  # (kept for log clarity; no longer compared to the email)
         if has_username and has_email:
-            ok(f"user '{username}' has userName + email set (claim source available)")
-            # S5.12: the agents derive the CIBA login_hint by stripping @domain
-            # off the email-form `sub`, so the userName MUST equal the email
-            # local-part or CIBA fails with the "federated user" error.
-            email_localparts = {str(v).split("@", 1)[0].lower() for v in email_vals}
-            if uname_bare.lower() not in email_localparts:
-                bad(
-                    f"user '{username}' login_hint alignment",
-                    f"userName '{uname_bare}' != any email local-part "
-                    f"{sorted(email_localparts)} — CIBA via chat will fail for this "
-                    f"user (see docs/architecture/identity-subject-mismatch.md §6). "
-                    f"Recreate the account with userName = the email local-part.",
-                )
-            else:
-                ok(f"user '{username}' userName matches email local-part (CIBA login_hint OK)")
+            # S5.18: the email IS the `sub` (and the CIBA `login_hint`), resolved
+            # to the local user by IS Multi-Attribute Login — userName no longer
+            # has to equal the email local-part. We only require: email is set.
+            ok(f"user '{username}' has userName + email set (sub/claim/login_hint source available)")
         else:
             missing = []
             if not has_username:
@@ -819,17 +809,26 @@ def check_user_attributes(base_url: str, auth_hdr: str) -> None:
                 missing.append("emails[].value")
             bad(
                 f"user '{username}' attributes",
-                f"missing: {', '.join(missing)} — set in Console → User Management → "
-                f"select user → Profile, then re-run.",
+                f"missing: {', '.join(missing)} — every demo user needs an email "
+                f"(it becomes the OIDC `sub` AND the CIBA `login_hint`). Set in "
+                f"Console → User Management → select user → Profile, then re-run.",
             )
 
     print()
     print(
-        f"  {_Y}note:{_R} Section 9 verifies the SCIM2 source attributes only. To "
-        "confirm the OAuth claim mapping into access tokens, sign in to the SPA "
-        "(Pattern C), then verify with: "
+        f"  {_Y}note:{_R} Section 9 verifies the SCIM2 source attributes only. Two "
+        "things it can't check from here:"
     )
-    print(f"    docker compose logs orchestrator | grep auth_exchange_success")
+    print(
+        "    1. Multi-Attribute Login must be ENABLED with the email claim "
+        "(Console → Login & Registration → Alternative Login Identifiers; allowed "
+        "list must include http://wso2.org/claims/emailaddress) — required so the "
+        "email `login_hint` resolves at CIBA. See docs/wso2-is-setup.md §5.6."
+    )
+    print(
+        "    2. The OAuth claim mapping into access tokens — sign in to the SPA "
+        "(Pattern C), then: docker compose logs orchestrator | grep auth_exchange_success"
+    )
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────

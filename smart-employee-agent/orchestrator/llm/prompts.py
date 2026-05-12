@@ -207,6 +207,10 @@ def composer_system() -> str:
             '"something went wrong".',
             "- For any other failure, give a brief, non-technical apology and (if "
             "useful) what the user could try.",
+            "- NEVER quote raw error text, HTTP status codes, JSON, identifier "
+            "strings, or internal/IdP wording from a failure reason — translate "
+            'the problem into plain language ("I couldn\'t start the approval '
+            'step just now — please try again"), not the verbatim message.',
             "- State only facts present in the tool outputs. Never invent request "
             "ids, balances, cubicle numbers, asset ids, or dates.",
             "- If a leave-policy result is present, list each leave type with its "

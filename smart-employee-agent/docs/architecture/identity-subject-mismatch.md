@@ -1,7 +1,7 @@
 # Identity subject mismatch — one user, two `sub` formats across the demo's OAuth apps
 
-**Status:** **RESOLVED (S5.12, 2026-05-11)** — Option A applied (IS-side: all OAuth apps assert `email` as the OIDC subject) + the app-side stopgap map (`user_key` / `_DEMO_USERNAME_TO_UUID`) and all hard-coded demo-user seed data removed.
-**First surfaced:** Sprint 5 (S5.9 — CIBA "federated user" error; S5.11 — leave applied via chat missing from "My Leaves")
+**Status:** **RESOLVED** — S5.12 (2026-05-11): Option A applied (IS-side: all OAuth apps assert `email` as the OIDC subject) + the app-side stopgap map (`user_key` / `_DEMO_USERNAME_TO_UUID`) and all hard-coded demo-user seed data removed. **S5.18 (2026-05-12): the CIBA `login_hint` leg's residual `username == email-local-part` assumption (§6) removed** — IS-side **Multi-Attribute Login** (email-address claim) now resolves the email `login_hint` directly, so the agents send the `sub` verbatim and the old `_normalize_login_hint` `@domain`-stripping workaround is deleted.
+**First surfaced:** Sprint 5 (S5.9 — CIBA "federated user" error; S5.11 — leave applied via chat missing from "My Leaves"; resurfaced S5.17-era for a real user whose username ≠ email local-part — fixed S5.18)
 
 ---
 
@@ -21,7 +21,7 @@ Net effect (before): for `employee_user`, `token-A.sub == "employee_user@example
 
 ## 3. The cascade of symptoms this caused
 
-1. **CIBA rejected the request — "external notification channel is not supported for federated users" (HTTP 400).** The agents pass the inbound token's `sub` as the CIBA `login_hint`; with `sub = employee_user@example.com`, IS's `login_hint` resolver reads `user@something` as *"user `employee_user` in tenant `example.com`"*, can't find that tenant, and bails out classifying it as a federated user.
+1. **CIBA rejected the request — "external notification channel is not supported for federated users" (HTTP 400).** The agents pass the inbound token's `sub` as the CIBA `login_hint`; with `sub = employee_user@example.com`, IS's `login_hint` resolver reads `user@something` as *"user `employee_user` in tenant `example.com`"*, can't find that tenant, and bails out classifying it as a federated user. *(S5.12's stopgap was to strip `@domain` → bare username; S5.18 removes that — see §6 — by enabling Multi-Attribute Login so IS resolves the email directly.)*
 2. **Leave applied via chat never appeared in the "My Leaves" widget.** `hr.apply_leave` (MCP tool) ran under **token-C** → leave stored under key `2048ad8c-…`; `GET /api/me/leaves` (SPA REST proxy) ran under **token-A** → read under key `employee_user@example.com` → found nothing. Same class hit leave **balance** and **cubicle** / **asset** lookups.
 
 ## 4. The fix — Option A (IS-side subject alignment)
@@ -33,7 +33,7 @@ Result: `token-A.sub == token-C.sub` for every user that has an `emailaddress` a
 ### What changed in code (S5.12)
 - Deleted `_DEMO_USERNAME_TO_UUID` + `_DEMO_UUIDS` + `user_key()` from `hr_server/service/store.py` and `it_server/service/store.py`; removed the `store.user_key(...)` calls in `hr_server/service/hr_service.py` (`get_my_leave_balance` / `get_my_leave_requests` / `apply_leave` / `get_my_cubicle`) and `it_server`'s `lookup_user_by_sub` (now `users.get(sub)`).
 - **Removed all hard-coded demo-user seed data** (`_SEED_USERS`, `_SEED_CUBICLE_ASSIGNMENTS`, the user-assigned `_SEED_ASSETS` rows). Cubicles start all-vacant; the asset store starts empty. The demo no longer assumes a fixed roster — it runs against whatever IS users sign in. `ensure_user(sub, first_name, last_name, *, username=None, email=None)` now persists the `username`/`email` profile claims (the REST auth path carries them from token-A; OBO/CIBA tool calls — token-C — pass only `sub` and reuse whatever record the REST path created), which is what lets `lookup_employee` and the report username→email joins resolve real users without a seed. Both REST `_authenticate` paths (`hr_server`, `it_server`) now call `ensure_user` with the token's profile claims.
-- `common/auth/ciba_client.py::_normalize_login_hint` kept (still needed — see §6) and hardened: only strips `localpart@dns.domain` when the local-part matches `^[A-Za-z0-9._%+\-]+$`; logs at INFO when it normalises; **deliberately does NOT fail-closed on foreign domains** (a live demo user `shammi0107@gmail.com` must be stripped to `shammi0107`).
+- `common/auth/ciba_client.py::_normalize_login_hint` was kept as a stopgap (only strips `localpart@dns.domain` when the local-part matches `^[A-Za-z0-9._%+\-]+$`). **Removed in S5.18** — see §6: the agents now send the `sub` to CIBA verbatim.
 
 ## 5. The dual-purpose-agent-app caveat — verified safe
 
@@ -44,15 +44,19 @@ The agent OAuth apps mint **both** the user's CIBA/OBO token (token-C) **and** t
 
 (Not pursued — Spike "G" / a `user_id` access-token claim: app-level user attributes are ID-token-only per the IS Console; getting an extra claim into the *access token* would need a `deployment.toml` change. Not needed, since A works.)
 
-## 6. Known limitation — `login_hint` and the username↔email-local-part assumption
+## 6. The `login_hint` leg — RESOLVED in S5.18 via Multi-Attribute Login
 
-The agents turn the inbound token's `sub` (now an email) into a CIBA `login_hint` by stripping the `@domain` → bare username (`_normalize_login_hint`). WSO2 IS then resolves that as a local username (or accepts a user-id UUID). **This assumes the IS username equals the email's local-part.** Holds for the seeded-style accounts (`employee_user` ↔ `employee_user@example.com`) and for live demo accounts **as long as they're created with `username` = the email local-part** — the operator controls both username and email when creating demo-day accounts (`shammi0107@gmail.com` → username `shammi0107`). If a user's username differs from their email local-part, CIBA for that user fails with the *federated user* 400.
+**Was a known limitation (S5.12 → S5.17):** the agents turned the inbound token's `sub` (an email) into a CIBA `login_hint` by stripping `@domain` → bare username (`_normalize_login_hint`), which assumed *IS username == email local-part*. That broke for a real user whose username differed (`Nesaratnam`, email `sivanoly@wso2.com`) → IS resolver missed → "external notification channel is not supported for federated users" 400.
 
-The fully-generic fix (the "Option B" we costed but did not build): give a component the `internal_user_mgt_list` scope and resolve `email → {userName, userid}` via `GET /scim2/Users?filter=emails eq "<email>"` (cached), then feed the UUID to CIBA as `login_hint`. Deliberately out of scope for the POC — a confirmed `/scim2/Me` probe with a plain user token returns `403`, so it requires an IS-side scope grant + an admin-ish credential in a service. Documented here so it's a known follow-up, not a surprise.
+**Fixed (S5.18):**
+- **IS side:** enable **Multi-Attribute Login** for the email-address claim — Console → *Login & Registration → Alternative Login Identifiers* → ☑ Enabled, *Allowed Attribute List* = `http://wso2.org/claims/username,http://wso2.org/claims/emailaddress` → Update. (See `docs/wso2-is-setup.md`.) WSO2 IS's `DefaultCibaUserResolver` checks the multi-attribute-login service **first** (before `isExistingUser` / `isExistingUserWithID`), so a `login_hint` that is the user's email now resolves to the local user regardless of what their username is. (Uniqueness validation on the email claim is *recommended* but not required for the demo.)
+- **Code side:** `common/auth/ciba_client.py` — `_normalize_login_hint` (and its regex / the `re` import) deleted; `initiate()` now POSTs `login_hint = <the inbound token's sub>` unchanged. An email `sub` is resolved by MAL; a bare-UUID `sub` (a user with no `emailaddress` attribute) is still resolved by IS's userid branch. The only remaining prerequisite — "the user has an `emailaddress` attribute" — is already required by §4 (it's what makes the email-form `sub` happen in the first place), so this adds no new fragility.
+
+*Rejected alternatives (researched S5.18):* `id_token_hint` on `/oauth2/ciba` — IS accepts it but just extracts `sub` and treats it as the `login_hint`, so with our email-form `sub` it's the identical failure. `login_hint_token` — hard-unsupported by IS. SCIM2 `email → {userName, userid}` lookup (the old "Option B") — works, but needs a privileged m2m credential with `internal_user_mgt_list` + a cache + ~5 files; not worth it once MAL is on. Custom `CibaUserResolver` OSGi bundle — too much maintenance/version risk.
 
 ## 7. How to diagnose recurrences
 
 When any *per-user data keying* bug appears ("I did X via the agent but the sidebar doesn't show it") **or** a CIBA `login_hint`/"federated user" error appears:
 - Decode token-A (the orchestrator session token) and token-C (the OBO token in the MCP server logs) for the same person and compare `sub`. They should be **identical** now. If they differ, an agent OAuth app's "Assign alternate subject identifier → Email" toggle has been lost (re-check `hr-agent` / `it-agent` in the Console), or the user has no `emailaddress` attribute (one falls back to UUID, the other might not — set the attribute).
-- For a "federated user" 400 on `/oauth2/ciba`: check the user's IS `username` equals their email's local-part (§6).
-- There is no `user_key` shim and no demo-user seed anymore — don't look for one.
+- For a "federated user" 400 on `/oauth2/ciba` (`external notification channel is not supported for federated users`): check that **Multi-Attribute Login** is still enabled on the IS tenant with `http://wso2.org/claims/emailaddress` in the allowed list (§6), and that the user actually has an `emailaddress` attribute. (Pre-S5.18 this was a `username == email-local-part` mismatch; that coupling no longer exists.)
+- There is no `user_key` shim, no demo-user seed, and no `_normalize_login_hint` anymore — don't look for one.

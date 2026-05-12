@@ -56,7 +56,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
@@ -83,52 +82,20 @@ def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
-# A login_hint local-part we're willing to send IS verbatim as a username.
-# Deliberately conservative: ASCII letters/digits and the few punctuation chars
-# that occur in real usernames/email local-parts. Anything else (spaces,
-# control chars, ``@`` x2, …) is left untouched so IS rejects it cleanly rather
-# than us guessing.
-_LOGIN_HINT_LOCALPART_RE = re.compile(r"^[A-Za-z0-9._%+\-]+$")
-
-
-def _normalize_login_hint(value: str) -> str:
-    """Coerce a CIBA ``login_hint`` to a form WSO2 IS resolves to a *local* user.
-
-    Callers pass the inbound token's ``sub`` claim. Since S5.12 every OAuth app
-    asserts ``email`` as the OIDC subject, so for a user with an ``emailaddress``
-    attribute ``sub`` is ``localpart@domain`` (e.g. ``employee_user@example.com``,
-    or ``shammi0107@gmail.com`` for a live demo user); users without one fall
-    back to a user-id UUID. IS's ``login_hint`` resolver reads ``user@something``
-    as *"user ``user`` in tenant ``something``"* — so an email-shaped hint makes
-    IS look for a tenant ``example.com`` / ``gmail.com``, fail, and reject the
-    request with *"external notification channel is not supported for federated
-    users"*. WSO2 IS does, however, accept a bare username **or** a user-id UUID.
-
-    Rule: if ``value`` is ``localpart@domain`` with a plausible-username
-    ``localpart`` and a ``domain`` that looks like a DNS domain (contains a
-    ``.``), send just ``localpart``. UUIDs and bare usernames (no ``@``), odd
-    forms like ``weird@thing`` (no dot in the domain), and local-parts with
-    surprising characters pass through unchanged.
-
-    ASSUMPTION (documented in ``docs/architecture/identity-subject-mismatch.md``):
-    the IS *username* equals the email's local-part. This holds for the seeded
-    accounts (``employee_user`` ↔ ``employee_user@example.com``) and for live
-    demo accounts as long as they're created with ``username`` = the email
-    local-part (the operator controls both). If a user's username differs from
-    their email local-part, CIBA for that user will fail with the *federated
-    user* error — the generic fix would be a privileged SCIM2 ``emails eq``
-    lookup (the doc's "Option B"), deliberately out of scope here.
-    """
-    if "@" not in value:
-        return value
-    local, _, domain = value.partition("@")
-    if local and "." in domain and _LOGIN_HINT_LOCALPART_RE.match(local):
-        # INFO so it's visible that normalisation fired; log the bare local-part
-        # (the value actually sent to IS), not the full email, to keep INFO logs
-        # PII-light. The raw inbound sub is at DEBUG / in error details if needed.
-        logger.info("ciba_login_hint_normalized | to=%s", local)
-        return local
-    return value
+# NOTE on the CIBA ``login_hint`` (S5.18): callers pass the inbound token's
+# ``sub`` claim verbatim. Since S5.12 every OAuth app asserts ``email`` as the
+# OIDC subject, so for a user with an ``emailaddress`` attribute ``sub`` is the
+# email (``employee_user@example.com``, or ``sivanoly@wso2.com`` for a real
+# demo user); a user without one falls back to a user-id UUID. WSO2 IS's CIBA
+# user resolver (``DefaultCibaUserResolver``) tries, in order: a multi-attribute
+# login lookup → ``isExistingUser(hint)`` → ``isExistingUserWithID(hint)`` (UUID).
+# With **Multi-Attribute Login enabled for the email-address claim** (a tenant
+# setting — see ``docs/wso2-is-setup.md``) the email ``sub`` resolves directly
+# in step 1, regardless of what the user's username is; a UUID ``sub`` resolves
+# in step 3. So we send ``sub`` UNCHANGED — no ``@domain`` stripping (the old
+# ``_normalize_login_hint`` workaround assumed ``username == email-local-part``,
+# which is no longer required and was the cause of the recurring "federated
+# user" 400). Documented in ``docs/architecture/identity-subject-mismatch.md`` §6.
 
 
 # ── CIBARequest ───────────────────────────────────────────────────────────────
@@ -242,7 +209,10 @@ class CIBAClient:
         Args:
             oauth_client_id: The agent's OAuth Application client_id.
             oauth_client_secret: Corresponding client secret.
-            login_hint: User's ``sub`` UUID extracted from the inbound token-A.
+            login_hint: The user's ``sub`` claim from the inbound token-A —
+                an email (resolved by IS Multi-Attribute Login) or a user-id
+                UUID. Sent to IS verbatim (no ``@domain`` stripping; see the
+                module-level NOTE).
             binding_message: Pre-rendered consent string from
                 ``common.auth.binding_messages.render()`` (F-05).
             actor_token: The agent's own I4 token from ``ActorTokenProvider``.
@@ -259,15 +229,13 @@ class CIBAClient:
         """
         assert self.http is not None  # guaranteed by __post_init__
 
-        # IS resolves ``user@something`` as "user in tenant something" — so an
-        # email-style sub (e.g. employee_user@example.com) must be reduced to the
-        # bare username, else IS rejects CIBA as a "federated user". UUID / bare
-        # usernames pass through unchanged.
-        effective_login_hint = _normalize_login_hint(login_hint)
-
+        # S5.18: ``login_hint`` is the inbound token's ``sub`` sent verbatim —
+        # an email (resolved by IS Multi-Attribute Login) or a user-id UUID
+        # (resolved by IS's UUID branch). No ``@domain`` stripping. See the
+        # module-level NOTE above.
         form_data: dict[str, str] = {
             "scope": scope,
-            "login_hint": effective_login_hint,
+            "login_hint": login_hint,
             "binding_message": binding_message,
             "actor_token": actor_token,
             "actor_token_type": "urn:ietf:params:oauth:token-type:access_token",
@@ -277,8 +245,7 @@ class CIBAClient:
             form_data["resource"] = resource
 
         logger.debug(
-            "ciba_initiate | login_hint=%s (from sub=%s) scope=%s channel=%s",
-            effective_login_hint,
+            "ciba_initiate | login_hint=%s scope=%s channel=%s",
             login_hint,
             scope,
             self.config.notification_channel,
@@ -594,7 +561,8 @@ class CIBAClient:
         Args:
             oauth_client_id: Agent's OAuth Application client_id.
             oauth_client_secret: Corresponding client secret.
-            login_hint: User's ``sub`` UUID.
+            login_hint: The user's ``sub`` claim (an email, or a user-id UUID);
+                forwarded to :meth:`initiate` verbatim.
             binding_message: Pre-rendered consent string (F-05).
             actor_token: Agent's I4 token.
             scope: Space-separated scope string.
