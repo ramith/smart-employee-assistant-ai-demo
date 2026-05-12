@@ -21,6 +21,12 @@ Checks (in execution order):
     Section 4b — Subscriptions    orchestrator-mcp-client subscribed to HR+IT APIs.
     Section 4c — Agent subs       hr-agent/it-agent OAuth apps subscribed to ALL
                                   their API scopes (incl. hr_assets_write_rest).
+    Section 4d — Agent auth       each agent's 4-value credential tuple actually
+                                  authenticates via the App-Native 3-step flow
+                                  (the exact thing ActorTokenProvider does at
+                                  runtime — catches a stale/regenerated agent
+                                  secret, which surfaces to users as
+                                  "Sign-in is temporarily unavailable").
     Section 5 — API Resources     hr_server-api + it_server-api exist.
     Section 6 — Scopes            full Sprint 1-4 scope inventory present.
     Section 7 — Users (SCIM2)     the demo users (DEMO_USERS) exist.
@@ -63,6 +69,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import ssl
@@ -210,6 +217,34 @@ def http_post_form(
         return exc.code, exc.read().decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
         return 0, f"<network-error: {exc}>"
+
+
+def http_post_json(
+    url: str, *, payload: dict, headers: dict[str, str] | None = None, timeout: float = 15.0
+):
+    """POST a JSON body. Returns (status, body_text). Body is "" on connection failure."""
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(req, context=_SSL_CTX, timeout=timeout) as resp:
+            return resp.getcode(), resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        return 0, f"<network-error: {exc}>"
+
+
+# ─── PKCE (matches common/auth/actor_token_provider.py:_pkce_pair) ───────────
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """Return a fresh ``(verifier, S256-challenge)`` pair, padding stripped."""
+    verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
 
 
 # ─── .env sourcing ───────────────────────────────────────────────────────────
@@ -514,6 +549,167 @@ def check_agent_app_subscriptions(
                 f"missing: {sorted(missing)} — Console → Applications → the it-agent "
                 f"OAuth App → API Authorization → IT API → tick the scope(s).",
             )
+
+
+def _appnative_auth_probe(
+    base_url: str,
+    *,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    redirect_uri: str,
+    agent_id: str,
+    agent_secret: str,
+    scope: str = "openid internal_login",
+) -> tuple[bool, str]:
+    """Run the App-Native 3-step auth flow for one agent. Returns (ok, detail).
+
+    Mirrors ``common/auth/actor_token_provider.ActorTokenProvider._mint``:
+      1. POST /oauth2/authorize (Basic auth, form) → flowId + authenticatorId
+      2. POST /oauth2/authn   (JSON) → authorization code
+      3. POST /oauth2/token   (Basic auth, form, grant_type=authorization_code) → access_token
+
+    A failure at step 2 (HTTP 200 with no code) almost always means the agent
+    secret is stale — IS returns flowStatus=FAIL_INCOMPLETE / ABA-60003. We
+    surface that distinctly so the operator knows to regenerate + update .env.
+    """
+    verifier, challenge = _pkce_pair()
+    client_auth = {"Authorization": _basic_auth_header(oauth_client_id, oauth_client_secret)}
+
+    # ── Step 1: /oauth2/authorize ──────────────────────────────────────────
+    code, body = http_post_form(
+        f"{base_url}/oauth2/authorize",
+        data={
+            "client_id": oauth_client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "response_mode": "direct",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+        headers=client_auth,
+    )
+    if code != 200:
+        snippet = body[:200].replace("\n", " ")
+        hint = ""
+        if code in (401, 400) and ("client" in body.lower() or "unauthorized" in body.lower()):
+            hint = " — OAuth client_id/secret likely stale (App regenerated). Update *_AGENT_OAUTH_CLIENT_* in .env."
+        elif code in (400, 403) and "callback" in body.lower():
+            hint = f" — redirect_uri '{redirect_uri}' not registered on the agent's OAuth App."
+        return False, f"step 1 /oauth2/authorize → HTTP {code}: {snippet}{hint}"
+    try:
+        doc = json.loads(body)
+    except Exception:
+        return False, f"step 1 /oauth2/authorize → 200 but body is not JSON: {body[:200]}"
+    flow_id = doc.get("flowId")
+    authenticators = ((doc.get("nextStep") or {}).get("authenticators")) or []
+    authenticator_id = authenticators[0].get("authenticatorId") if authenticators else None
+    if not flow_id or not authenticator_id:
+        return False, f"step 1 /oauth2/authorize → 200 but flowId/authenticatorId absent: {body[:200]}"
+
+    # ── Step 2: /oauth2/authn ──────────────────────────────────────────────
+    code, body = http_post_json(
+        f"{base_url}/oauth2/authn",
+        payload={
+            "flowId": flow_id,
+            "selectedAuthenticator": {
+                "authenticatorId": authenticator_id,
+                "params": {"username": agent_id, "password": agent_secret},
+            },
+        },
+    )
+    if code != 200:
+        return False, f"step 2 /oauth2/authn → HTTP {code}: {body[:200]}"
+    try:
+        doc = json.loads(body)
+    except Exception:
+        return False, f"step 2 /oauth2/authn → 200 but body is not JSON: {body[:200]}"
+    auth_code = (doc.get("authData") or {}).get("code") or doc.get("code")
+    if not auth_code:
+        flow_status = doc.get("flowStatus", "UNKNOWN")
+        messages = (doc.get("nextStep") or {}).get("messages") or []
+        err_msgs = [
+            f"{m.get('messageId', '?')}: {m.get('message', '')}"
+            for m in messages
+            if isinstance(m, dict) and m.get("type") == "ERROR"
+        ]
+        is_cred_fail = flow_status in ("FAIL_INCOMPLETE", "INCOMPLETE", "FAIL") or any(
+            "ABA-60003" in m or "login.fail" in m for m in err_msgs
+        )
+        hint = (
+            " — agent authentication did not complete; the agent secret is most "
+            "likely stale (rotated by 'Regenerate' in IS Console, or the agent "
+            "was recreated). Update the agent's *_AGENT_SECRET in the service "
+            ".env and recreate the container."
+            if is_cred_fail else ""
+        )
+        return False, (
+            f"step 2 /oauth2/authn → flowStatus={flow_status}"
+            + (f" errors={err_msgs}" if err_msgs else "")
+            + hint
+        )
+
+    # ── Step 3: /oauth2/token ──────────────────────────────────────────────
+    code, body = http_post_form(
+        f"{base_url}/oauth2/token",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": oauth_client_id,
+            "code": auth_code,
+            "code_verifier": verifier,
+            "redirect_uri": redirect_uri,
+        },
+        headers=client_auth,
+    )
+    if code != 200:
+        return False, f"step 3 /oauth2/token → HTTP {code}: {body[:200]}"
+    try:
+        tok = json.loads(body)
+    except Exception:
+        return False, f"step 3 /oauth2/token → 200 but body is not JSON: {body[:200]}"
+    access_token = tok.get("access_token")
+    if not access_token:
+        return False, f"step 3 /oauth2/token → 200 but access_token absent: {body[:200]}"
+    expires_in = tok.get("expires_in", "?")
+    granted_scope = tok.get("scope", "")
+    return True, f"3-step App-Native auth OK (expires_in={expires_in}s, scope={granted_scope!r})"
+
+
+def check_agent_appnative_auth(base_url: str, agents: list[dict[str, str]]) -> None:
+    """Section 4d — verify each agent's 4-value credential tuple actually authenticates.
+
+    Section 4 only confirms the agent's OAuth App *exists*; it does not prove the
+    agent can mint its I4 actor-token. This section runs the same App-Native
+    3-step flow ``ActorTokenProvider`` runs at runtime. If the orchestrator-agent
+    leg fails here, Pattern C login's ``/auth/exchange`` returns 502 and the SPA
+    shows the generic "Sign-in is temporarily unavailable" — so this check is the
+    direct early-warning for that user-visible failure.
+    """
+    hdr("Section 4d — Agent App-Native authentication")
+    if not agents:
+        warn(
+            "agent auth",
+            "no agent credentials found (orchestrator/.env, hr_agent/.env, it_agent/.env) — skipping",
+        )
+        return
+    for a in agents:
+        label = a["label"]
+        missing = [k for k in ("agent_id", "agent_secret", "oauth_client_id", "oauth_client_secret") if not a.get(k)]
+        if missing:
+            warn(f"{label} auth", f"incomplete credentials in .env (missing: {missing}) — skipping")
+            continue
+        success, detail = _appnative_auth_probe(
+            base_url,
+            oauth_client_id=a["oauth_client_id"],
+            oauth_client_secret=a["oauth_client_secret"],
+            redirect_uri=a.get("redirect_uri") or "http://localhost:9999/agent-callback",
+            agent_id=a["agent_id"],
+            agent_secret=a["agent_secret"],
+        )
+        if success:
+            ok(f"{label} ({a['agent_id'][:8]}…): {detail}")
+        else:
+            bad(f"{label} auth", detail)
 
 
 def check_api_resources(
@@ -864,6 +1060,43 @@ def main(argv: list[str] | None = None) -> int:
     }
     expected_client_ids = {k: v for k, v in expected_client_ids.items() if v}
 
+    # Agent 4-value credentials live in each service's own .env (the orchestrator
+    # one for orchestrator-agent; hr_agent/.env and it_agent/.env for the rest).
+    # Section 4d authenticates whatever's available; missing files → that agent skipped.
+    hr_env = load_env_file(PROJECT_ROOT / "hr_agent" / ".env")
+    it_env = load_env_file(PROJECT_ROOT / "it_agent" / ".env")
+    agents = [
+        {
+            "label": "orchestrator-agent",
+            "agent_id": _resolved("ORCHESTRATOR_AGENT_ID", env_file),
+            "agent_secret": _resolved("ORCHESTRATOR_AGENT_SECRET", env_file),
+            "oauth_client_id": _resolved("ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID", env_file),
+            "oauth_client_secret": _resolved("ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET", env_file),
+            # Mirrors orchestrator/config.py: the agent's redirect_uri is the MCP client's.
+            "redirect_uri": _resolved(
+                "ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI", env_file, "http://localhost:8090/agent-callback"
+            ),
+        },
+        {
+            "label": "hr-agent",
+            "agent_id": _resolved("HR_AGENT_ID", hr_env),
+            "agent_secret": _resolved("HR_AGENT_SECRET", hr_env),
+            "oauth_client_id": _resolved("HR_AGENT_OAUTH_CLIENT_ID", hr_env),
+            "oauth_client_secret": _resolved("HR_AGENT_OAUTH_CLIENT_SECRET", hr_env),
+            "redirect_uri": _resolved("HR_AGENT_REDIRECT_URI", hr_env, "http://localhost:9999/agent-callback"),
+        },
+        {
+            "label": "it-agent",
+            "agent_id": _resolved("IT_AGENT_ID", it_env),
+            "agent_secret": _resolved("IT_AGENT_SECRET", it_env),
+            "oauth_client_id": _resolved("IT_AGENT_OAUTH_CLIENT_ID", it_env),
+            "oauth_client_secret": _resolved("IT_AGENT_OAUTH_CLIENT_SECRET", it_env),
+            "redirect_uri": _resolved("IT_AGENT_REDIRECT_URI", it_env, "http://localhost:9999/agent-callback"),
+        },
+    ]
+    # Drop agents with zero creds at all (e.g. that service's .env is absent).
+    agents = [a for a in agents if any(a.get(k) for k in ("agent_id", "agent_secret", "oauth_client_id", "oauth_client_secret"))]
+
     auth_hdr = _basic_auth_header(admin_user, admin_pass)
 
     print(f"{_B}IS system-readiness audit{_R}  ({base_url})")
@@ -883,6 +1116,7 @@ def main(argv: list[str] | None = None) -> int:
         _resolved("HR_AGENT_OAUTH_CLIENT_ID", env_file),
         _resolved("IT_AGENT_OAUTH_CLIENT_ID", env_file),
     )
+    check_agent_appnative_auth(base_url, agents)
     # API resources matched by display name OR identifier (operators use either).
     hr_specs = [hr_name, "HR API", "urn:hr:api"]
     it_specs = [it_name, "IT API", "urn:it:api"]
