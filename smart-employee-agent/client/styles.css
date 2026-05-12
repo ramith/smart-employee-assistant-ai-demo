@@ -19,6 +19,10 @@
   --border-strong: #c2c8cf;
   --border-muted:  #d8dee4;
 
+  /* UAE palette */
+  --uae-red:       #EF3F26;
+  --uae-green:     #00843D;
+
   /* Foreground */
   --text:          #1f2328;
   --text-muted:    #59636e;
@@ -125,20 +129,33 @@ textarea, input {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg);
-  border-top: 3px solid var(--border);
+  background: linear-gradient(160deg, #EF3F26 0%, #1a1a1a 50%, #00843D 100%);
 }
 
 .signin-box {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 2rem 2rem 1.75rem;
+  padding: 0 2rem 1.75rem;
   box-shadow: var(--shadow-lg);
-  max-width: 380px;
+  max-width: 400px;
   width: 90%;
   text-align: center;
+  overflow: hidden;
 }
+
+.signin-flag-bar {
+  display: flex;
+  height: 6px;
+  margin: 0 -3rem 2rem;
+}
+.signin-flag-bar span {
+  flex: 1;
+}
+.signin-flag-bar .flag-red   { background: #EF3F26; }
+.signin-flag-bar .flag-black { background: #1a1a1a; }
+.signin-flag-bar .flag-white { background: #e0e0e0; }
+.signin-flag-bar .flag-green { background: #00843D; }
 
 .signin-heading {
   font-size: 1.25rem;
@@ -227,7 +244,7 @@ textarea, input {
   /* Subtle warmth: a barely-there top-to-bottom lift instead of flat white. */
   background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
   border-bottom: 1px solid var(--border);
-  /* A faint lift so the header reads as "alive" above the content. */
+  border-top: 3px solid var(--uae-red);
   box-shadow: 0 1px 0 rgba(31, 35, 40, 0.04), 0 1px 3px rgba(31, 35, 40, 0.05);
   display: flex;
   align-items: center;

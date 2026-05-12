@@ -107,9 +107,12 @@ if [[ -z "${AUTOSSH_PID:-}" ]]; then
   hdr "Starting reverse SSH tunnel"
   info "autossh -M 0 -N -R ${TUNNEL_PORT}:localhost:${LISTENER_HOST_PORT} ${AWS_VM_USER}@${AWS_VM_HOST}"
   AUTOSSH_LOGFILE=".spike-bcl-autossh.log"
+  # Run autossh without -f: backgrounding via & lets the shell capture
+  # the PID directly. autossh -M 0 -f causes an immediate crash-loop on
+  # macOS because the -f daemonise path conflicts with ExitOnForwardFailure.
   AUTOSSH_GATETIME=0 \
   AUTOSSH_LOGFILE="$AUTOSSH_LOGFILE" \
-  autossh -M 0 -f -N \
+  autossh -M 0 -N \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \
@@ -117,10 +120,10 @@ if [[ -z "${AUTOSSH_PID:-}" ]]; then
     -o BatchMode=yes \
     "${SSH_KEY_OPT[@]}" \
     -R "${TUNNEL_PORT}:127.0.0.1:${LISTENER_HOST_PORT}" \
-    "${AWS_VM_USER}@${AWS_VM_HOST}"
+    "${AWS_VM_USER}@${AWS_VM_HOST}" \
+    >> "$AUTOSSH_LOGFILE" 2>&1 &
 
-  # Capture the autossh PID — it is the most recently spawned autossh.
-  AUTOSSH_PID="$(pgrep -n -f "autossh.*${AWS_VM_USER}@${AWS_VM_HOST}" || true)"
+  AUTOSSH_PID=$!
   if [[ -z "$AUTOSSH_PID" ]]; then
     fail "autossh did not start. See $AUTOSSH_LOGFILE."
     exit 1
