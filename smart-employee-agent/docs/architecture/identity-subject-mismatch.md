@@ -46,7 +46,7 @@ The agent OAuth apps mint **both** the user's CIBA/OBO token (token-C) **and** t
 
 ## 6. The `login_hint` leg — RESOLVED (S5.18 / S5.18.1)
 
-**Was a known limitation (S5.12 → S5.17):** the agents turned the inbound token's `sub` (an email) into a CIBA `login_hint` by stripping `@domain` → bare username (`_normalize_login_hint`), which assumed *IS username == email local-part*. That broke for a real user whose username differed (`Nesaratnam`, email `sivanoly@wso2.com`) → IS resolver missed → "external notification channel is not supported for federated users" 400.
+**Was a known limitation (S5.12 → S5.17):** the agents turned the inbound token's `sub` (an email) into a CIBA `login_hint` by stripping `@domain` → bare username (`_normalize_login_hint`), which assumed *IS username == email local-part*. That broke for any user whose IS username differed from their email's local-part → IS resolver missed → "external notification channel is not supported for federated users" 400.
 
 **Fix:**
 - **Code side (S5.18):** `common/auth/ciba_client.py` — `_normalize_login_hint` (and its regex / the `re` import) deleted; `initiate()` now POSTs `login_hint = <the inbound token's sub>` **unchanged** — no `@domain` mangling. (Also: a composer-prompt rule in `orchestrator/llm/prompts.py` forbidding the LLM from quoting raw error text/JSON/IdP wording — it had been leaking the verbatim "external notification channel" string into the chat.)

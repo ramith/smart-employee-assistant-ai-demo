@@ -755,7 +755,7 @@ class TestAcquireOboReturnShape:
         assert token.access_token == "obo-access-token"
 
 
-# ── login_hint is sent verbatim (S5.18 — IS Multi-Attribute Login resolves the email) ──
+# ── login_hint is sent verbatim (S5.18 — IS resolves the email as a local username) ──
 
 
 class TestLoginHintVerbatim:
@@ -763,9 +763,9 @@ class TestLoginHintVerbatim:
     @pytest.mark.parametrize(
         "hint",
         [
-            "employee_user@example.com",            # email sub — resolved by IS MAL
-            "sivanoly@wso2.com",                    # email sub, username != local-part
-            "Nesaratnam",                           # bare username
+            "employee@example.com",                 # email sub (== username, the convention)
+            "someone@example.org",                  # email sub whose local-part != username
+            "jdoe",                                 # bare username
             "2048ad8c-16a6-4ec1-bb63-b38300118f28",  # user-id UUID
         ],
     )
@@ -774,8 +774,9 @@ class TestLoginHintVerbatim:
     ) -> None:
         """initiate() POSTs the login_hint exactly as given — no @domain stripping.
 
-        Since S5.18 IS resolves an email login_hint via Multi-Attribute Login
-        (and a UUID via its userid branch), so we no longer mangle the value.
+        Since S5.18 the inbound token's ``sub`` goes to IS verbatim (IS resolves
+        an email login_hint as a local username; a UUID via its userid branch),
+        so we no longer mangle the value.
         """
         httpx_mock.add_response(method="POST", url=CIBA_URL, json=_ciba_success_body())
         client = _make_client(httpx_mock)
