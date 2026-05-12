@@ -82,20 +82,20 @@ def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
-# NOTE on the CIBA ``login_hint`` (S5.18): callers pass the inbound token's
-# ``sub`` claim verbatim. Since S5.12 every OAuth app asserts ``email`` as the
-# OIDC subject, so for a user with an ``emailaddress`` attribute ``sub`` is the
-# email (``employee_user@example.com``, or ``sivanoly@wso2.com`` for a real
-# demo user); a user without one falls back to a user-id UUID. WSO2 IS's CIBA
-# user resolver (``DefaultCibaUserResolver``) tries, in order: a multi-attribute
-# login lookup → ``isExistingUser(hint)`` → ``isExistingUserWithID(hint)`` (UUID).
-# With **Multi-Attribute Login enabled for the email-address claim** (a tenant
-# setting — see ``docs/wso2-is-setup.md``) the email ``sub`` resolves directly
-# in step 1, regardless of what the user's username is; a UUID ``sub`` resolves
-# in step 3. So we send ``sub`` UNCHANGED — no ``@domain`` stripping (the old
-# ``_normalize_login_hint`` workaround assumed ``username == email-local-part``,
-# which is no longer required and was the cause of the recurring "federated
-# user" 400). Documented in ``docs/architecture/identity-subject-mismatch.md`` §6.
+# NOTE on the CIBA ``login_hint`` (S5.18+): callers pass the inbound token's
+# ``sub`` claim verbatim — no munging. Since S5.12 every OAuth app asserts
+# ``email`` as the OIDC subject, so for a user with an ``emailaddress`` attribute
+# ``sub`` is that email (e.g. ``<user>@<domain>``); a user without one falls back
+# to a user-id UUID. WSO2 IS's CIBA user resolver (``DefaultCibaUserResolver``)
+# resolves a ``login_hint`` as, in order: a multi-attribute-login lookup →
+# ``isExistingUser(hint)`` → ``isExistingUserWithID(hint)`` (UUID). The demo
+# convention is **username == email** (``docs/wso2-is-setup.md`` §5.5), so an
+# email ``login_hint`` matches a plain local username directly; a UUID ``sub``
+# resolves via the UUID branch. (Multi-Attribute Login for the email claim also
+# works and is fine to leave on, but isn't required given that convention.) The
+# old ``_normalize_login_hint`` ``@domain``-stripping workaround — which assumed
+# ``username == email-local-part`` and was the cause of the recurring "federated
+# user" 400 — was removed in S5.18. See ``docs/architecture/identity-subject-mismatch.md`` §6.
 
 
 # ── CIBARequest ───────────────────────────────────────────────────────────────

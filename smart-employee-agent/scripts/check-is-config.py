@@ -23,7 +23,7 @@ Checks (in execution order):
                                   their API scopes (incl. hr_assets_write_rest).
     Section 5 — API Resources     hr_server-api + it_server-api exist.
     Section 6 — Scopes            full Sprint 1-4 scope inventory present.
-    Section 7 — Users (SCIM2)     employee_user + hr_admin_user exist.
+    Section 7 — Users (SCIM2)     the demo users (DEMO_USERS) exist.
     Section 8 — Roles (SCIM2 v2)  Employee + HR Admin exist.
     Section 9 — Token claims      sample access token carries username + email.
 
@@ -46,9 +46,6 @@ when present):
     ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID    sourced
     HR_AGENT_OAUTH_CLIENT_ID         sourced
     IT_AGENT_OAUTH_CLIENT_ID         sourced
-
-    DEMO_USERNAME                employee_user        # ROPC user for §9
-    DEMO_PASSWORD                NewsMax@1234         # per wso2-is-setup.md
 
     HR_API_RESOURCE_NAME         hr_server-api  (override if Console uses a different name)
     IT_API_RESOURCE_NAME         it_server-api
@@ -95,7 +92,9 @@ IT_SCOPES = {
     "it_assets_self_rest",  # Sprint 4 NEW
     "it_assets_write_rest",
 }
-DEMO_USERS = ["employee_user", "hr_admin_user"]
+# The demo accounts to check exist + carry an email attribute. Convention:
+# username == email (see docs/wso2-is-setup.md §5.5). Override per demo.
+DEMO_USERS = ["employee@example.com", "hradmin@example.com"]
 # Role names verified 2026-05-11 against live IS Console — note `employee`
 # is lowercase (deviates from the docs which say "Employee").
 DEMO_ROLES = ["employee", "HR Admin"]

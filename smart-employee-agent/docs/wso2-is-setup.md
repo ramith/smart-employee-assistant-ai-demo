@@ -196,40 +196,27 @@ Console → **Roles** → **+ New Role**
 | Role | Audience | Granted scopes |
 |---|---|---|
 | `HR Admin` | **Organization** | **All HR API scopes** (`hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`) **+ `it_assets_write_rest`**. Rationale: HR admins also take their own leave; they should be a superset of Employee for HR-domain operations. |
-| `Employee` | **Organization** | `hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`. Granted to `employee_user`. |
+| `Employee` | **Organization** | `hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`. Granted to `employee@example.com`. |
 
-The denial path tests (N30, N31, UC-08) still work cleanly: `employee_user` does NOT have `hr_approve_rest` or `it_assets_write_rest` in its role, so any CIBA request for those scopes fails — that's the security demo.
+The denial path tests (N30, N31, UC-08) still work cleanly: the Employee-role user does NOT have `hr_approve_rest` or `it_assets_write_rest` in its role, so any CIBA request for those scopes fails — that's the security demo.
 
-Console → **Users** → **+ Add User**:
+Console → **Users** → **+ Add User** — **username = email** for every user (see the box below):
 
-| Username | Email Address (required) | Password | Role |
+| Username | Email Address | Password | Role |
 |---|---|---|---|
-| `employee_user` | `employee_user@example.com` | `NewsMax@1234` | **Employee** (explicit role assignment) |
-| `hr_admin_user` | `hr_admin_user@example.com` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
-| `probe.user` | `probe.user@example.com` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in the demo) |
+| `employee@example.com` | `employee@example.com` | `NewsMax@1234` | **Employee** (explicit role assignment) |
+| `hradmin@example.com` | `hradmin@example.com` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
+| `probe.user@example.com` | `probe.user@example.com` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in the demo) |
 
-> **One hard requirement for every user that will sign in (including live demo-day accounts):**
-> **The user MUST have an `emailaddress` attribute.** With the OAuth apps set to email-subject (§4) the `sub` is that email — which is both the per-user data key (token-A == token-C) *and* the CIBA `login_hint` (resolved via Multi-Attribute Login — see §5.6). A user *without* an email falls back to the `userid` UUID — still self-consistent for keying, and IS still resolves a UUID `login_hint`, so it won't break, but set the email anyway.
+*(The exact local-parts don't matter — pick whatever you want for demo day. What matters is `username == email`. The names above are just the current demo set.)*
+
+> **The convention (S5.18.1): `username == email`.** Create every user with the IS **username set to their email address**, and the same value as the Email attribute. Rationale: the email is the OIDC `sub` (§4 — alternate subject = Email), so it's both the per-user data key (token-A == token-C) *and* the CIBA `login_hint`; making the *username* equal it too means `username == email == sub == login_hint` — one identifier, and the `login_hint` resolves directly as a plain username (no Multi-Attribute Login needed). For a user created *without* an email attribute, `sub` falls back to the `userid` UUID, which IS also resolves as a `login_hint` — still works, just not the recommended shape.
 >
-> *(S5.12→S5.17 also required `username == email-local-part`; **that constraint is gone as of S5.18** — Multi-Attribute Login (§5.6) makes IS resolve the email `login_hint` to whatever the user's actual username is.)*
+> *(History: S5.12→S5.17 used `username == email-local-part` and stripped `@domain` off the `login_hint`; S5.18 stopped stripping and tried IS Multi-Attribute Login; in practice the simplest, most robust shape for the demo turned out to be `username == email` — adopted S5.18.1. Multi-Attribute Login can be left on or off; with email-form usernames it's a no-op.)*
 >
 > There is **no** seeded demo roster — the demo runs against whatever users you create here; `lookup_employee` / the report username→email joins resolve them from the token's profile claims on first sign-in.
 
 Credentials captured in `scripts/probes/.test-users.env` (gitignored).
-
----
-
-## 5.6 Step 4.6 — Enable Multi-Attribute Login (email) — *required for CIBA*
-
-Console → **Login & Registration** → **Alternative Login Identifiers** (some builds: *Account Login* / *Login Identifier*):
-
-- Toggle **Enabled** on.
-- **Allowed Attribute List**: `http://wso2.org/claims/username,http://wso2.org/claims/emailaddress` (keep `username`; add the email claim).
-- **Update**.
-
-Why: each per-action CIBA call sends `login_hint = <the inbound token's sub>` = the user's **email**. WSO2 IS's CIBA user resolver (`DefaultCibaUserResolver`) checks the multi-attribute-login service **first**, so with the email claim in the allowed list it resolves that `login_hint` straight to the local user — *regardless of what their username is*. Without this, an email `login_hint` whose local-part isn't a username produces `external notification channel is not supported for federated users` (HTTP 400) and every write tool fails.
-
-(Optional: enabling **Uniqueness Validation** on the Email attribute — *Attributes → Email* — is good practice but not required for the demo. The orchestrator no longer mangles the `login_hint`; it sends the `sub` verbatim, so a bare-UUID `sub` for a user with no email attribute still resolves via IS's userid branch.)
 
 ---
 
@@ -378,7 +365,7 @@ CIBA grant not enabled on the agent's OAuth App's Protocol tab. Re-check Step 4.
 Notification Channel not set to External. Re-check Step 4.
 
 ### `"external notification channel is not supported for federated users"` from `/oauth2/ciba`
-IS couldn't resolve the `login_hint` (= the inbound token's `sub`, an email) to a local user. Most likely **Multi-Attribute Login is off / missing the email claim** — re-check Step 4.6 (allowed list must include `http://wso2.org/claims/emailaddress`). Also possible: the user has no `emailaddress` attribute (then `sub` is a UUID — that *should* still resolve), or an agent OAuth app lost its email-subject config (Step 4's User Attributes → Subject). Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md) §6.
+IS couldn't resolve the `login_hint` (= the inbound token's `sub`, an email) to a local user. The convention is **`username == email`** (§5.5) — check that the user's IS *username* is their full email address (not the bare local-part, not a UUID). If you're relying on Multi-Attribute Login instead of the email-form username, confirm it's enabled with `http://wso2.org/claims/emailaddress` in the allowed list (Console → Login & Registration → Alternative Login Identifiers). Also possible: an agent OAuth app lost its email-subject config (Step 4's User Attributes → Subject), so `sub` isn't actually the email. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md) §6.
 
 ### Leave applied via chat doesn't appear in "My Leaves" / a sidebar widget is empty after a chat action
 The per-user `sub` keying desynced — `hr-agent`/`it-agent` lost their **Subject = Email** config (Step 4, User Attributes → Subject), so token-C carries a UUID while token-A carries the email. Re-apply it. Also confirm the user has an `emailaddress` attribute. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md).

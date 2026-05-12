@@ -61,8 +61,8 @@ python3 scripts/demo-smoke.py --skip-chat-test || {
 echo
 echo "==> All services up."
 echo "    Browser:  http://localhost:8090"
-echo "    Sign in:  employee_user / NewsMax@1234     (Employee — sidebar self-service)"
-echo "              hr_admin_user / NewsMax@1234     (HR Admin — Reports page + cubicle assign)"
+echo "    Sign in:  employee@example.com / NewsMax@1234   (Employee — sidebar self-service)"
+echo "              hradmin@example.com  / NewsMax@1234   (HR Admin — Reports page + cubicle assign)"
 echo
 echo "    Demo queries (natural language — the LLM router extracts the args):"
 echo "      employee : \"How much annual leave do I have, and where's my cubicle?\""
