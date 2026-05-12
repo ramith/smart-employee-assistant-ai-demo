@@ -237,3 +237,59 @@ def test_issue_asset_uncatalogued_id_still_recorded() -> None:
     assert row["model"] == "AST-99999"  # falls back to the id
     assert row["status"] == "outstanding"
     assert _svc.get_my_assets("alice")["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# S6 — get_hardware_policy() accessor (Sprint 6)
+# ---------------------------------------------------------------------------
+
+
+def test_get_hardware_policy_returns_dict() -> None:
+    """get_hardware_policy() must return a plain dict (not the private constant)."""
+    policy = _store.get_hardware_policy()
+    assert isinstance(policy, dict)
+
+
+def test_get_hardware_policy_has_expected_top_level_keys() -> None:
+    """The six top-level keys defined in _SEED_HARDWARE_POLICY must all be present."""
+    policy = _store.get_hardware_policy()
+    expected_keys = {
+        "standard_allocation",
+        "role_overrides",
+        "remote_first",
+        "replacement_cycle",
+        "request_process",
+        "personal_device_policy",
+    }
+    assert expected_keys <= policy.keys(), (
+        f"Missing keys: {expected_keys - policy.keys()}"
+    )
+
+
+def test_get_hardware_policy_standard_laptop_is_m4_pro() -> None:
+    """Spot-check: standard laptop must mention M4 Pro (synced with _KB_HARDWARE_POLICY)."""
+    policy = _store.get_hardware_policy()
+    laptop = policy["standard_allocation"]["default_kit"]["laptop"]
+    assert "M4 Pro" in laptop, f"Expected 'M4 Pro' in standard laptop, got: {laptop!r}"
+
+
+def test_get_hardware_policy_standard_laptop_ram() -> None:
+    """Spot-check: standard laptop must have 24 GB RAM."""
+    policy = _store.get_hardware_policy()
+    laptop = policy["standard_allocation"]["default_kit"]["laptop"]
+    assert "24" in laptop, f"Expected '24' GB in standard laptop, got: {laptop!r}"
+
+
+def test_get_hardware_policy_returns_copy_not_original() -> None:
+    """Mutating the returned dict must not affect subsequent calls (copy semantics)."""
+    policy1 = _store.get_hardware_policy()
+    policy1["standard_allocation"] = "mutated"
+    policy2 = _store.get_hardware_policy()
+    assert policy2["standard_allocation"] != "mutated"
+
+
+def test_get_hardware_policy_replacement_cycle_laptop_3_years() -> None:
+    """Spot-check: laptop replacement cycle must be 3 years (KB sync assertion)."""
+    policy = _store.get_hardware_policy()
+    years = policy["replacement_cycle"]["laptop"]["years"]
+    assert years == 3, f"Expected laptop replacement cycle of 3 years, got: {years!r}"

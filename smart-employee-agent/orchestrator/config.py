@@ -196,6 +196,13 @@ class OrchestratorConfig:
     # Cookie (F-06)
     cookie_secure: bool = False
 
+    # S6 — public chat
+    # max user-message length enforced at Pydantic validation layer
+    public_chat_max_chars: int = 500
+    # shorter timeout for the unauthenticated public path (isolates it from the
+    # authenticated composer's budget)
+    public_chat_llm_timeout_s: float = 5.0
+
     # ── Convenience factories ──────────────────────────────────────────────────
 
     def is_client_config(self) -> WSO2ISClientConfig:
@@ -316,6 +323,11 @@ class OrchestratorConfig:
         gemini_api_key: str | None = env.get("GEMINI_API_KEY", "").strip() or None
         gemini_model = env.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
         llm_timeout_s = _parse_float(env.get("LLM_TIMEOUT_S", "8") or "8", "LLM_TIMEOUT_S", minimum=0.1)
+        public_chat_llm_timeout_s = _parse_float(
+            env.get("PUBLIC_CHAT_LLM_TIMEOUT_S", "5") or "5",
+            "PUBLIC_CHAT_LLM_TIMEOUT_S",
+            minimum=0.1,
+        )
         llm_max_output_tokens = _parse_positive_int(
             env.get("LLM_MAX_OUTPUT_TOKENS", "512") or "512", "LLM_MAX_OUTPUT_TOKENS"
         )
@@ -368,6 +380,7 @@ class OrchestratorConfig:
             gemini_api_key=gemini_api_key,
             gemini_model=gemini_model,
             llm_timeout_s=llm_timeout_s,
+            public_chat_llm_timeout_s=public_chat_llm_timeout_s,
             llm_max_output_tokens=llm_max_output_tokens,
             cookie_secure=cookie_secure,
         )

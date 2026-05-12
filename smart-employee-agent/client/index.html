@@ -19,30 +19,82 @@
 
   <!-- ── Sign-in page (shown when no session) ─────────────────────── -->
   <div id="signin-page" hidden>
-    <div class="signin-box">
-      <div class="signin-flag-bar" aria-hidden="true">
-        <span class="flag-red"></span>
-        <span class="flag-black"></span>
-        <span class="flag-white"></span>
-        <span class="flag-green"></span>
+    <!-- Single-column: sign-in box above, public info assistant below (collapsible) -->
+    <div class="signin-col">
+
+      <div class="signin-box">
+        <div class="signin-flag-bar" aria-hidden="true">
+          <span class="flag-red"></span>
+          <span class="flag-black"></span>
+          <span class="flag-white"></span>
+          <span class="flag-green"></span>
+        </div>
+        <h1 class="signin-heading">UAE Smart Employee Assistant</h1>
+        <p class="signin-subtitle">Sign in with UAE Pass to manage your leave, equipment, and team requests.</p>
+
+        <!-- Session notices (reason=session_expired / signed_out) -->
+        <div id="signin-notice" class="signin-notice" hidden></div>
+
+        <!-- Dev-only cert warning (collapsed by default) -->
+        <details class="cert-hint" id="cert-hint-details">
+          <summary>First time? Certificate notice</summary>
+          <p>Your browser may show a certificate warning for the development identity server. Choose "Advanced" then "Proceed".</p>
+        </details>
+
+        <button class="btn-primary signin-btn" id="signin-btn">Sign in</button>
+        <p class="signin-helper">You will be redirected to your identity provider.</p>
+
+        <!-- Error states -->
+        <div id="signin-error" class="signin-error" hidden></div>
       </div>
-      <h1 class="signin-heading">UAE Smart Employee Assistant</h1>
-      <p class="signin-subtitle">Sign in with UAE Pass to manage your leave, equipment, and team requests.</p>
 
-      <!-- Session notices (reason=session_expired / signed_out) -->
-      <div id="signin-notice" class="signin-notice" hidden></div>
+      <!-- Public Information Assistant — collapsible, no sign-in required -->
+      <div class="pia-widget" id="pia-widget"
+           role="complementary" aria-label="Public Information Assistant — no sign-in required">
+        <button class="pia-toggle" id="pia-toggle" type="button"
+                aria-expanded="false" aria-controls="pia-body">
+          <span class="pia-toggle-left">
+            <svg class="pia-toggle-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span class="pia-toggle-text">
+              <span class="pia-toggle-title">Public Information Assistant</span>
+              <span class="pia-toggle-subtitle">Holidays · Leave policy · Hardware</span>
+            </span>
+          </span>
+          <svg class="pia-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+               stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+        <div class="pia-body" id="pia-body">
+          <div class="public-chat-messages" id="public-chat-messages"
+               role="log" aria-live="polite"
+               aria-label="Public Information Assistant conversation"></div>
+          <form class="public-chat-form" id="public-chat-form" autocomplete="off">
+            <textarea
+              id="public-msg-input"
+              class="public-chat-input"
+              placeholder="Ask about holidays, leave or hardware…"
+              aria-label="Ask the Public Information Assistant"
+              rows="1"
+              maxlength="500"
+            ></textarea>
+            <button type="submit" class="public-chat-send" id="public-chat-send" aria-label="Send">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </form>
+          <p class="public-chat-footer">No sign-in required &middot; General info only</p>
+        </div>
+      </div>
 
-      <!-- Dev-only cert warning (collapsed by default) -->
-      <details class="cert-hint" id="cert-hint-details">
-        <summary>First time? Certificate notice</summary>
-        <p>Your browser may show a certificate warning for the development identity server. Choose "Advanced" then "Proceed".</p>
-      </details>
-
-      <button class="btn-primary signin-btn" id="signin-btn">Sign in</button>
-      <p class="signin-helper">You will be redirected to your identity provider.</p>
-
-      <!-- Error states -->
-      <div id="signin-error" class="signin-error" hidden></div>
     </div>
   </div>
 

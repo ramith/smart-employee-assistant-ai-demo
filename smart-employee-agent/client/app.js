@@ -382,6 +382,9 @@ function wireStaticUI() {
   $("service-banner-dismiss").addEventListener("click", () => {
     $("service-banner").hidden = true;
   });
+
+  // S6: public info chat widget (no-auth, sign-in page only)
+  if (typeof window.initPublicChat === "function") window.initPublicChat();
 }
 
 // ─── Auth: Sign-in ───────────────────────────────────────────────────────────
@@ -2352,3 +2355,145 @@ window.addEventListener("DOMContentLoaded", init);
 
 // Expose for inline onclick handlers that may exist
 window.app = { signIn };
+
+// ── Public info chat widget (Sprint 6 — unauthenticated) ─────────────────────
+// No auth dependency. Only touches #public-chat-* DOM elements.
+// Uses textContent throughout for XSS safety (F-6).
+// The server enforces max 500 chars; we mirror it client-side (F-3).
+
+(function () {
+  var _inited = false;
+  var _pending = false;
+  // In production the SPA is served from the orchestrator (same origin), so
+  // relative URLs are correct. In local dev the client server runs on port 3001
+  // while the orchestrator runs on 8080 — detect that case and use an absolute URL.
+  var ORCH = (window.location.port === "3001" || window.location.port === "3000")
+    ? "http://localhost:8080"
+    : "";
+  var MAX_CHARS = 500;
+  var WELCOME =
+    "Hi! I can answer general questions about UAE public holidays, " +
+    "leave policy, and hardware allocation. No sign-in required.";
+
+  function el(id) { return document.getElementById(id); }
+
+  function addMsg(role, text) {
+    var list = el("public-chat-messages");
+    if (!list) return;
+    var div = document.createElement("div");
+    div.className = "public-chat-msg public-chat-msg--" + role;
+    div.textContent = text; // textContent only — no innerHTML (F-6)
+    list.appendChild(div);
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function showTyping() {
+    var list = el("public-chat-messages");
+    if (!list) return;
+    var div = document.createElement("div");
+    div.className = "public-chat-typing";
+    div.id = "pc-typing";
+    div.innerHTML = "<span></span><span></span><span></span>"; // static markup, safe
+    list.appendChild(div);
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function removeTyping() {
+    var t = el("pc-typing");
+    if (t) t.remove();
+  }
+
+  function setSending(on) {
+    _pending = on;
+    var btn = el("public-chat-send");
+    var inp = el("public-msg-input");
+    if (btn) btn.disabled = on;
+    if (inp) inp.disabled = on;
+  }
+
+  function autoResize(inp) {
+    inp.style.height = "auto";
+    inp.style.height = Math.min(inp.scrollHeight, 80) + "px";
+  }
+
+  async function submit() {
+    if (_pending) return;
+    var inp = el("public-msg-input");
+    if (!inp) return;
+    var msg = inp.value.trim();
+    if (!msg) return;
+    if (msg.length > MAX_CHARS) {
+      addMsg("error", "Message too long (" + msg.length + "/" + MAX_CHARS + " chars). Please shorten it.");
+      return;
+    }
+    addMsg("user", msg);
+    inp.value = "";
+    autoResize(inp);
+    setSending(true);
+    showTyping();
+    try {
+      var resp = await fetch(ORCH + "/public/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg }),
+      });
+      removeTyping();
+      if (!resp.ok) {
+        addMsg("error", "Something went wrong (HTTP\u00a0" + resp.status + "). Please try again.");
+        return;
+      }
+      var data = await resp.json();
+      var reply = (data && typeof data.reply === "string" && data.reply.trim())
+        ? data.reply
+        : "Sorry, I couldn\u2019t get a response. Please try again.";
+      addMsg("bot", reply);
+    } catch (_e) {
+      removeTyping();
+      addMsg("error", "Network error. Check your connection and try again.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  window.initPublicChat = function () {
+    if (_inited) return;
+    _inited = true;
+
+    var form    = el("public-chat-form");
+    var inp     = el("public-msg-input");
+    var toggle  = el("pia-toggle");
+    var widget  = el("pia-widget");
+    var _welcomed = false;
+
+    if (!form || !inp) return;
+
+    inp.addEventListener("input", function () { autoResize(inp); });
+    inp.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    });
+    form.addEventListener("submit", function (e) { e.preventDefault(); submit(); });
+
+    // Toggle expand / collapse
+    if (toggle && widget) {
+      toggle.addEventListener("click", function () {
+        var open = widget.classList.toggle("pia-widget--open");
+        toggle.setAttribute("aria-expanded", String(open));
+        if (open) {
+          if (!_welcomed) {
+            _welcomed = true;
+            addMsg("bot", WELCOME);
+          }
+          setTimeout(function () { inp.focus(); }, 50);
+        }
+      });
+    }
+
+    // Escape key closes the widget (keyboard accessibility)
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && widget && widget.classList.contains("pia-widget--open")) {
+        widget.classList.remove("pia-widget--open");
+        if (toggle) { toggle.setAttribute("aria-expanded", "false"); toggle.focus(); }
+      }
+    });
+  };
+})();

@@ -81,6 +81,8 @@ from orchestrator.auth.bcl_receiver import (
 from orchestrator.auth.routes import AuthRouterDeps, build_auth_router
 from orchestrator.auth.session_store import SessionStore
 from orchestrator.chat.keyword_fallback import KeywordRouter
+from orchestrator.chat.public_handler import PublicInfoHandler
+from orchestrator.chat.public_routes import build_public_router
 from orchestrator.chat.routes import ChatRouterDeps, build_chat_router
 from orchestrator.config import OrchestratorConfig
 from orchestrator.events.sse_router import SseRouterDeps, build_sse_router
@@ -223,6 +225,7 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
                 model=cfg.gemini_model,
                 timeout_s=cfg.llm_timeout_s,
                 max_output_tokens=cfg.llm_max_output_tokens,
+                public_timeout_s=cfg.public_chat_llm_timeout_s,
             )
             logger.info(
                 "llm_client_enabled model=%s timeout_s=%.1f max_output_tokens=%d",
@@ -564,6 +567,15 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
                 on_disconnect=_cancel_pending_ciba_for_session,
             )
         )
+    )
+
+    # ── Public info chat (S6 — unauthenticated, stateless) ───────────────────
+    # No verify_token dependency. CORS is inherited from the top-level
+    # CORSMiddleware (no separate allow_origins=["*"] here — F-2).
+    public_handler = PublicInfoHandler(llm_client=llm_client)
+    app.include_router(
+        build_public_router(public_handler, max_message_chars=cfg.public_chat_max_chars),
+        prefix="/public",
     )
 
     # ── Health check ──────────────────────────────────────────────────────────

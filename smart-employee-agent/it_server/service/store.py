@@ -47,6 +47,97 @@ def get_asset_catalogue(asset_type: str | None = None) -> List[Dict]:
     return [a for a in _ASSET_CATALOGUE if a["type"] == asset_type]
 
 
+# ─── Hardware Allocation Policy (static, public-facing) ─────────────────────
+#
+# This constant is the single source of truth for the hardware policy.
+# It is embedded verbatim in orchestrator/chat/public_handler.py so the
+# pre-login Info Bot can answer hardware questions without calling this server.
+# KEEP BOTH COPIES IN SYNC. A Stage-10 snapshot test enforces the invariant.
+
+_SEED_HARDWARE_POLICY = {
+    "standard_allocation": {
+        "description": (
+            "Every permanent employee receives a standard hardware kit on their first day. "
+            "The exact model depends on their role (see role_overrides below)."
+        ),
+        "default_kit": {
+            "laptop": "MacBook Pro 14-inch (M4 Pro, 24 GB RAM, 512 GB SSD)",
+            "monitor": "27-inch 4K display (on-site employees only)",
+            "peripherals": "Wireless keyboard and mouse",
+            "phone": "iPhone 15 (128 GB)",
+        },
+    },
+    "role_overrides": {
+        "Engineer / Developer": {
+            "laptop": "MacBook Pro 14-inch (M4 Pro, 36 GB RAM, 1 TB SSD)",
+            "monitor": "Dual 27-inch 4K displays (on-site employees only)",
+            "peripherals": "Wireless keyboard, mouse, and USB-C hub",
+            "phone": "iPhone 15 Pro (256 GB)",
+            "notes": "Developers may request a Linux workstation in place of the MacBook.",
+        },
+        "Management / Executive": {
+            "laptop": "MacBook Pro 16-inch (M4 Max, 48 GB RAM, 1 TB SSD)",
+            "monitor": "32-inch 4K display (on-site employees only)",
+            "peripherals": "Wireless keyboard, mouse, and USB-C hub",
+            "phone": "iPhone 15 Pro Max (256 GB)",
+        },
+        "Operations / Finance / HR": {
+            "laptop": "MacBook Pro 14-inch (M4, 16 GB RAM, 512 GB SSD)",
+            "monitor": "27-inch 4K display (on-site employees only)",
+            "peripherals": "Wireless keyboard and mouse",
+            "phone": "iPhone 15 (128 GB)",
+        },
+    },
+    "remote_first": {
+        "description": (
+            "Employees designated Remote-First receive the laptop and phone for their role "
+            "only. Monitors and peripherals are not provided — a Home Office Allowance of "
+            "AED 1,500 (one-time) is available to purchase a personal monitor."
+        ),
+    },
+    "replacement_cycle": {
+        "laptop": {
+            "years": 3,
+            "notes": (
+                "A replacement is issued if the device fails a hardware assessment before the "
+                "3-year mark. Trade-in of the old device is mandatory."
+            ),
+        },
+        "phone": {
+            "years": 2,
+            "notes": "Phones are replaced on the standard 2-year cycle or on carrier contract renewal.",
+        },
+        "monitor": {
+            "years": 5,
+            "notes": "Monitors are replaced only on failure or role change that requires an upgrade.",
+        },
+    },
+    "request_process": {
+        "new_hire": (
+            "Hardware is pre-ordered by HR Admin when the onboarding checklist is completed "
+            "(UC-18). No action required from the employee on Day 1."
+        ),
+        "replacement_or_additional": (
+            "Raise a request through the IT Help Desk portal or contact your line manager. "
+            "Approvals: line manager + IT Admin. Typical turnaround: 3–5 business days."
+        ),
+        "lost_or_stolen": (
+            "Report immediately to IT Security and your line manager. The device will be "
+            "remotely wiped. A loaner may be issued pending investigation."
+        ),
+    },
+    "personal_device_policy": (
+        "Personal devices (BYOD) are not permitted to access corporate systems unless "
+        "enrolled in Mobile Device Management (MDM). Speak to IT Security for enrolment."
+    ),
+}
+
+
+def get_hardware_policy() -> Dict:
+    """Return the hardware allocation policy (static, same for all employees)."""
+    return dict(_SEED_HARDWARE_POLICY)
+
+
 # ─── Mutable In-Memory Stores ────────────────────────────────────────────────
 
 assets: List[Dict] = []
