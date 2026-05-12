@@ -89,6 +89,34 @@ def _pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
+# ── Authenticator selection ────────────────────────────────────────────────────
+
+
+def _pick_local_basic_authenticator(authenticators: list) -> str | None:
+    """Return the authenticatorId of the LOCAL username+password authenticator.
+
+    When an IS app has multiple login options (e.g. UAE Pass + local Basic Auth),
+    the agent must use the LOCAL authenticator — sending credentials to a federated
+    IdP connector (UAE Pass) would loop forever on INCOMPLETE.
+
+    Selection priority:
+    1. idp == "LOCAL" and authenticator name contains "Basic" or "Username"
+    2. Any idp == "LOCAL" authenticator
+    3. First authenticator in the list (fallback for single-option flows)
+    """
+    if not authenticators:
+        return None
+    for a in authenticators:
+        if a.get("idp") == "LOCAL" and any(
+            kw in (a.get("authenticator") or "") for kw in ("Basic", "Username", "Password")
+        ):
+            return a.get("authenticatorId")
+    for a in authenticators:
+        if a.get("idp") == "LOCAL":
+            return a.get("authenticatorId")
+    return authenticators[0].get("authenticatorId")
+
+
 # ── Provider ───────────────────────────────────────────────────────────────────
 
 
@@ -249,13 +277,10 @@ class ActorTokenProvider:
         flow_id: str | None = authorize_body.get("flowId")
         next_step: dict = authorize_body.get("nextStep") or {}
         authenticators: list = next_step.get("authenticators") or []
-        _local_auth = next(
-            (a for a in authenticators if a.get("idp") == "LOCAL"),
-            authenticators[0] if authenticators else None,
-        )
-        authenticator_id: str | None = (
-            _local_auth.get("authenticatorId") if _local_auth else None
-        )
+        # When the app has multiple login options (e.g. UAE Pass + local Basic Auth),
+        # prefer the LOCAL username+password authenticator so agent credentials
+        # are never sent to a federated IdP connector.
+        authenticator_id: str | None = _pick_local_basic_authenticator(authenticators)
 
         if not flow_id or not authenticator_id:
             logger.warning(
@@ -278,20 +303,92 @@ class ActorTokenProvider:
             authenticator_id,
         )
 
-        # ── Step 2: /oauth2/authn ──────────────────────────────────────────────
-        try:
-            code = await self.is_client.post_authn(
-                flow_id=flow_id,
-                authenticator_id=authenticator_id,
-                params={"username": creds.agent_id, "password": creds.agent_secret},
+        # ── Step 2: /oauth2/authn — loop to handle multi-step login flows ─────
+        # IS 7.3.0 defaults to Identifier First (2 steps: identifier → password).
+        # Each INCOMPLETE response carries the next authenticatorId; we loop until
+        # we receive a code or a terminal failure.
+        _MAX_AUTHN_STEPS = 4
+        current_authenticator_id = authenticator_id
+        code: str | None = None
+
+        for _step in range(_MAX_AUTHN_STEPS):
+            try:
+                body = await self.is_client.post_authn_raw(
+                    flow_id=flow_id,
+                    authenticator_id=current_authenticator_id,
+                    params={"username": creds.agent_id, "password": creds.agent_secret},
+                )
+            except Exception as exc:
+                raise ActorTokenError(
+                    f"App-Native Auth /authn failed: {exc}",
+                    details={"step": "authn", "upstream": str(exc)},
+                ) from exc
+
+            code = (body.get("authData") or {}).get("code") or body.get("code")
+            if code:
+                break
+
+            flow_status = body.get("flowStatus", "UNKNOWN")
+            next_step: dict = body.get("nextStep") or {}
+            messages: list = next_step.get("messages") or []
+            err_msgs = [
+                f"{m.get('messageId', '?')}: {m.get('message', '')}"
+                for m in messages
+                if isinstance(m, dict) and m.get("type") == "ERROR"
+            ]
+
+            is_credential_failure = flow_status == "FAIL_INCOMPLETE" or any(
+                "ABA-60003" in m or "login.fail" in m for m in err_msgs
             )
-        except ActorTokenError:
-            raise
-        except Exception as exc:
+            if is_credential_failure:
+                hint = (
+                    " — agent authentication FAILED; the agent secret is likely "
+                    "stale (rotated by 'Regenerate' in IS Console). Update the "
+                    "agent's *_AGENT_SECRET in the service .env and recreate the "
+                    "container."
+                )
+                logger.error(
+                    "post_authn no-code | flowStatus=%s errors=%s%s",
+                    flow_status, err_msgs, hint,
+                )
+                raise ActorTokenError(
+                    f"POST /oauth2/authn returned flowStatus={flow_status}"
+                    + (f" errors={err_msgs}" if err_msgs else "")
+                    + hint,
+                    details={"step": "authn", "flowStatus": flow_status, "errors": err_msgs},
+                )
+
+            if flow_status == "INCOMPLETE":
+                # Non-error incomplete — advance to the next authenticator step.
+                next_authenticators: list = next_step.get("authenticators") or []
+                if not next_authenticators:
+                    raise ActorTokenError(
+                        f"POST /oauth2/authn INCOMPLETE but no next authenticator (step {_step + 1})",
+                        details={"step": "authn", "flowStatus": flow_status, "body": str(body)[:500]},
+                    )
+                next_id = _pick_local_basic_authenticator(next_authenticators)
+                if not next_id:
+                    raise ActorTokenError(
+                        f"POST /oauth2/authn INCOMPLETE but no LOCAL authenticator found (step {_step + 1})",
+                        details={"step": "authn", "flowStatus": flow_status, "body": str(body)[:500]},
+                    )
+                current_authenticator_id = next_id
+                logger.debug(
+                    "actor_token_authn_step | step=%d next_authenticator=%s",
+                    _step + 1, current_authenticator_id,
+                )
+                continue
+
+            # Unknown terminal status with no code.
             raise ActorTokenError(
-                f"App-Native Auth /authn failed: {exc}",
-                details={"step": "authn", "upstream": str(exc)},
-            ) from exc
+                f"POST /oauth2/authn returned flowStatus={flow_status} with no code",
+                details={"step": "authn", "flowStatus": flow_status, "errors": err_msgs},
+            )
+        else:
+            raise ActorTokenError(
+                f"POST /oauth2/authn did not complete after {_MAX_AUTHN_STEPS} steps",
+                details={"step": "authn"},
+            )
 
         if not code:
             raise ActorTokenError(
