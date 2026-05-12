@@ -8,7 +8,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Employee Assistant</title>
+  <title>UAE Smart Employee Assistant</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -20,8 +20,14 @@
   <!-- ── Sign-in page (shown when no session) ─────────────────────── -->
   <div id="signin-page" hidden>
     <div class="signin-box">
-      <h1 class="signin-heading">Smart Employee Assistant</h1>
-      <p class="signin-subtitle">Sign in to ask about your leave, equipment, and team.</p>
+      <div class="signin-flag-bar" aria-hidden="true">
+        <span class="flag-red"></span>
+        <span class="flag-black"></span>
+        <span class="flag-white"></span>
+        <span class="flag-green"></span>
+      </div>
+      <h1 class="signin-heading">UAE Smart Employee Assistant</h1>
+      <p class="signin-subtitle">Sign in with UAE Pass to manage your leave, equipment, and team requests.</p>
 
       <!-- Session notices (reason=session_expired / signed_out) -->
       <div id="signin-notice" class="signin-notice" hidden></div>
@@ -46,7 +52,7 @@
     <!-- Header -->
     <header id="app-header">
       <div class="header-left">
-        <span class="product-name">Smart Employee Assistant</span>
+        <span class="product-name">UAE Smart Employee Assistant</span>
       </div>
       <div class="header-right">
         <!-- Connection status indicator -->

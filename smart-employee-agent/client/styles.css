@@ -21,10 +21,14 @@
   --text-muted:    #6b7280;
   --text-subtle:   #9ca3af;
 
+  /* UAE palette */
+  --uae-red:       #EF3F26;
+  --uae-green:     #00843D;
+
   /* Actions */
-  --primary:       #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-soft:  #eff6ff;
+  --primary:       #00843D;
+  --primary-hover: #006B31;
+  --primary-soft:  #e6f4ec;
 
   --danger:        #dc2626;
   --danger-hover:  #b91c1c;
@@ -112,18 +116,32 @@ textarea, input {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1e3a8a 0%, #3b0764 100%);
+  background: linear-gradient(160deg, #EF3F26 0%, #1a1a1a 50%, #00843D 100%);
 }
 
 .signin-box {
   background: var(--surface);
   border-radius: 14px;
-  padding: 2.5rem 3rem;
-  box-shadow: 0 20px 50px rgba(0,0,0,.3);
+  padding: 0 3rem 2.5rem;
+  box-shadow: 0 20px 50px rgba(0,0,0,.35);
   max-width: 400px;
   width: 90%;
   text-align: center;
+  overflow: hidden;
 }
+
+.signin-flag-bar {
+  display: flex;
+  height: 6px;
+  margin: 0 -3rem 2rem;
+}
+.signin-flag-bar span {
+  flex: 1;
+}
+.signin-flag-bar .flag-red   { background: #EF3F26; }
+.signin-flag-bar .flag-black { background: #1a1a1a; }
+.signin-flag-bar .flag-white { background: #e0e0e0; }
+.signin-flag-bar .flag-green { background: #00843D; }
 
 .signin-heading {
   font-size: 1.4rem;
@@ -209,6 +227,7 @@ textarea, input {
   height: var(--header-h);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  border-top: 3px solid var(--uae-red);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -229,7 +248,7 @@ textarea, input {
 .product-name {
   font-size: 1rem;
   font-weight: 700;
-  color: var(--text);
+  color: var(--uae-green);
   letter-spacing: -0.01em;
 }
 
