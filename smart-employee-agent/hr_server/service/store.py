@@ -3,21 +3,26 @@
 
   In-Memory HR Data Store
 
-  All user-specific data is keyed by JWT `sub` (Asgardeo user UUID).
-  Users are auto-registered on first interaction from JWT claims.
+  All user-specific data is keyed by the JWT `sub` claim. Since S5.12 every
+  OAuth app in the demo asserts `email` as the OIDC subject (Subject type =
+  Public), so `sub` is `<emailaddress>` for users that have one and the
+  user-id UUID otherwise — consistent across token-A (REST proxy) and token-C
+  (agent CIBA/OBO). See `docs/architecture/identity-subject-mismatch.md`.
+  Users are auto-registered on first interaction from JWT claims: the REST
+  auth path carries ``username``/``email`` (token-A profile claims) into
+  ``ensure_user`` so ``lookup_employee`` and the report username→email joins
+  work for any real user; OBO/CIBA tool calls (token-C — ``sub`` only) reuse
+  whatever record the REST path already created.
   Global data (holidays, leave policy) is pre-populated seed data.
   User data (requests, balances) starts empty.
 
-  Sprint 4 S4.1: cubicles + named-user seed
-  ----------------------------------------------
-  - ``cubicles`` (NEW): 100 entries across 4 floors (25 per floor, IDs
-    ``C-001`` .. ``C-100``). Each row carries the assigned-to fields needed
-    by UC-11 ``assign_cubicle`` (username + email + sub + assigned_at).
-    ``assigned_to_sub`` is internal join data only — never returned by any
-    report endpoint (sprint-4.md §7).
-  - ``users`` (EXTENDED): pre-seeded with named demo users (``employee_user``,
-    ``hr_admin_user``, ``jane.doe``, ``bob.smith``) so ``lookup_employee`` has
-    deterministic data without depending on the auto-register code path.
+  ``cubicles``: 100 entries across 4 floors (25 per floor, IDs ``C-001`` ..
+  ``C-100``), all VACANT on a fresh start — assignments are made live
+  (UC-11 ``assign_cubicle``). Each row carries the assigned-to fields
+  (username + email + sub + assigned_at); ``assigned_to_sub`` is internal
+  join data only — never returned by any report endpoint (sprint-4.md §7).
+  There is no seeded named-user / pre-assigned-cubicle data — the demo runs
+  against whatever IS users sign in, not a fixed roster (S5.12).
 """
 
 import copy
@@ -66,45 +71,28 @@ _DEFAULT_LEAVE_BALANCE = {
     "personal": 5,
 }
 
-# Sprint 4 S4.1 — pre-seeded named demo users (lookup_employee fodder).
-# Keys are JWT sub (UUID-shaped); values include the human identifiers used
-# by UC-11. The auto-register path (ensure_user) still populates additional
-# users on first call from JWT claims; these entries are simply present from
-# module import so the demo has data without needing every user to first
-# touch a leave-balance call.
-_SEED_USERS = [
-    {
-        "username": "employee_user",
-        "email": "employee.user@example.com",
-        "sub": "employee_user-sub-uuid-0001",
-        "name": "Employee User",
-    },
-    {
-        "username": "hr_admin_user",
-        "email": "hr.admin.user@example.com",
-        "sub": "hr_admin_user-sub-uuid-0002",
-        "name": "HR Admin User",
-    },
-    {
-        "username": "jane.doe",
-        "email": "jane.doe@example.com",
-        "sub": "jane.doe-sub-uuid-0003",
-        "name": "Jane Doe",
-    },
-    {
-        "username": "bob.smith",
-        "email": "bob.smith@example.com",
-        "sub": "bob.smith-sub-uuid-0004",
-        "name": "Bob Smith",
-    },
-]
+# Per-user state in these stores is keyed directly by the token ``sub`` claim.
+#
+# History (S5.11 → S5.12): the OAuth apps used to emit a *different* ``sub`` for
+# the same user — ``orchestrator-mcp-client`` (token-A, behind the SPA-proxied
+# REST endpoints) used an email subject, while the specialist-agent CIBA apps
+# (token-C, used by the MCP tools) used the WSO2 user-id UUID — so a leave
+# applied via an agent was invisible to "My Leaves". That divergence was closed
+# at the IdP: ``hr-agent`` / ``it-agent`` (and ``orchestrator-mcp-client``) all
+# assert ``email`` as the OIDC subject (Subject type = Public), so token-A.sub ==
+# token-C.sub for any user with an ``emailaddress`` attribute, and falls back to
+# the user-id UUID consistently on *both* sides for users without one. So there
+# is no ``user_key`` shim and no hard-coded user map — callers key on ``sub``
+# verbatim. See ``docs/architecture/identity-subject-mismatch.md``.
 
 
 def _seed_cubicles() -> List[Dict]:
-    """Build the 100-cubicle seed (4 floors, 25 each, all initially vacant).
+    """Build the 100-cubicle seed (4 floors, 25 each), all VACANT.
 
     Distribution: floor 1 → C-001..C-025, floor 2 → C-026..C-050,
-    floor 3 → C-051..C-075, floor 4 → C-076..C-100.
+    floor 3 → C-051..C-075, floor 4 → C-076..C-100. No cubicle is
+    pre-assigned — assignments are made live via ``assign_cubicle`` so the
+    demo data tracks whoever actually signs in (S5.12).
     """
     rows: List[Dict] = []
     for n in range(1, 101):
@@ -139,7 +127,7 @@ cubicles: List[Dict] = []
 
 
 def reset_data() -> None:
-    """Reset all stores. Global data re-seeded, user data cleared."""
+    """Reset all stores. Global data re-seeded; user data cleared."""
     global leave_policy, holidays, users, leave_balances, leave_requests
     global leave_request_counter, cubicles
     prior_users = len(users) if users else 0
@@ -150,20 +138,7 @@ def reset_data() -> None:
     leave_balances = {}
     leave_requests = {}
     leave_request_counter = 0
-    # Sprint 4 S4.1 — re-seed cubicles + named users.
-    cubicles = _seed_cubicles()
-    for entry in _SEED_USERS:
-        sub = entry["sub"]
-        users[sub] = {
-            "username": entry["username"],
-            "email": entry["email"],
-            "sub": sub,
-            "name": entry["name"],
-            "first_name": entry["name"].split()[0] if entry["name"] else "",
-            "last_name": " ".join(entry["name"].split()[1:]) if entry["name"] else "",
-            "first_seen": str(dt_date.today()),
-        }
-        leave_balances[sub] = copy.deepcopy(_DEFAULT_LEAVE_BALANCE)
+    cubicles = _seed_cubicles()  # all vacant; assignments happen live
     if prior_users or prior_requests:
         logger.warning(
             "[STORE RESET] HR data reset — cleared %d user(s) and %d leave request(s); seed data re-applied",
@@ -183,10 +158,22 @@ def default_balance() -> Dict[str, int]:
     return copy.deepcopy(_DEFAULT_LEAVE_BALANCE)
 
 
-def ensure_user(sub: str, first_name: str, last_name: str = "") -> Dict:
+def ensure_user(
+    sub: str,
+    first_name: str = "",
+    last_name: str = "",
+    *,
+    username: str | None = None,
+    email: str | None = None,
+) -> Dict:
     """Ensure a user record exists. Creates one with defaults if new.
 
-    Called on every identity-aware tool invocation. Returns the user record.
+    Called on every identity-aware tool invocation. ``username``/``email`` are
+    the token's profile claims when available (the REST auth path / token-A
+    carries them; OBO/CIBA tool calls — token-C — pass ``None`` and don't
+    overwrite). Persisting them is what lets ``lookup_employee`` and the
+    report username→email joins resolve real users without a hard-coded seed.
+    Returns the user record.
     """
     full_name = f"{first_name} {last_name}".strip()
     if sub not in users:
@@ -195,6 +182,8 @@ def ensure_user(sub: str, first_name: str, last_name: str = "") -> Dict:
             "last_name": last_name,
             "name": full_name,
             "sub": sub,
+            "username": username or "",
+            "email": email or "",
             "first_seen": str(dt_date.today()),
         }
         leave_balances[sub] = default_balance()
@@ -202,14 +191,22 @@ def ensure_user(sub: str, first_name: str, last_name: str = "") -> Dict:
             "[USER AUTO-REGISTERED] sub=%s name=%s default_balance=%s",
             sub, full_name or "(no name)", _DEFAULT_LEAVE_BALANCE,
         )
-    elif full_name and full_name != users[sub]["name"]:
-        # Update name if it changed in the IdP
-        old_name = users[sub]["name"]
-        users[sub]["first_name"] = first_name
-        users[sub]["last_name"] = last_name
-        users[sub]["name"] = full_name
+        return users[sub]
+    record = users[sub]
+    if full_name and full_name != record.get("name"):
+        # Update name if it changed in the IdP.
+        old_name = record.get("name")
+        record["first_name"] = first_name
+        record["last_name"] = last_name
+        record["name"] = full_name
         logger.info("[USER NAME UPDATED] sub=%s old=%s new=%s", sub, old_name, full_name)
-    return users[sub]
+    # Backfill / refresh profile claims if this call carried them and the
+    # stored record was created without (e.g. a token-C tool call landed first).
+    if username and not record.get("username"):
+        record["username"] = username
+    if email and not record.get("email"):
+        record["email"] = email
+    return record
 
 
 # Initialize on import so the server starts with seed data.

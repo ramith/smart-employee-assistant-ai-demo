@@ -18,9 +18,12 @@ Checks (in execution order):
     Section 3 — Mgmt API auth     admin creds work against /api-resources.
     Section 4 — OAuth Apps        all 4 client IDs from orchestrator/.env
                                   registered as Applications.
+    Section 4b — Subscriptions    orchestrator-mcp-client subscribed to HR+IT APIs.
+    Section 4c — Agent subs       hr-agent/it-agent OAuth apps subscribed to ALL
+                                  their API scopes (incl. hr_assets_write_rest).
     Section 5 — API Resources     hr_server-api + it_server-api exist.
     Section 6 — Scopes            full Sprint 1-4 scope inventory present.
-    Section 7 — Users (SCIM2)     employee_user + hr_admin_user exist.
+    Section 7 — Users (SCIM2)     the demo users (DEMO_USERS) exist.
     Section 8 — Roles (SCIM2 v2)  Employee + HR Admin exist.
     Section 9 — Token claims      sample access token carries username + email.
 
@@ -43,9 +46,6 @@ when present):
     ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID    sourced
     HR_AGENT_OAUTH_CLIENT_ID         sourced
     IT_AGENT_OAUTH_CLIENT_ID         sourced
-
-    DEMO_USERNAME                employee_user        # ROPC user for §9
-    DEMO_PASSWORD                NewsMax@1234         # per wso2-is-setup.md
 
     HR_API_RESOURCE_NAME         hr_server-api  (override if Console uses a different name)
     IT_API_RESOURCE_NAME         it_server-api
@@ -92,7 +92,9 @@ IT_SCOPES = {
     "it_assets_self_rest",  # Sprint 4 NEW
     "it_assets_write_rest",
 }
-DEMO_USERS = ["employee_user", "hr_admin_user"]
+# The demo accounts to check exist + carry an email attribute. Convention:
+# username == email (see docs/wso2-is-setup.md §5.5). Override per demo.
+DEMO_USERS = ["employee@example.com", "hradmin@example.com"]
 # Role names verified 2026-05-11 against live IS Console — note `employee`
 # is lowercase (deviates from the docs which say "Employee").
 DEMO_ROLES = ["employee", "HR Admin"]
@@ -329,6 +331,189 @@ def check_applications(base_url: str, auth_hdr: str, expected_client_ids: dict[s
             ok(f"{label} ({client_id[:8]}…) registered — app name: '{app_name}'")
         else:
             bad(label, f"client_id '{client_id}' not registered as any application")
+
+
+def check_orchestrator_subscriptions(base_url: str, auth_hdr: str, mcp_client_id: str) -> None:
+    """Section 4b — verify orchestrator-mcp-client is subscribed to HR + IT APIs.
+
+    The SPA's Pattern C login authorize URL requests business scopes; IS will
+    strip them unless the OAuth app is subscribed to the API resources that
+    own those scopes. Without these subscriptions, the user signs in but
+    token-A only carries `openid profile email` — Reports nav stays hidden,
+    My Leaves panel can't load, reports proxy returns 403 on pre-flight.
+
+    Subscribed via Console → Applications → orchestrator-mcp-client →
+    Authorization tab → "+ Authorize resource".
+    """
+    hdr("Section 4b — orchestrator-mcp-client API subscriptions")
+    if not mcp_client_id:
+        warn("subscriptions", "ORCHESTRATOR_MCP_CLIENT_ID not in env — skipping")
+        return
+
+    # Resolve the app's IS-side id from the client_id.
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications?filter=clientId+eq+{urllib.parse.quote(mcp_client_id)}",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        warn("subscriptions", f"could not look up orchestrator-mcp-client: HTTP {code}")
+        return
+    try:
+        apps = json.loads(body).get("applications") or []
+    except Exception:
+        bad("subscriptions", "invalid JSON from /applications filter")
+        return
+    if not apps:
+        bad("subscriptions", "orchestrator-mcp-client not found — see Section 4")
+        return
+    app_id = apps[0].get("id")
+
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications/{app_id}/authorized-apis",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        bad("subscriptions", f"GET /authorized-apis returned {code}")
+        return
+    try:
+        subs = json.loads(body)
+    except Exception:
+        bad("subscriptions", "invalid JSON from /authorized-apis")
+        return
+    if not isinstance(subs, list) or not subs:
+        bad(
+            "subscriptions",
+            "orchestrator-mcp-client has NO API authorizations — "
+            "subscribe in Console → Applications → orchestrator-mcp-client → "
+            "Authorization tab → '+ Authorize resource' for HR API + IT API.",
+        )
+        return
+
+    # Build name → scope-set map from the subscriptions.
+    sub_by_name: dict[str, set[str]] = {}
+    for entry in subs:
+        name = entry.get("displayName") or entry.get("identifier") or ""
+        scopes = {s.get("name") for s in (entry.get("authorizedScopes") or []) if s.get("name")}
+        sub_by_name[name] = scopes
+
+    # HR coverage.
+    hr_sub = sub_by_name.get("HR API") or sub_by_name.get("urn:hr:api") or set()
+    hr_missing = HR_SCOPES - hr_sub
+    if not hr_missing:
+        ok(f"HR API subscription: {len(HR_SCOPES)} scope(s) authorized on orchestrator-mcp-client")
+    else:
+        bad(
+            "HR API subscription",
+            f"missing: {sorted(hr_missing)} — add via Console → orchestrator-mcp-client → "
+            f"Authorization → HR API → tick the scope(s).",
+        )
+
+    # IT coverage.
+    it_sub = sub_by_name.get("IT API") or sub_by_name.get("urn:it:api") or set()
+    it_missing = IT_SCOPES - it_sub
+    if not it_missing:
+        ok(f"IT API subscription: {len(IT_SCOPES)} scope(s) authorized on orchestrator-mcp-client")
+    else:
+        bad(
+            "IT API subscription",
+            f"missing: {sorted(it_missing)} — add via Console → orchestrator-mcp-client → "
+            f"Authorization → IT API → tick the scope(s).",
+        )
+
+
+def _app_authorized_scopes_by_api(
+    base_url: str, auth_hdr: str, client_id: str, label: str
+) -> dict[str, set[str]] | None:
+    """Resolve an OAuth app (by client_id) → ``{API display-name/identifier: {scope, …}}``.
+
+    Returns ``None`` (and emits a warn/bad) on lookup failure. Used by the
+    subscription checks below.
+    """
+    if not client_id:
+        warn(f"{label} subscriptions", "client_id not in env (orchestrator/.env) — skipping")
+        return None
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications?filter=clientId+eq+{urllib.parse.quote(client_id)}",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        warn(f"{label} subscriptions", f"could not look up OAuth app: HTTP {code}")
+        return None
+    try:
+        apps = json.loads(body).get("applications") or []
+    except Exception:
+        bad(f"{label} subscriptions", "invalid JSON from /applications filter")
+        return None
+    if not apps:
+        bad(f"{label} subscriptions", f"no OAuth app for client_id {client_id[:8]}… — see Section 4")
+        return None
+    app_id = apps[0].get("id")
+    code, body = http_get(
+        f"{base_url}/api/server/v1/applications/{app_id}/authorized-apis",
+        headers={"Authorization": auth_hdr, "Accept": "application/json"},
+    )
+    if code != 200:
+        bad(f"{label} subscriptions", f"GET /authorized-apis returned {code}")
+        return None
+    try:
+        subs = json.loads(body)
+    except Exception:
+        bad(f"{label} subscriptions", "invalid JSON from /authorized-apis")
+        return None
+    out: dict[str, set[str]] = {}
+    for entry in (subs or []):
+        name = entry.get("displayName") or entry.get("identifier") or ""
+        out[name] = {s.get("name") for s in (entry.get("authorizedScopes") or []) if s.get("name")}
+    return out
+
+
+def check_agent_app_subscriptions(
+    base_url: str, auth_hdr: str, hr_agent_client_id: str, it_agent_client_id: str
+) -> None:
+    """Section 4c — the specialist-agent OAuth apps must be subscribed to their API resources.
+
+    Each agent runs CIBA requesting business scopes (e.g. ``hr.cubicle_assign``
+    → ``openid hr_assets_write_rest``). WSO2 IS **silently strips** any
+    requested scope the OAuth app isn't subscribed to — so a missing
+    subscription doesn't error at CIBA initiation; the token-C just comes back
+    under-scoped, and the failure surfaces later as a 401 / ERR-MCP-003 from
+    the MCP server (e.g. "I couldn't assign the cubicle. There was an issue
+    with authorization."). The ``hr-agent`` OAuth app must be subscribed to ALL
+    HR API scopes (including ``hr_assets_write_rest``); the ``it-agent`` OAuth
+    app to ALL IT API scopes. Subscribe via Console → Applications → <agent
+    OAuth App> → API Authorization → "+ Authorize resource".
+    """
+    hdr("Section 4c — agent OAuth app API subscriptions")
+
+    hr_subs = _app_authorized_scopes_by_api(base_url, auth_hdr, hr_agent_client_id, "hr-agent")
+    if hr_subs is not None:
+        have = hr_subs.get("HR API") or hr_subs.get("urn:hr:api") or set()
+        missing = HR_SCOPES - have
+        if not missing:
+            ok(f"hr-agent OAuth app: subscribed to all {len(HR_SCOPES)} HR API scope(s)")
+        else:
+            hint = (
+                " (hr_assets_write_rest is the one the cubicle/seat-assign chat flow needs)"
+                if "hr_assets_write_rest" in missing else ""
+            )
+            bad(
+                "hr-agent HR API subscription",
+                f"missing: {sorted(missing)}{hint} — Console → Applications → the hr-agent "
+                f"OAuth App → API Authorization → HR API → tick the scope(s).",
+            )
+
+    it_subs = _app_authorized_scopes_by_api(base_url, auth_hdr, it_agent_client_id, "it-agent")
+    if it_subs is not None:
+        have = it_subs.get("IT API") or it_subs.get("urn:it:api") or set()
+        missing = IT_SCOPES - have
+        if not missing:
+            ok(f"it-agent OAuth app: subscribed to all {len(IT_SCOPES)} IT API scope(s)")
+        else:
+            bad(
+                "it-agent IT API subscription",
+                f"missing: {sorted(missing)} — Console → Applications → the it-agent "
+                f"OAuth App → API Authorization → IT API → tick the scope(s).",
+            )
 
 
 def check_api_resources(
@@ -598,14 +783,23 @@ def check_user_attributes(base_url: str, auth_hdr: str) -> None:
             bad(f"user '{username}' attributes", "user not found")
             continue
         u = resources[0]
-        has_username = bool(u.get("userName"))
+        uname = u.get("userName") or ""
+        # SCIM2 userName may be userstore-qualified ("PRIMARY/employee_user").
+        uname_bare = uname.split("/", 1)[-1] if uname else ""
+        has_username = bool(uname)
         emails = u.get("emails") or []
-        has_email = any(
-            (isinstance(e, dict) and e.get("value")) or (isinstance(e, str) and e)
+        email_vals = [
+            (e.get("value") if isinstance(e, dict) else e)
             for e in emails
-        )
+            if (isinstance(e, dict) and e.get("value")) or (isinstance(e, str) and e)
+        ]
+        has_email = bool(email_vals)
+        _ = uname_bare  # (kept for log clarity; no longer compared to the email)
         if has_username and has_email:
-            ok(f"user '{username}' has userName + email set (claim source available)")
+            # S5.18: the email IS the `sub` (and the CIBA `login_hint`), resolved
+            # to the local user by IS Multi-Attribute Login — userName no longer
+            # has to equal the email local-part. We only require: email is set.
+            ok(f"user '{username}' has userName + email set (sub/claim/login_hint source available)")
         else:
             missing = []
             if not has_username:
@@ -614,17 +808,26 @@ def check_user_attributes(base_url: str, auth_hdr: str) -> None:
                 missing.append("emails[].value")
             bad(
                 f"user '{username}' attributes",
-                f"missing: {', '.join(missing)} — set in Console → User Management → "
-                f"select user → Profile, then re-run.",
+                f"missing: {', '.join(missing)} — every demo user needs an email "
+                f"(it becomes the OIDC `sub` AND the CIBA `login_hint`). Set in "
+                f"Console → User Management → select user → Profile, then re-run.",
             )
 
     print()
     print(
-        f"  {_Y}note:{_R} Section 9 verifies the SCIM2 source attributes only. To "
-        "confirm the OAuth claim mapping into access tokens, sign in to the SPA "
-        "(Pattern C), then verify with: "
+        f"  {_Y}note:{_R} Section 9 verifies the SCIM2 source attributes only. Two "
+        "things it can't check from here:"
     )
-    print(f"    docker compose logs orchestrator | grep auth_exchange_success")
+    print(
+        "    1. Multi-Attribute Login must be ENABLED with the email claim "
+        "(Console → Login & Registration → Alternative Login Identifiers; allowed "
+        "list must include http://wso2.org/claims/emailaddress) — required so the "
+        "email `login_hint` resolves at CIBA. See docs/wso2-is-setup.md §5.6."
+    )
+    print(
+        "    2. The OAuth claim mapping into access tokens — sign in to the SPA "
+        "(Pattern C), then: docker compose logs orchestrator | grep auth_exchange_success"
+    )
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -674,6 +877,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     check_applications(base_url, auth_hdr, expected_client_ids)
+    check_orchestrator_subscriptions(base_url, auth_hdr, mcp_client_id)
+    check_agent_app_subscriptions(
+        base_url, auth_hdr,
+        _resolved("HR_AGENT_OAUTH_CLIENT_ID", env_file),
+        _resolved("IT_AGENT_OAUTH_CLIENT_ID", env_file),
+    )
     # API resources matched by display name OR identifier (operators use either).
     hr_specs = [hr_name, "HR API", "urn:hr:api"]
     it_specs = [it_name, "IT API", "urn:it:api"]

@@ -1,4 +1,4 @@
-"""HR-server MCP tool endpoints — Sprint 1 Wave 6 / Sprint 4 S4.0 + S4.1.
+"""HR-server MCP tool endpoints — Sprint 1 Wave 6 / Sprint 4 S4.0 + S4.1 / Sprint 5.
 
 Exposes FastAPI POST endpoints under ``/mcp/tools/``:
 
@@ -11,6 +11,7 @@ Exposes FastAPI POST endpoints under ``/mcp/tools/``:
     POST /mcp/tools/assign_cubicle                 scope: hr_assets_write_rest [S4.1 D3]
     POST /mcp/tools/get_my_cubicle                 scope: hr_self_rest        [S4.1 D4]
     POST /mcp/tools/lookup_employee                scope: hr_read_rest        [S4.1 D5]
+    POST /mcp/tools/get_all_leave_requests         scope: hr_approve_rest     [S5 hr.read_all_leaves]
 
 Sprint 4 S4.0 reconciliation (D1): handlers delegate to ``hr_service``
 (the canonical in-memory implementation backed by ``service/store.py``)
@@ -75,6 +76,13 @@ __all__ = [
     "ApproveLeaveResult",
     "RejectLeaveArgs",
     "RejectLeaveResult",
+    # Sprint 5 S5.1 apply_leave (UC-13 chat path)
+    "ApplyLeaveArgs",
+    "ApplyLeaveResult",
+    # Sprint 5 hr.read_all_leaves (HR Admin chat path)
+    "GetAllLeaveRequestsArgs",
+    "AllLeaveRequestEntry",
+    "GetAllLeaveRequestsResult",
     # Sprint 4 S4.1 cubicle models
     "GetCubicleSummaryArgs",
     "CubicleFloorCounts",
@@ -87,12 +95,48 @@ __all__ = [
     "AssignCubicleResult",
     "LookupEmployeeArgs",
     "LookupEmployeeResult",
+    # hr_basic leave policy
+    "GetLeavePolicyArgs",
+    "LeavePolicyEntry",
+    "GetLeavePolicyResult",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models — Sprint 4 reshape (D1, RR-1)
 # ---------------------------------------------------------------------------
+
+
+class GetLeavePolicyArgs(BaseModel):
+    """Request body for ``get_leave_policy`` — no fields (parameter-less read)."""
+
+
+class LeavePolicyEntry(BaseModel):
+    """One leave-type entry. Mirrors a ``hr_service.get_leave_policy`` row."""
+
+    leave_type: str
+    max_days_per_year: int
+    requires_approval: bool
+    min_notice_days: int
+    description: str
+
+
+class GetLeavePolicyResult(BaseModel):
+    """Response for ``get_leave_policy`` — the full company leave policy plus,
+    in ``to_apply``, the information the employee must provide to submit a leave
+    request (so a "what do I need to apply for leave?" question can be answered
+    directly from this tool's output)."""
+
+    leave_types: list[LeavePolicyEntry]
+    to_apply: list[str] = Field(
+        default_factory=lambda: [
+            "leave_type (one of: Annual Leave, Sick Leave, Personal Leave)",
+            "start_date (YYYY-MM-DD)",
+            "end_date (YYYY-MM-DD, on or after start_date)",
+            "reason (optional)",
+        ],
+        description="The fields the employee provides to apply for leave.",
+    )
 
 
 class GetLeaveBalanceArgs(BaseModel):
@@ -202,6 +246,88 @@ class RejectLeaveResult(BaseModel):
     error: str | None = None
     message: str | None = None
     rejected_by: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 S5.1 — apply_leave (UC-13 chat path; the dispatcher requires
+# leave_type/start_date/end_date so a partial LLM call fails pre-CIBA).
+# ---------------------------------------------------------------------------
+
+
+class ApplyLeaveArgs(BaseModel):
+    """Request body for ``apply_leave``.
+
+    ``leave_type`` must be a key of ``store.leave_policy`` (Annual Leave /
+    Sick Leave / Personal Leave); ``start_date`` / ``end_date`` are
+    ``YYYY-MM-DD`` with ``end_date >= start_date``. Validation of those
+    business rules happens in ``hr_service.apply_leave`` (returns a 200 with
+    ``success=False`` + ``error`` on rejection); a structurally-malformed
+    body (missing a required field, wrong type) → 422 from FastAPI.
+    """
+
+    leave_type: str = Field(description="One of: Annual Leave, Sick Leave, Personal Leave.")
+    start_date: str = Field(description="YYYY-MM-DD.")
+    end_date: str = Field(description="YYYY-MM-DD; on or after start_date.")
+    reason: str = Field(default="", description="Optional free-text reason.")
+
+
+class ApplyLeaveResult(BaseModel):
+    """Response for ``apply_leave``.
+
+    Mirrors ``hr_service.apply_leave``: happy path → ``success=True`` +
+    ``request_id``; business-layer rejection (invalid_leave_type /
+    invalid_dates / insufficient_notice / insufficient_balance) → 200 with
+    ``success=False`` + ``error`` + ``message`` (same envelope rule as
+    :class:`AssignCubicleResult`).
+    """
+
+    success: bool = True
+    request_id: str | None = None
+    error: str | None = None
+    message: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — get_all_leave_requests (hr.read_all_leaves, HR Admin chat path)
+# ---------------------------------------------------------------------------
+
+
+class GetAllLeaveRequestsArgs(BaseModel):
+    """Request body for ``get_all_leave_requests``.
+
+    Both fields are optional — omitting them returns all leave requests
+    regardless of status or employee name.
+    """
+
+    status: str | None = Field(
+        default=None,
+        description="Optional status filter, e.g. 'Pending', 'Approved', 'Rejected'.",
+    )
+    employee_name: str | None = Field(
+        default=None,
+        description="Optional employee name substring filter.",
+    )
+
+
+class AllLeaveRequestEntry(BaseModel):
+    """A single leave request row returned by ``get_all_leave_requests``.
+
+    Never contains ``sub`` or ``user_sub`` — only display-safe fields.
+    """
+
+    request_id: str
+    employee: str
+    type: str
+    start_date: str
+    end_date: str
+    days_requested: int
+    status: str
+
+
+class GetAllLeaveRequestsResult(BaseModel):
+    """Response for ``get_all_leave_requests``."""
+
+    leave_requests: list[AllLeaveRequestEntry]
 
 
 # ---------------------------------------------------------------------------
@@ -403,13 +529,49 @@ def _username_for(claims) -> str:  # type: ignore[no-untyped-def]
 
 
 def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
-    """Return a FastAPI ``APIRouter`` with eight HR tool endpoints.
+    """Return a FastAPI ``APIRouter`` with the HR tool endpoints.
 
     All endpoints are mounted under the prefix supplied by the caller (typically
     ``/mcp/tools``).  Each handler validates the inbound token via
     ``deps.validator.validate_token()`` before delegating to ``hr_service``.
     """
     router = APIRouter()
+
+    # ── get_leave_policy (hr_basic_rest — company leave types + rules) ────────
+
+    @router.post("/get_leave_policy", response_model=GetLeavePolicyResult)
+    async def get_leave_policy(
+        body: GetLeavePolicyArgs,  # noqa: ARG001 — parameter-less
+        request: Request,
+    ) -> GetLeavePolicyResult:
+        """Return the company leave policy (leave types + rules). Scope: hr_basic_rest."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("get_leave_policy missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_basic_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "get_leave_policy validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        policy = await hr_service.get_leave_policy()
+        return GetLeavePolicyResult(
+            leave_types=[LeavePolicyEntry(**row) for row in policy]
+        )
 
     # ── get_leave_balance ─────────────────────────────────────────────────────
 
@@ -691,6 +853,58 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             rejected_by=act_sub or claims.sub,
         )
 
+    # ── apply_leave (S5.1, UC-13 chat path, hr_self_rest) ─────────────────────
+
+    @router.post("/apply_leave", response_model=ApplyLeaveResult)
+    async def apply_leave(
+        body: ApplyLeaveArgs,
+        request: Request,
+    ) -> ApplyLeaveResult:
+        """Submit a leave request for the authenticated user. Scope: hr_self_rest."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("apply_leave missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+        try:
+            claims = await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_self_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "apply_leave token validation failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        logger.debug(
+            "apply_leave validation_ok rid=%s sub=%s leave_type=%s start=%s end=%s",
+            rid, claims.sub, body.leave_type, body.start_date, body.end_date,
+        )
+        result = await hr_service.apply_leave(
+            claims.sub,
+            _username_for(claims),
+            "",
+            body.leave_type,
+            body.start_date,
+            body.end_date,
+            body.reason,
+        )
+        if result.get("success"):
+            return ApplyLeaveResult(success=True, request_id=result["request_id"])
+        return ApplyLeaveResult(
+            success=False,
+            error=result.get("error"),
+            message=result.get("message"),
+        )
+
     # ── Sprint 4 S4.1 cubicle handlers (UC-11) ────────────────────────────────
     #
     # All five share the same auth boilerplate as the leave handlers: extract
@@ -814,8 +1028,9 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
 
-        username = _username_for(claims)
-        result = await hr_service.get_my_cubicle(username)
+        result = await hr_service.get_my_cubicle(
+            sub=claims.sub, username=getattr(claims, "username", None)
+        )
         return GetMyCubicleResult(**result)
 
     # ── assign_cubicle (D3, hr_assets_write_rest) ─────────────────────────────
@@ -946,5 +1161,57 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
 
         result = await hr_service.lookup_employee(body.username_or_email)
         return LookupEmployeeResult(**result)
+
+    # ── get_all_leave_requests (Sprint 5, hr.read_all_leaves, hr_approve_rest) ──
+    #
+    # HR Admin read: list all leave requests, optionally filtered by status and/or
+    # employee_name. Scope: hr_approve_rest (same as approve/reject — whoever can
+    # approve is who'd ask). Employees lack this scope → IS denies CIBA consent →
+    # the existing ERR-MCP-003 / ERR-CIBA-005 path surfaces "you don't have
+    # permission" copy in the SPA. No ``sub`` is returned in any row.
+
+    @router.post("/get_all_leave_requests", response_model=GetAllLeaveRequestsResult)
+    async def get_all_leave_requests(
+        body: GetAllLeaveRequestsArgs,
+        request: Request,
+    ) -> GetAllLeaveRequestsResult:
+        """List all employees' leave requests (HR Admin only, scope hr_approve_rest)."""
+        rid = _get_rid(request)
+        token_str = _extract_bearer(request)
+        if not token_str:
+            logger.warning("get_all_leave_requests missing_bearer rid=%s", rid)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": "ERR-AUTH-006", "request_id": rid},
+            )
+
+        logger.debug(
+            "get_all_leave_requests tool_entry rid=%s required_scopes=%s",
+            rid,
+            ["hr_approve_rest"],
+        )
+
+        try:
+            await deps.validator.validate_token(
+                token_str,
+                required_scopes=frozenset({"hr_approve_rest"}),
+            )
+        except (JWTValidationError, PeerTrustError, ScopeError) as exc:
+            logger.warning(
+                "get_all_leave_requests validation_failed error_id=%s rid=%s",
+                exc.error_id, rid,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"error_id": exc.error_id, "request_id": rid},
+            ) from exc
+
+        rows = await hr_service.get_all_leave_requests(
+            status=body.status,
+            employee_name=body.employee_name,
+        )
+        return GetAllLeaveRequestsResult(
+            leave_requests=[AllLeaveRequestEntry(**row) for row in rows]
+        )
 
     return router

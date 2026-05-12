@@ -314,6 +314,16 @@ function wireStaticUI() {
   // Sign-in button
   $("signin-btn").addEventListener("click", signIn);
 
+  // Sprint 4: clicking the product name returns to the main (chat) view —
+  // the universal "go home" affordance. No-op when already on the home view.
+  const logoBtn = $("product-name-home");
+  if (logoBtn) {
+    logoBtn.addEventListener("click", () => {
+      const reportsView = $("reports-view");
+      if (reportsView && !reportsView.hidden) showHomeView();
+    });
+  }
+
   // Sign-out button — show confirmation dialog
   $("signout-btn").addEventListener("click", () => {
     const hasCiba = cibaState && ["AWAITING_APPROVAL", "VERIFYING", "WORKING"].includes(cibaState.widgetState);
@@ -518,6 +528,9 @@ function showAppShell() {
   // Sprint 4 S4.3: My Leaves panel — wire sort handlers once, then fetch.
   wireMyLeavesPanel();
   fetchMyLeaves();
+  // Sidebar: populate cubicle and assets cards on shell entry.
+  fetchMyCubicle();
+  fetchMyAssets();
   // Sprint 4 S4.4: Reports nav, gated on hr_approve_rest scope (canonical
   // HR-Admin probe — Employee role never holds it per docs/scope-policy.md).
   renderReportsNav();
@@ -547,8 +560,12 @@ function renderReportsNav() {
 }
 
 function showHomeView() {
-  const main = document.querySelector("main:not(.reports-view)");
-  if (main) main.hidden = false;
+  // Toggle #home-layout (the sidebar+chat wrapper) rather than the bare
+  // #chat-main <main>, so the sidebar is hidden together with the chat pane
+  // when the Reports view is active. Using $("home-layout") avoids the
+  // fragile main:not(.reports-view) querySelector.
+  const homeLayout = $("home-layout");
+  if (homeLayout) homeLayout.hidden = false;
   $("reports-view").hidden = true;
   const homeBtn = $("home-nav-btn");
   const reportsBtn = $("reports-nav-btn");
@@ -557,8 +574,9 @@ function showHomeView() {
 }
 
 function showReportsView() {
-  const main = document.querySelector("main:not(.reports-view)");
-  if (main) main.hidden = true;
+  // Hide the entire home layout (sidebar + chat) before showing Reports.
+  const homeLayout = $("home-layout");
+  if (homeLayout) homeLayout.hidden = true;
   $("reports-view").hidden = false;
   const homeBtn = $("home-nav-btn");
   const reportsBtn = $("reports-nav-btn");
@@ -1289,6 +1307,10 @@ function onChatMessageEvent(event) {
   // a manual reload. Conservative: re-fetch on EVERY settled chat_message
   // (demo scale; performance not a concern).
   fetchMyLeaves();
+  // Refresh sidebar cards — keeps cubicle + asset data current after any
+  // chat-driven assignment without requiring a page reload.
+  fetchMyCubicle();
+  fetchMyAssets();
   // Sprint 4 S4.4: if the admin is on the Reports view, refresh Pending
   // Leaves so a successful Approve/Reject (which dispatches CIBA and
   // settles via this SSE event) updates the table without manual reload.
@@ -1730,6 +1752,13 @@ async function sendMessage(text) {
   routingCount = 0;
   setComposerEnabled(false);
 
+  // S5: in LLM mode the orchestrator makes a Gemini routing call *before* the
+  // first SSE event, so show a transient "thinking" affordance straight away.
+  // It is replaced by the first routing / ciba_url / chat_message event
+  // (showRoutingLine / hideRoutingLine already manage #routing-line), or by the
+  // error bubble below on a failed POST.
+  showRoutingLine(COPY.routingThinking);
+
   // Generate the X-Request-ID at the user-action boundary so the audit trail
   // originates one hop earlier than the orchestrator. The middleware accepts
   // and echoes it; if absent it auto-generates with WARN.
@@ -1748,6 +1777,7 @@ async function sendMessage(text) {
     });
 
     if (resp.status === 429) {
+      hideRoutingLine();
       appendErrorMessage("Too many requests. Please wait a moment before trying again.");
       requestInFlight = false;
       setComposerEnabled(true);
@@ -1755,6 +1785,7 @@ async function sendMessage(text) {
     }
 
     if (!resp.ok) {
+      hideRoutingLine();
       const body = await resp.json().catch(() => ({}));
       appendErrorMessage(body.message || "Something went wrong handling your request.");
       requestInFlight = false;
@@ -1762,9 +1793,11 @@ async function sendMessage(text) {
       return;
     }
 
-    // Ack received — full response comes via SSE
+    // Ack received — full response comes via SSE (the "thinking" line stays
+    // until the first SSE event for this request).
 
   } catch (e) {
+    hideRoutingLine();
     logErr("[chat]", "sendMessage error:", e);
     appendErrorMessage("Something went wrong handling your request.");
     requestInFlight = false;
@@ -2154,11 +2187,20 @@ function renderMyLeavesPanel(rows) {
   tbody.innerHTML = sorted.map((r) => {
     const status = String(r.status || "");
     const cls = LEAVE_STATUS_CLASS[status.toLowerCase()] || "leave-status--pending";
-    return "<tr>"
-      + "<td>" + escapeHtml(r.request_id || "") + "</td>"
-      + "<td>" + escapeHtml(r.type || "") + "</td>"
-      + "<td>" + escapeHtml(r.start_date || "") + "</td>"
-      + "<td>" + escapeHtml(r.end_date || "") + "</td>"
+    const startFull = String(r.start_date || "");
+    const endFull = String(r.end_date || "");
+    // Compact sidebar: show MM-DD for the start date; the request id + full
+    // date range live in the row tooltip (full info is also in chat / Reports).
+    const startShort = startFull.length >= 10 ? startFull.slice(5) : startFull;
+    const tip = [
+      r.request_id ? "Request " + r.request_id : "",
+      startFull && endFull ? startFull + " → " + endFull : startFull,
+      r.type ? String(r.type) : "",
+    ].filter(Boolean).join(" · ");
+    // One <td> per <thead> column: Type | Start | Days | Status.
+    return "<tr title=\"" + escapeHtml(tip) + "\">"
+      + "<td>" + escapeHtml(String(r.type || "")) + "</td>"
+      + "<td>" + escapeHtml(startShort) + "</td>"
       + "<td>" + escapeHtml(String(r.days_requested ?? "")) + "</td>"
       + "<td><span class='leave-status " + cls + "'>" + escapeHtml(status) + "</span></td>"
       + "</tr>";
@@ -2179,6 +2221,129 @@ function wireMyLeavesPanel() {
       renderMyLeavesPanel(_myLeavesRows);
     });
   });
+}
+
+// ─── My Cubicle panel ────────────────────────────────────────────────────────
+//
+// Calls GET /api/me/cubicle. Renders assigned cubicle + floor, or a quiet
+// "No cubicle assigned" line. On 401/403 the card stays hidden. On 5xx
+// a brief error line is shown inside the card body.
+
+async function fetchMyCubicle() {
+  const panel = $("my-cubicle-panel");
+  if (!panel) return;
+  try {
+    const resp = await fetch("/api/me/cubicle", {
+      method: "GET",
+      credentials: "include",
+      headers: { "Accept": "application/json" },
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      panel.hidden = true;
+      return;
+    }
+    if (!resp.ok) {
+      panel.hidden = false;
+      renderMyCubiclePanel(null, true);
+      return;
+    }
+    const body = await resp.json().catch(() => null);
+    panel.hidden = false;
+    renderMyCubiclePanel(body, false);
+  } catch (err) {
+    logWarn("[my-cubicle]", "fetch failed", err);
+    panel.hidden = false;
+    renderMyCubiclePanel(null, true);
+  }
+}
+
+function renderMyCubiclePanel(data, isError) {
+  const bodyEl = $("my-cubicle-body");
+  if (!bodyEl) return;
+  if (isError) {
+    bodyEl.innerHTML = "<p class='sidebar-card-empty'>Could not load cubicle data.</p>";
+    return;
+  }
+  if (!data || data.assigned === false) {
+    bodyEl.innerHTML = "<p class='sidebar-card-empty'>No cubicle assigned.</p>";
+    return;
+  }
+  const assignedAt = data.assigned_at
+    ? "<div class='cubicle-meta'>Assigned " + escapeHtml(String(data.assigned_at).slice(0, 10)) + "</div>"
+    : "";
+  bodyEl.innerHTML =
+    "<div class='cubicle-assigned'>"
+    + "Cubicle <span class='cubicle-id'>" + escapeHtml(String(data.cubicle_id || "")) + "</span>"
+    + (data.floor !== undefined ? " &middot; Floor " + escapeHtml(String(data.floor)) : "")
+    + assignedAt
+    + "</div>";
+}
+
+// ─── My IT Assets panel ───────────────────────────────────────────────────────
+//
+// Calls GET /api/me/assets. Renders a compact list: asset_id + model + status
+// pill. On 401/403 the card stays hidden. On 5xx a brief error line is shown.
+
+let _myAssetsFetching = false;
+
+async function fetchMyAssets() {
+  const panel = $("my-assets-panel");
+  if (!panel) return;
+  if (_myAssetsFetching) return;
+  _myAssetsFetching = true;
+  try {
+    const resp = await fetch("/api/me/assets", {
+      method: "GET",
+      credentials: "include",
+      headers: { "Accept": "application/json" },
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      panel.hidden = true;
+      return;
+    }
+    if (!resp.ok) {
+      panel.hidden = false;
+      renderMyAssetsPanel(null, true);
+      return;
+    }
+    const body = await resp.json().catch(() => null);
+    panel.hidden = false;
+    renderMyAssetsPanel(body, false);
+  } catch (err) {
+    logWarn("[my-assets]", "fetch failed", err);
+    panel.hidden = false;
+    renderMyAssetsPanel(null, true);
+  } finally {
+    _myAssetsFetching = false;
+  }
+}
+
+function renderMyAssetsPanel(data, isError) {
+  const bodyEl = $("my-assets-body");
+  if (!bodyEl) return;
+  if (isError) {
+    bodyEl.innerHTML = "<p class='sidebar-card-empty'>Could not load asset data.</p>";
+    return;
+  }
+  if (!data || !Array.isArray(data.assets) || data.assets.length === 0) {
+    bodyEl.innerHTML = "<p class='sidebar-card-empty'>No IT assets assigned.</p>";
+    return;
+  }
+  const rows = data.assets.map((a) => {
+    const statusKey = String(a.status || "").toLowerCase();
+    const statusClass = statusKey === "returned"
+      ? "asset-status asset-status--returned"
+      : "asset-status asset-status--outstanding";
+    const statusLabel = escapeHtml(a.status || "");
+    return "<li class='asset-item'>"
+      + "<div class='asset-info'>"
+      + "<div>" + escapeHtml(a.model || a.type || "") + "</div>"
+      + "<div class='asset-id'>" + escapeHtml(a.asset_id || "") + "</div>"
+      + "</div>"
+      + "<span class='" + statusClass + "'>" + statusLabel + "</span>"
+      + "</li>";
+  }).join("");
+  bodyEl.innerHTML = "<ul class='asset-list'>" + rows + "</ul>";
 }
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────

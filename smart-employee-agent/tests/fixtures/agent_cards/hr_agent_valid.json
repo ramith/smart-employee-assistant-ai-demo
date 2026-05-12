@@ -2,31 +2,98 @@
   "schema_version": "v3-custom",
   "id": "hr_agent",
   "name": "HR Agent",
-  "description": "Handles HR queries: leave, time-off, employee info.",
+  "description": "Handles HR queries: leave (balance, history, policy, apply, approve, reject) and cubicle assignments.",
   "url": "https://hr.smart-employee.local",
   "oauth_client_id": "hr-agent-oauth-client-id-abc123",
   "api_version": "1.0.0",
   "skills": [
     {
+      "id": "hr.read_policy",
+      "name": "Get leave policy and how to apply",
+      "description": "Return the company leave policy — the leave types (Annual Leave, Sick Leave, Personal Leave), each with its rules (max days per year, minimum notice in days), and the information needed to submit a leave request (the leave type, the start and end dates in YYYY-MM-DD, an optional reason). Use this for purely informational questions: 'what leaves can I apply for', 'what's the leave policy', 'what are the leave rules', 'how do I apply for leave', 'what information do I need to apply for a leave'. Do NOT use this if the user actually wants to apply for leave (any expression of intent to apply / book / take leave, even without all the details) — use hr.apply_leave for that.",
+      "scope": "hr_basic_rest",
+      "required_scopes": ["hr_basic_rest"],
+      "args": []
+    },
+    {
       "id": "hr.read_balance",
       "name": "Get leave balance",
-      "description": "Return the remaining leave balance for the authenticated user.",
+      "description": "Return the authenticated user's remaining leave balance (annual / sick / personal day counts).",
       "scope": "hr_self_rest",
-      "required_scopes": ["hr_self_rest"]
+      "required_scopes": ["hr_self_rest"],
+      "args": []
     },
     {
       "id": "hr.read_history",
       "name": "Get leave history",
-      "description": "Return the user's recent leave history.",
+      "description": "Return the authenticated user's recent leave requests and their statuses.",
       "scope": "hr_self_rest",
-      "required_scopes": ["hr_self_rest"]
+      "required_scopes": ["hr_self_rest"],
+      "args": []
+    },
+    {
+      "id": "hr.apply_leave",
+      "name": "Apply for leave",
+      "description": "Submit a leave request for the authenticated user. Use this whenever the user wants to apply for / book / take / request leave — even if they have only given some of the details so far (e.g. just the dates, or just the type, or a follow-up like 'it will be a sick leave' after an earlier message gave the dates). It needs the leave type (one of: Annual Leave, Sick Leave, Personal Leave) and the start and end dates (YYYY-MM-DD); reason is optional. Provide whatever the conversation has supplied and omit the rest — the system will tell the user what's still missing. Compute relative dates from today's date given in the system prompt (e.g. 'next Monday', 'this Friday').",
+      "scope": "hr_self_rest",
+      "required_scopes": ["hr_self_rest"],
+      "args": ["leave_type", "start_date", "end_date", "reason"]
     },
     {
       "id": "hr.approve_leave",
       "name": "Approve leave request",
-      "description": "Approve a pending leave request by id (HR Admin only).",
+      "description": "Approve a pending leave request by its id (HR Admin only). Needs leave_id.",
       "scope": "hr_approve_rest",
-      "required_scopes": ["hr_approve_rest"]
+      "required_scopes": ["hr_approve_rest"],
+      "args": ["leave_id"]
+    },
+    {
+      "id": "hr.reject_leave",
+      "name": "Reject leave request",
+      "description": "Reject a pending leave request by its id with a reason (HR Admin only). Needs leave_id and reason.",
+      "scope": "hr_approve_rest",
+      "required_scopes": ["hr_approve_rest"],
+      "args": ["leave_id", "reason"]
+    },
+    {
+      "id": "hr.cubicle_summary",
+      "name": "Cubicle vacancy summary",
+      "description": "Show the per-floor cubicle vacancy summary — total and vacant cubicles on each of the 4 floors (HR Admin). NOTE: 'cubicle', 'seat' and 'seating (arrangement)' all mean the same thing here — treat them identically. This is the STARTING POINT for allocating a cubicle/seat: use it whenever an HR admin wants to assign/allocate a cubicle/seat but hasn't named a floor or a specific seat yet — e.g. 'I need to allocate a cubicle', 'show me the cubicle assignments', 'what seats are free', 'cubicle allocation', 'the seating arrangement'. The reply asks which floor they want.",
+      "scope": "hr_read_rest",
+      "required_scopes": ["hr_read_rest"],
+      "args": []
+    },
+    {
+      "id": "hr.cubicle_list_floor",
+      "name": "List vacant cubicles on a floor",
+      "description": "Show the vacant (available) cubicle/seat ids on ONE specific floor (1-4) (HR Admin). ('cubicle' == 'seat'.) Use when the HR admin has named a floor — 'floor 3', \"what's free on floor 2\", 'show me the seats on floor 1' — including as a short-circuit straight from 'allocate a cubicle on floor 3'. The reply asks which seat (and for which employee). Needs `floor`.",
+      "scope": "hr_read_rest",
+      "required_scopes": ["hr_read_rest"],
+      "args": ["floor"]
+    },
+    {
+      "id": "hr.cubicle_assign",
+      "name": "Assign a cubicle to an employee",
+      "description": "Assign ONE specific cubicle/seat to ONE specific employee — the FINAL step of cubicle/seat allocation (HR Admin, write). ('cubicle' == 'seat'.) Use ONLY when the message names BOTH a cubicle id (e.g. C-027 — a bare number like 'seat 27' means C-027) AND an employee (e.g. 'assign C-027 to jane.doe', 'give seat 14 to bob.smith'). If either is missing, use hr.cubicle_summary (no floor/seat picked yet) or hr.cubicle_list_floor (floor known) instead. Needs `cubicle_id` (the C-NNN id) and `employee_username`; `employee_email` optional.",
+      "scope": "hr_assets_write_rest",
+      "required_scopes": ["hr_assets_write_rest"],
+      "args": ["cubicle_id", "employee_username", "employee_email"]
+    },
+    {
+      "id": "hr.cubicle_lookup_self",
+      "name": "Get my cubicle",
+      "description": "Return the authenticated user's own cubicle assignment, if any.",
+      "scope": "hr_self_rest",
+      "required_scopes": ["hr_self_rest"],
+      "args": []
+    },
+    {
+      "id": "hr.read_all_leaves",
+      "name": "List all leave requests",
+      "description": "List all employees' leave requests; optional `status` filter (e.g. `Pending` for items awaiting approval) and optional `employee_name` filter. HR Admin only. Use for questions like 'show me all the leave requests', 'are there any leaves I need to approve', 'pending leave requests', 'leaves others submitted'.",
+      "scope": "hr_approve_rest",
+      "required_scopes": ["hr_approve_rest"],
+      "args": ["status", "employee_name"]
     }
   ],
   "capabilities": {

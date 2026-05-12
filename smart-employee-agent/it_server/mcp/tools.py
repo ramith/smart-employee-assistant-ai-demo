@@ -143,7 +143,10 @@ class IssueAssetArgs(BaseModel):
     """
 
     asset_id: str = Field(description="Catalogue asset_id, e.g. 'MBP-14-001'")
-    employee_id: str = Field(description="Target employee sub")
+    employee_id: str = Field(
+        description="Recipient's username (an email-form value is normalised to "
+        "its local part)"
+    )
 
 
 class IssueAssetResult(BaseModel):
@@ -294,10 +297,11 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         """Return assets assigned to the authenticated user (UC-12 IT leg).
 
         Required scope: ``it_assets_self_rest`` (NEW in Sprint 4 — sprint-4.md §6).
-        Identity is derived from ``claims.username`` (Track A); admin-grade
+        Identity is resolved from ``sub`` (the only claim CIBA tokens reliably
+        carry) with the ``username`` profile claim as a fallback; admin-grade
         cross-user lookups are not permitted on this path.
 
-        Fail-closed: missing ``username`` claim → 401 ``ERR-AUTH-007``.
+        Fail-closed: missing ``sub`` claim → 401 ``ERR-AUTH-007``.
         """
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
@@ -334,27 +338,23 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
                 detail={"error_id": exc.error_id, "request_id": rid},
             ) from exc
 
-        username = getattr(claims, "username", None)
-        if not username:
-            logger.warning(
-                "get_my_assets username_claim_absent rid=%s sub=%s",
-                rid,
-                claims.sub,
-            )
+        if not claims.sub:
+            logger.warning("get_my_assets sub_claim_absent rid=%s", rid)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error_id": "ERR-AUTH-007", "request_id": rid},
             )
 
+        username = getattr(claims, "username", None)
         logger.debug(
             "get_my_assets validation_ok rid=%s sub=%s jti=%s username=%s",
             rid,
             claims.sub,
             claims.jti,
-            username,
+            username or "(resolve-from-sub)",
         )
 
-        result = it_service.get_my_assets(username)
+        result = it_service.get_my_assets(username or "", sub=claims.sub)
         return GetMyAssetsResult(
             assets=[
                 AssignedAsset(
@@ -377,8 +377,9 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
     ) -> IssueAssetResult:
         """Issue an asset to an employee.
 
-        Required scope: ``it_assets_write_rest``.  Sprint 1 used canned data;
-        this endpoint records the issuance in-memory only and returns success.
+        Required scope: ``it_assets_write_rest``.  Records the issuance in the
+        in-memory store (so the recipient's "My IT Assets" panel and the
+        HR-admin Devices report reflect it) and returns the issuance receipt.
         """
         rid = _get_rid(request)
         token_str = _extract_bearer(request)
@@ -425,6 +426,11 @@ def build_it_mcp_router(deps: ITMcpToolRouterDeps) -> APIRouter:
         )
 
         from datetime import datetime, timezone
+
+        # Persist the assignment — without this the issuance "succeeds" on the
+        # wire but the recipient's "My IT Assets" panel and the Devices report
+        # stay empty (the Sprint 1 stub returned success without recording).
+        it_service.issue_asset(body.asset_id, body.employee_id)
 
         act_sub: str = (
             claims.act.get("sub") if isinstance(claims.act, dict) else None

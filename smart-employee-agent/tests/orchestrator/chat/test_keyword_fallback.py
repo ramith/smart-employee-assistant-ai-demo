@@ -118,6 +118,23 @@ def test_route_available_laptops() -> None:
     assert result == [_it_call()]
 
 
+def test_route_device_type_keywords_hit_available_assets() -> None:
+    """S5.16: 'phone' / 'monitor' / 'screen' (and a multi-device onboarding ask)
+    route to the IT catalogue browse tool, same as 'laptop'."""
+    router = KeywordRouter()
+    for msg in (
+        "is there a spare phone",
+        "what monitors are available",
+        "show me the screens",
+        "give the new hire a laptop and a phone",  # multi-device — IT side fires once
+    ):
+        it_calls = [c for c in router.route(msg) if c.agent_id == "it_agent"]
+        assert it_calls, msg
+        # Any IT route is acceptable for the onboarding phrasing ("give" also
+        # matches it.issue_asset); for the plain ones it must be the catalogue.
+        assert any(c.tool_id == "it.list_available_assets" for c in it_calls) or "give" in msg, msg
+
+
 # ---------------------------------------------------------------------------
 # Test 3 — combined message → HR first, IT second (rule order preserved)
 # ---------------------------------------------------------------------------
@@ -352,6 +369,52 @@ def test_route_cubicle_assign_extracts_id_and_username() -> None:
     assert hr_calls[0].args.get("employee_username") == "jane.doe"
 
 
+def test_route_vague_cubicle_intents_go_to_summary() -> None:
+    """Vague cubicle/seat phrasings (no floor, no C-NNN) — incl. a typo and the
+    'seat'/'seating' synonyms — route to hr.cubicle_summary, the entry point of
+    the allocation flow; the more specific rules still win (rule-order)."""
+    router = KeywordRouter()
+    for msg in (
+        "show me all the cubicle assinments",  # typo for "assignments"
+        "I need to allocate a cubicle.",
+        "cubicle allocation please",
+        "what cubicles are there",
+        "show me the seating arrangement",
+        "I need a seat for the new hire",
+        "what seats are free",
+        "give me the seating layout",
+    ):
+        result = router.route(msg)
+        hr_calls = [c for c in result if c.agent_id == "hr_agent"]
+        assert hr_calls and hr_calls[0].tool_id == "hr.cubicle_summary", msg
+    # The specific rules still take precedence:
+    assert router.route("where is my cubicle")[0].tool_id == "hr.cubicle_lookup_self"
+    assert router.route("where is my seat")[0].tool_id == "hr.cubicle_lookup_self"
+    floor_hr = [c for c in router.route("allocate a seat on floor 3") if c.agent_id == "hr_agent"]
+    # "floor 3" should win the floor rule, but "seat" appears too — rule order
+    # means whichever fires first per agent wins; both are acceptable entry
+    # points, so just assert it's one of the cubicle tools.
+    assert floor_hr and floor_hr[0].tool_id in {"hr.cubicle_list_floor", "hr.cubicle_summary"}
+
+
+def test_route_assign_seat_by_bare_number_normalises_to_c_id() -> None:
+    """'assign seat 27 to jane.doe' → hr.cubicle_assign with cubicle_id=C-027."""
+    router = KeywordRouter()
+    cases = {
+        "assign seat 27 to jane.doe": ("C-027", "jane.doe"),
+        "assign seat 14 to bob.smith": ("C-014", "bob.smith"),
+        "assign cubicle 5 to jane.doe": ("C-005", "jane.doe"),
+    }
+    for msg, (want_cid, want_user) in cases.items():
+        hr_calls = [c for c in router.route(msg) if c.agent_id == "hr_agent"]
+        assert hr_calls and hr_calls[0].tool_id == "hr.cubicle_assign", msg
+        assert hr_calls[0].args.get("cubicle_id") == want_cid, (msg, hr_calls[0].args)
+        assert hr_calls[0].args.get("employee_username") == want_user, (msg, hr_calls[0].args)
+    # An explicit C-NNN still works (and wins over the bare-number path).
+    hr_calls = [c for c in router.route("assign C-005 to jane.doe") if c.agent_id == "hr_agent"]
+    assert hr_calls[0].args.get("cubicle_id") == "C-005"
+
+
 # ---------------------------------------------------------------------------
 # Sprint 4 S4.2 — UC-12 cubicle.lookup_self + IT self-service
 # ---------------------------------------------------------------------------
@@ -385,3 +448,94 @@ def test_route_dual_agent_self_service_uc12() -> None:
     assert result[0].tool_id == "hr.cubicle_lookup_self"
     assert result[1].agent_id == "it_agent"
     assert result[1].tool_id == "it.get_my_assets"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 manual-gate fix — "apply for leave" / "leave types" → hr.read_policy
+# (must not collapse to the balance read).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "I want to apply for a leave",
+        "what are the leaves I can apply for ?",
+        "what leave types are there",
+        "show me the leave policy",
+    ],
+)
+def test_route_leave_policy_intent(message: str) -> None:
+    router = KeywordRouter()
+    result = router.route(message)
+    assert result == [ToolCall(agent_id="hr_agent", tool_id="hr.read_policy", args={})]
+
+
+def test_route_leave_balance_still_routes_to_balance() -> None:
+    """Regression: a plain balance question must still hit hr.read_balance,
+    not the new policy rule (which is keyed on policy/apply phrasings)."""
+    router = KeywordRouter()
+    assert router.route("what's my leave balance") == [_hr_call()]
+    assert router.route("how much vacation do I have left") == [_hr_call()]
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — hr.read_all_leaves keyword routing
+# ---------------------------------------------------------------------------
+
+
+def test_route_all_leave_requests_intent() -> None:
+    """'show me all the leave requests' → hr.read_all_leaves with no status filter."""
+    router = KeywordRouter()
+    result = router.route("show me all the leave requests")
+    assert len(result) == 1
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {}
+
+
+def test_route_pending_leave_requests_sets_pending_status() -> None:
+    """'are there any leave requests I need to approve?' → hr.read_all_leaves with status=Pending."""
+    router = KeywordRouter()
+    result = router.route("are there any leave requests I need to approve?")
+    assert len(result) == 1
+    assert result[0].agent_id == "hr_agent"
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {"status": "Pending"}
+
+
+def test_route_pending_leaves_phrase_sets_pending_status() -> None:
+    """'show me pending leaves' → hr.read_all_leaves with status=Pending."""
+    router = KeywordRouter()
+    result = router.route("show me pending leaves")
+    assert len(result) == 1
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {"status": "Pending"}
+
+
+def test_route_approve_leave_id_still_hits_approve_leave() -> None:
+    """Regression: 'approve LV-004' must still route to hr.approve_leave, not hr.read_all_leaves."""
+    router = KeywordRouter()
+    result = router.route("approve LV-004")
+    # One HR call, and it must be the specific-leave approve tool.
+    hr_calls = [c for c in result if c.agent_id == "hr_agent"]
+    assert len(hr_calls) == 1
+    assert hr_calls[0].tool_id == "hr.approve_leave"
+    assert hr_calls[0].args.get("leave_id") == "LV-004"
+
+
+def test_route_leaves_to_approve_without_id_hits_read_all_leaves() -> None:
+    """'leaves to approve' (no id) → hr.read_all_leaves with status=Pending."""
+    router = KeywordRouter()
+    result = router.route("leaves to approve")
+    assert len(result) == 1
+    assert result[0].tool_id == "hr.read_all_leaves"
+    assert result[0].args == {"status": "Pending"}
+
+
+def test_route_all_leaves_phrase() -> None:
+    """'all leaves' → hr.read_all_leaves."""
+    router = KeywordRouter()
+    result = router.route("all leaves")
+    assert len(result) == 1
+    assert result[0].tool_id == "hr.read_all_leaves"

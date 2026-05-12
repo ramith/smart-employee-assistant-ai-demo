@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 
 from it_server.auth.jwt_validator import JWTValidator, TokenError
-from it_server.service import it_service
+from it_server.service import it_service, store
 
 logger = logging.getLogger(__name__)
 
@@ -77,12 +77,18 @@ class _AuthContext:
         self.last_name = last
         self.full_name = f"{first} {last}".strip() or "User"
 
-        # Sprint 4: identity surfaces for username/email-keyed business logic.
-        # Control-char / length sanitisation happens earlier in the common
-        # JWT validator (security audit F-03); REST validator path uses
-        # raw payload, so apply minimal defensive defaults here.
-        self.username: str | None = payload.get("username") or None
-        self.email: str | None = payload.get("email") or None
+        # Sprint 4/S5.12: identity surfaces for username/email-keyed business
+        # logic. token-A's access token may not carry the `username`/`email`
+        # profile claims (some IS configs keep them ID-token-only). Since S5.12
+        # the OIDC subject IS the user's email and the IS username == the
+        # email's local-part, so derive both from `sub` when the claims are
+        # absent. (Control-char / length sanitisation happens earlier in the
+        # common JWT validator — security audit F-03.)
+        self.email: str | None = payload.get("email") or (self.sub if "@" in self.sub else None)
+        self.username: str | None = (
+            payload.get("username")
+            or (self.sub.split("@", 1)[0] if "@" in self.sub else None)
+        )
 
 
 async def _authenticate(
@@ -122,6 +128,14 @@ async def _authenticate(
         )
 
     ctx = _AuthContext(payload)
+    if ctx.sub:
+        # token-A carries the username/email profile claims — persist them so
+        # the token-C it.get_my_assets tool can resolve sub → username, and the
+        # Devices report can show emails (no hard-coded user seed).
+        store.ensure_user(
+            ctx.sub, ctx.first_name, ctx.last_name,
+            username=ctx.username, email=ctx.email,
+        )
 
     act = payload.get("act")
     endpoint = request.url.path
@@ -215,5 +229,29 @@ def build_rest_router(deps: ITRestRouterDeps) -> APIRouter:
             return err
         rows = it_service.get_all_asset_assignments()
         return JSONResponse({"data": rows, "count": len(rows)})
+
+    @router.get("/api/me/assets")
+    async def get_my_assets(request: Request):
+        """Return the authenticated user's own IT assets.
+
+        Sprint 4 (UC-12 / sidebar). Bearer token-A; scope
+        ``it_assets_self_rest``. Identity is resolved from ``sub`` (the only
+        claim OBO tokens reliably carry) with the ``username`` profile claim
+        as a fallback. Returns ``{assets: [...], total: N}`` (it_service shape).
+        """
+        ctx = await _authenticate(request, deps.validator)
+        if isinstance(ctx, JSONResponse):
+            return ctx
+        err = _require_scope(ctx, "it_assets_self_rest")
+        if err:
+            return err
+        if not ctx.sub:
+            return JSONResponse(
+                {"error_id": "ERR-AUTH-claim-missing", "detail": "sub claim absent"},
+                status_code=401,
+            )
+        return JSONResponse(
+            it_service.get_my_assets(ctx.username or "", sub=ctx.sub)
+        )
 
     return router

@@ -61,6 +61,11 @@ class Skill(BaseModel):
     scope: str = Field(default="", alias="scope", serialization_alias="scope")
     # Legacy field preserved for existing card fixtures; not used at runtime.
     required_scopes: list[str] = Field(default_factory=list)
+    # S5: names of the arguments this tool accepts — used by the LLM router to
+    # know what to extract from the user message, and to strip hallucinated arg
+    # keys. Empty for parameter-less tools. Must match the agent's dispatcher
+    # ``_TOOL_REGISTRY`` ``kwargs_builder`` keys 1:1.
+    args: list[str] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 
@@ -236,6 +241,7 @@ def llm_projection(card: AgentCard) -> dict:
                 "label": skill.label,
                 "description": skill.description,
                 "scope": skill.scope,
+                "args": list(skill.args),
             }
             for skill in card.skills
         ],

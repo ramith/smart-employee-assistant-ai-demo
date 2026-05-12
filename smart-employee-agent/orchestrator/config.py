@@ -63,6 +63,28 @@ def _parse_port(value: str, name: str) -> int:
     return port
 
 
+def _parse_float(value: str, name: str, *, minimum: float = 0.0) -> float:
+    """Parse *value* as a float >= *minimum* or raise ``ValueError``."""
+    try:
+        out = float(value)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid float for {name}={value!r}") from None
+    if out < minimum:
+        raise ValueError(f"{name}={value!r} must be >= {minimum}")
+    return out
+
+
+def _parse_positive_int(value: str, name: str) -> int:
+    """Parse *value* as an int >= 1 or raise ``ValueError``."""
+    try:
+        out = int(value)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid integer for {name}={value!r}") from None
+    if out < 1:
+        raise ValueError(f"{name}={value!r} must be >= 1")
+    return out
+
+
 # ── Dataclass ──────────────────────────────────────────────────────────────────
 
 
@@ -97,7 +119,14 @@ class OrchestratorConfig:
         session_cookie_name: Name of the browser session cookie.
         session_ttl_seconds: Session time-to-live in seconds.
         llm_fallback_mode: Routing mode — ``"keyword"`` (default) or ``"llm"``.
-        gemini_api_key: Gemini API key (only required when ``llm_fallback_mode="llm"``).
+            In ``"llm"`` mode the orchestrator routes + composes chat replies via
+            Gemini, with the keyword router / ``_render_result`` as the automatic
+            fallback; if the key is missing it degrades to keyword-only.
+        gemini_api_key: Gemini API key (only consulted when ``llm_fallback_mode="llm"``).
+        gemini_model: Gemini model id (default ``"gemini-2.5-flash"``).
+        llm_timeout_s: Per-LLM-call hard timeout in seconds (default ``8.0``);
+            on timeout the orchestrator falls back.
+        llm_max_output_tokens: Cap on Gemini output tokens per call (default ``512``).
         cookie_secure: Set Secure flag on session cookie (False in dev).
     """
 
@@ -158,6 +187,11 @@ class OrchestratorConfig:
     # the legacy `client:3001` container is no longer the SPA host.
     post_logout_redirect_uri: str = "http://localhost:8090/"
     gemini_api_key: str | None = None
+    # S5 — Gemini routing/composer knobs (only consulted when
+    # llm_fallback_mode == "llm" and gemini_api_key is set).
+    gemini_model: str = "gemini-2.5-flash"
+    llm_timeout_s: float = 8.0
+    llm_max_output_tokens: int = 512
 
     # Cookie (F-06)
     cookie_secure: bool = False
@@ -277,20 +311,33 @@ class OrchestratorConfig:
             env.get("SESSION_TTL_SECONDS", "28800"), "SESSION_TTL_SECONDS"
         )
 
-        # LLM (F-14)
-        llm_fallback_mode = env.get("LLM_FALLBACK_MODE", "keyword").strip()
+        # LLM (F-14 / S5)
+        llm_fallback_mode = (env.get("LLM_FALLBACK_MODE", "keyword").strip() or "keyword")
         gemini_api_key: str | None = env.get("GEMINI_API_KEY", "").strip() or None
+        gemini_model = env.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+        llm_timeout_s = _parse_float(env.get("LLM_TIMEOUT_S", "8") or "8", "LLM_TIMEOUT_S", minimum=0.1)
+        llm_max_output_tokens = _parse_positive_int(
+            env.get("LLM_MAX_OUTPUT_TOKENS", "512") or "512", "LLM_MAX_OUTPUT_TOKENS"
+        )
+        if llm_fallback_mode == "llm" and not gemini_api_key:
+            # Graceful degradation, not a crash (exit-criterion §6.13): main.py
+            # will see no key and build llm_client=None → resolve_tool_calls /
+            # compose_reply both no-op to the keyword router / _render_result.
+            logger.warning(
+                "LLM_FALLBACK_MODE=llm but GEMINI_API_KEY is empty — running keyword-only."
+            )
 
         # Cookie security
         cookie_secure = _parse_bool(env.get("COOKIE_SECURE", "false"))
 
         logger.info(
             "orchestrator_config_loaded | is_base_url=%s hr_agent_url=%s it_agent_url=%s "
-            "llm_fallback_mode=%s port=%d",
+            "llm_fallback_mode=%s gemini_model=%s port=%d",
             is_base_url,
             hr_agent_url,
             it_agent_url,
             llm_fallback_mode,
+            gemini_model,
             port,
         )
 
@@ -319,6 +366,9 @@ class OrchestratorConfig:
             session_ttl_seconds=session_ttl_seconds,
             llm_fallback_mode=llm_fallback_mode,
             gemini_api_key=gemini_api_key,
+            gemini_model=gemini_model,
+            llm_timeout_s=llm_timeout_s,
+            llm_max_output_tokens=llm_max_output_tokens,
             cookie_secure=cookie_secure,
         )
 

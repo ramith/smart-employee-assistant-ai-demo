@@ -145,7 +145,7 @@ def test_cubicle_assignments_happy_path_returns_envelope_without_sub() -> None:
         cubicle_id="C-001",
         floor=1,
         username="employee_user",
-        email="employee.user@example.com",
+        email="employee_user@example.com",
     )
     _assign(
         cubicle_id="C-002",
@@ -162,6 +162,7 @@ def test_cubicle_assignments_happy_path_returns_envelope_without_sub() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert set(body.keys()) == {"data", "count"}
+    # S5.12: no seed assignments — only the 2 this test assigned.
     assert body["count"] == 2
     # Identity surface lock: username + email only; sub never returned.
     for row in body["data"]:
@@ -189,7 +190,7 @@ def test_cubicle_assignments_missing_scope_returns_403() -> None:
         cubicle_id="C-001",
         floor=1,
         username="employee_user",
-        email="employee.user@example.com",
+        email="employee_user@example.com",
     )
 
     client = _build_app(payload)

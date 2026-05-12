@@ -350,7 +350,17 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
             # runtime (project_orchestrator_app_vestigial.md).
             client_id=deps.config.mcp_client_id,
             redirect_uri=deps.config.mcp_redirect_uri,
-            scope="openid profile email orchestrate",
+            # Sprint 4: request the full business-scope set so IS can return
+            # role-filtered scopes in the token-A claim. Without these in the
+            # authorize URL, IS strips them and the SPA gets only the OIDC
+            # defaults — Reports nav stays hidden, My Leaves panel won't load.
+            # The orchestrator-mcp-client app MUST be subscribed to HR + IT
+            # API resources for these to actually be granted (operator action).
+            scope=(
+                "openid profile email "
+                "hr_basic_rest hr_self_rest hr_read_rest hr_approve_rest hr_assets_write_rest "
+                "it_assets_read_rest it_assets_self_rest it_assets_write_rest"
+            ),
             requested_actor=deps.config.orchestrator_agent.agent_id,
             state=state,
             code_verifier=code_verifier,
@@ -642,7 +652,7 @@ def _make_exchange_relay_html(
     The page has no visible content.  On load it fires a ``fetch`` to
     ``POST /auth/exchange`` with JSON ``{code, state}``.  On success it
     navigates to ``redirect_after``; on failure it navigates to
-    ``/login?error=exchange_failed``.
+    ``/?error=exchange_failed``.
 
     Inline JavaScript is used intentionally: this page is ephemeral
     (rendered once per login flow, never cached) and has no external
@@ -685,19 +695,22 @@ def _make_exchange_relay_html(
           body: JSON.stringify({{ code: '{safe_code}', state: '{safe_state}' }})
         }});
         if (resp.ok) {{
-          // Persist session_id + user name so SPA's resume-from-localStorage path works.
-          // (Cookie alone isn't enough — SPA reads orch_session_id from localStorage on init.)
+          // Persist session_id + user name + scopes so SPA's resume-from-
+          // localStorage path works. (Cookie alone isn't enough — SPA reads
+          // orch_session_id from localStorage on init; orch_scopes drives the
+          // Reports nav gate via scopes.includes("hr_approve_rest").)
           try {{
             const data = await resp.json();
             if (data.session_id) localStorage.setItem('orch_session_id', data.session_id);
             if (data.user_display_name) localStorage.setItem('orch_user_name', data.user_display_name);
+            if (Array.isArray(data.scopes)) localStorage.setItem('orch_scopes', JSON.stringify(data.scopes));
           }} catch (e) {{ /* fall through; cookie still authenticates */ }}
           window.location.href = '{safe_redirect}';
         }} else {{
           window.location.href = '/?error=exchange_failed';
         }}
       }} catch (e) {{
-        window.location.href = '/login?error=exchange_failed';
+        window.location.href = '/?error=exchange_failed';
       }}
     }})();
   </script>

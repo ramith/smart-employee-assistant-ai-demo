@@ -439,8 +439,9 @@ def test_callback_access_denied_returns_html_redirect() -> None:
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     body = resp.text
-    # The page must redirect to the SPA login error URL.
-    assert "/login?error=access_denied" in body
+    # The page must redirect to the SPA root with the error query param —
+    # the SPA at "/" handles ?error= (there is no /login route).
+    assert "/?error=access_denied" in body
 
 
 # ---------------------------------------------------------------------------

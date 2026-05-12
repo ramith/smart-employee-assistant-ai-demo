@@ -150,6 +150,25 @@ class HRMcpClient:
 
     # ── Public tool methods ───────────────────────────────────────────────────
 
+    async def get_leave_policy(
+        self,
+        *,
+        token_b: OAuthToken,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST /mcp/tools/get_leave_policy``. Scope: ``hr_basic_rest``.
+
+        Parameter-less read of the company leave policy (leave types + rules).
+        Returns ``{"leave_types": [{leave_type, max_days_per_year,
+        requires_approval, min_notice_days, description}, ...]}``.
+        """
+        return await self._post(
+            "/mcp/tools/get_leave_policy",
+            token_b=token_b,
+            request_id=request_id,
+            body={},
+        )
+
     async def get_leave_balance(
         self,
         *,
@@ -220,6 +239,48 @@ class HRMcpClient:
             token_b=token_b,
             request_id=request_id,
             body=body,
+        )
+
+    async def apply_leave(
+        self,
+        *,
+        token_b: OAuthToken,
+        leave_type: str,
+        start_date: str,
+        end_date: str,
+        reason: str = "",
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST {base_url}/mcp/tools/apply_leave`` with Bearer token-B.
+
+        Required scope on token-B: ``hr_self_rest`` (enforced by hr_server).
+        Submits a leave request for the authenticated user (UC-13 chat path).
+
+        Args:
+            token_b: The user-OBO token (must carry ``hr_self_rest``).
+            leave_type: One of "Annual Leave" / "Sick Leave" / "Personal Leave".
+            start_date: ``YYYY-MM-DD``.
+            end_date: ``YYYY-MM-DD``; on or after ``start_date``.
+            reason: Optional free-text reason.
+            request_id: Optional ``X-Request-ID`` propagation override.
+
+        Returns:
+            Tool result body — ``{"success": true, "request_id": "LRxxx"}`` or
+            ``{"success": false, "error": "...", "message": "..."}``.
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx response.
+        """
+        return await self._post(
+            "/mcp/tools/apply_leave",
+            token_b=token_b,
+            request_id=request_id,
+            body={
+                "leave_type": leave_type,
+                "start_date": start_date,
+                "end_date": end_date,
+                "reason": reason,
+            },
         )
 
     async def approve_leave(
@@ -378,6 +439,46 @@ class HRMcpClient:
             token_b=token_b,
             request_id=request_id,
             body={"username_or_email": username_or_email},
+        )
+
+    async def get_all_leaves(
+        self,
+        token_b: OAuthToken,
+        *,
+        status: str | None = None,
+        employee_name: str | None = None,
+        request_id: str | None = None,
+    ) -> dict:
+        """Call ``POST {base_url}/mcp/tools/get_all_leave_requests`` with Bearer token-B.
+
+        Required scope on token-B: ``hr_approve_rest`` (enforced by hr_server).
+        Lists all employees' leave requests; optionally filtered by status (e.g.
+        ``"Pending"``) and/or employee_name substring. HR Admin only — an Employee
+        token lacks this scope and will produce a 401 from hr_server.
+
+        Args:
+            token_b: User-OBO token (must carry ``hr_approve_rest``).
+            status: Optional status filter (e.g. ``"Pending"``). Omit for all.
+            employee_name: Optional employee name substring filter. Omit for all.
+            request_id: Optional ``X-Request-ID`` propagation override.
+
+        Returns:
+            Tool result body — ``{"leave_requests": [{request_id, employee, type,
+            start_date, end_date, days_requested, status}, ...]}``.
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx response (including 401 scope denial).
+        """
+        body: dict = {}
+        if status is not None:
+            body["status"] = status
+        if employee_name is not None:
+            body["employee_name"] = employee_name
+        return await self._post(
+            "/mcp/tools/get_all_leave_requests",
+            token_b=token_b,
+            request_id=request_id,
+            body=body,
         )
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────

@@ -554,3 +554,36 @@ def test_pending_logout_reason_sweep_drops_old_entries() -> None:
     removed = store.sweep_pending_logout_reasons(now=_time.time() + 7200)
     assert removed == 1
     assert store.consume_pending_logout_reason("user-001") is None
+
+
+# ---------------------------------------------------------------------------
+# S5.6 — Session.record_chat_turn / history_snapshot
+# ---------------------------------------------------------------------------
+
+
+def test_record_chat_turn_appends_in_order() -> None:
+    store = _make_store()
+    s = _create_session(store)
+    assert s.chat_history == []
+    s.record_chat_turn("user", "how much leave do I have")
+    s.record_chat_turn("assistant", "you have 20 annual days")
+    assert s.chat_history == [
+        ("user", "how much leave do I have"),
+        ("assistant", "you have 20 annual days"),
+    ]
+    # history_snapshot is a copy — mutating it doesn't touch the session.
+    snap = s.history_snapshot()
+    snap.append(("user", "leak"))
+    assert s.chat_history[-1] == ("assistant", "you have 20 annual days")
+
+
+def test_record_chat_turn_trims_to_last_max() -> None:
+    cap = _store_mod._MAX_CHAT_HISTORY
+    store = _make_store()
+    s = _create_session(store)
+    total = cap + 10
+    for i in range(total):
+        s.record_chat_turn("user" if i % 2 == 0 else "assistant", f"msg-{i}")
+    assert len(s.chat_history) == cap
+    # The oldest were dropped; the newest `cap` are kept, in order.
+    assert [t[1] for t in s.chat_history] == [f"msg-{i}" for i in range(total - cap, total)]

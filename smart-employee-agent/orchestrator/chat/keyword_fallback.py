@@ -107,13 +107,23 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
     # Sprint 4 S4.2 (UC-12): cubicle.lookup_self comes before cubicle_summary
     # so "where is my cubicle" routes to the self-service tool, not the
     # admin-only summary read.
+    # NB: "cubicle" == "seat" == "seating (arrangement)" — synonyms throughout
+    # the cubicle rules. ("desk" is deliberately NOT a synonym — it collides
+    # with "hardware for my desk" / "desktop".)
     KeywordRule(
-        keywords=("where is my cubicle", "my cubicle", "show my cubicle"),
+        keywords=(
+            "where is my cubicle", "my cubicle", "show my cubicle",
+            "where is my seat", "my seat", "show my seat",
+        ),
         agent_id="hr_agent",
         tool_id="hr.cubicle_lookup_self",
     ),
     KeywordRule(
-        keywords=("vacant cubicle", "vacant cubicles", "show cubicles", "cubicle summary"),
+        keywords=(
+            "vacant cubicle", "vacant cubicles", "show cubicles", "cubicle summary",
+            "vacant seat", "vacant seats", "available seats", "free seats",
+            "show seats", "seat summary",
+        ),
         agent_id="hr_agent",
         tool_id="hr.cubicle_summary",
     ),
@@ -123,9 +133,47 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         tool_id="hr.cubicle_list_floor",
     ),
     KeywordRule(
-        keywords=("assign cubicle", "assign c-"),
+        keywords=("assign cubicle", "assign c-", "assign seat"),
         agent_id="hr_agent",
         tool_id="hr.cubicle_assign",
+    ),
+    # Sprint 5 — broad cubicle/seat catch-all (the allocation-flow entry point).
+    # Comes AFTER the more-specific cubicle rules above (lookup-self,
+    # vacant-summary, floor-N, assign-by-id) so those win first; this only
+    # fires for vague mentions — "show me the cubicle assignments", "I need to
+    # allocate a cubicle", "cubicle allocation", "seating arrangement" — and
+    # routes to the per-floor vacancy summary, step 1 of the flow. ("cubicle"
+    # / "seat" / "seating" alone is enough, so typos like "assinments" match.)
+    KeywordRule(
+        keywords=("cubicle", "cubicles", "seat", "seats", "seating"),
+        agent_id="hr_agent",
+        tool_id="hr.cubicle_summary",
+    ),
+    # Sprint 5 — HR Admin list-all-leaves intent (hr.read_all_leaves).
+    #
+    # Placed BEFORE the bare approve/approval rule so that multi-word
+    # list-intent phrases like "leave requests I need to approve" and
+    # "leaves to approve" route here rather than to hr.approve_leave.
+    #
+    # "approve LV-004" does NOT match because it contains no multi-word
+    # phrase from this rule's keyword list — it doesn't say "leave requests",
+    # "all leaves", "pending leaves", etc. — so it falls through to the
+    # approve_leave rule below. Verified by test.
+    #
+    # The _extract_inline_args handler sets status="Pending" when the message
+    # signals a pending filter ("pending", "need to approve", etc.).
+    KeywordRule(
+        keywords=(
+            "leave requests",
+            "all leaves",
+            "leaves to approve",
+            "leaves others submitted",
+            "pending leaves",
+            "need to approve",
+            "others submitted",
+        ),
+        agent_id="hr_agent",
+        tool_id="hr.read_all_leaves",
     ),
     KeywordRule(
         keywords=("approve", "approval"),
@@ -136,6 +184,20 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         keywords=("issue", "assign", "give"),
         agent_id="it_agent",
         tool_id="it.issue_asset",
+    ),
+    # Sprint 4 manual-gate fix: "what leaves can I apply for" / "leave types" /
+    # "I want to apply for a leave" → show the company leave policy. (The full
+    # apply-leave flow needs LLM-mode slot-filling for type + dates; in keyword
+    # fallback we surface the available types plus a how-to-phrase-it hint.)
+    # Must precede the generic `leave` rule below so these phrasings don't
+    # collapse to the balance read.
+    KeywordRule(
+        keywords=(
+            "leave types", "leave policy", "types of leave", "kinds of leave",
+            "what leaves", "which leaves", "what leave can", "apply for",
+        ),
+        agent_id="hr_agent",
+        tool_id="hr.read_policy",
     ),
     KeywordRule(
         keywords=("leave", "vacation", "time off", "pto"),
@@ -151,7 +213,10 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         tool_id="it.get_my_assets",
     ),
     KeywordRule(
-        keywords=("laptop", "asset", "equipment", "hardware", "computer"),
+        keywords=(
+            "laptop", "phone", "monitor", "screen",
+            "asset", "equipment", "hardware", "computer",
+        ),
         agent_id="it_agent",
         tool_id="it.list_available_assets",
     ),
@@ -186,6 +251,15 @@ _RECIPIENT_RE = re.compile(r"\b(?:to|for)\s+(\S+)", re.IGNORECASE)
 # Sprint 4 S4.1 (UC-11): cubicle ID (C-027) + floor number.
 _CUBICLE_ID_RE = re.compile(r"\bC-\d{3}\b", re.IGNORECASE)
 _FLOOR_NUM_RE = re.compile(r"\bfloor\s+(\d+)\b", re.IGNORECASE)
+# Sprint 5: "seat 27" / "seat C-27" / "cubicle 27" → normalised to "C-0NN" so
+# the "HR picks a seat" step accepts the bare number the floor list shows.
+_SEAT_NUM_RE = re.compile(r"\b(?:seat|cubicle)\s+(?:C-)?0*(\d{1,3})\b", re.IGNORECASE)
+# Sprint 5: detect "pending" intent in a list-leaves message. Matches
+# "pending", "need to approve", "to approve", "awaiting approval" phrasing.
+_PENDING_INTENT_RE = re.compile(
+    r"\b(pending|need\s+to\s+approve|to\s+approve|awaiting\s+approval)\b",
+    re.IGNORECASE,
+)
 
 
 def _extract_inline_args(tool_id: str, message: str) -> dict:
@@ -221,11 +295,25 @@ def _extract_inline_args(tool_id: str, message: str) -> dict:
         m_cubicle = _CUBICLE_ID_RE.search(message)
         if m_cubicle:
             out2["cubicle_id"] = m_cubicle.group(0).upper()
+        else:
+            # Accept a bare number after "seat"/"cubicle"/"desk" (e.g. "seat 27")
+            # and normalise to the canonical "C-0NN" form (1..100 only).
+            m_seat = _SEAT_NUM_RE.search(message)
+            if m_seat:
+                n = int(m_seat.group(1))
+                if 1 <= n <= 100:
+                    out2["cubicle_id"] = f"C-{n:03d}"
         m_recip2 = _RECIPIENT_RE.search(message)
         if m_recip2:
             # Strip trailing punctuation; the remainder is the username.
             out2["employee_username"] = m_recip2.group(1).rstrip(".,;:!?")
         return out2
+    if tool_id == "hr.read_all_leaves":
+        # Extract optional status=Pending when the message signals a list of
+        # items awaiting approval ("pending", "need to approve", etc.).
+        if _PENDING_INTENT_RE.search(message):
+            return {"status": "Pending"}
+        return {}
     return {}
 
 

@@ -146,6 +146,7 @@ class AgentRegistry:
                         "label": skill["label"],
                         "description": skill["description"],
                         "scope": skill["scope"],
+                        "args": skill.get("args", []),
                         "agent_id": projection["id"],
                         "agent_label": projection["label"],
                     }

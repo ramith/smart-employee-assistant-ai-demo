@@ -82,6 +82,22 @@ def _utc_now() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
+# NOTE on the CIBA ``login_hint`` (S5.18+): callers pass the inbound token's
+# ``sub`` claim verbatim — no munging. Since S5.12 every OAuth app asserts
+# ``email`` as the OIDC subject, so for a user with an ``emailaddress`` attribute
+# ``sub`` is that email (e.g. ``<user>@<domain>``); a user without one falls back
+# to a user-id UUID. WSO2 IS's CIBA user resolver (``DefaultCibaUserResolver``)
+# resolves a ``login_hint`` as, in order: a multi-attribute-login lookup →
+# ``isExistingUser(hint)`` → ``isExistingUserWithID(hint)`` (UUID). The demo
+# convention is **username == email** (``docs/wso2-is-setup.md`` §5.5), so an
+# email ``login_hint`` matches a plain local username directly; a UUID ``sub``
+# resolves via the UUID branch. (Multi-Attribute Login for the email claim also
+# works and is fine to leave on, but isn't required given that convention.) The
+# old ``_normalize_login_hint`` ``@domain``-stripping workaround — which assumed
+# ``username == email-local-part`` and was the cause of the recurring "federated
+# user" 400 — was removed in S5.18. See ``docs/architecture/identity-subject-mismatch.md`` §6.
+
+
 # ── CIBARequest ───────────────────────────────────────────────────────────────
 
 
@@ -193,7 +209,10 @@ class CIBAClient:
         Args:
             oauth_client_id: The agent's OAuth Application client_id.
             oauth_client_secret: Corresponding client secret.
-            login_hint: User's ``sub`` UUID extracted from the inbound token-A.
+            login_hint: The user's ``sub`` claim from the inbound token-A —
+                an email (resolved by IS Multi-Attribute Login) or a user-id
+                UUID. Sent to IS verbatim (no ``@domain`` stripping; see the
+                module-level NOTE).
             binding_message: Pre-rendered consent string from
                 ``common.auth.binding_messages.render()`` (F-05).
             actor_token: The agent's own I4 token from ``ActorTokenProvider``.
@@ -210,6 +229,10 @@ class CIBAClient:
         """
         assert self.http is not None  # guaranteed by __post_init__
 
+        # S5.18: ``login_hint`` is the inbound token's ``sub`` sent verbatim —
+        # an email (resolved by IS Multi-Attribute Login) or a user-id UUID
+        # (resolved by IS's UUID branch). No ``@domain`` stripping. See the
+        # module-level NOTE above.
         form_data: dict[str, str] = {
             "scope": scope,
             "login_hint": login_hint,
@@ -538,7 +561,8 @@ class CIBAClient:
         Args:
             oauth_client_id: Agent's OAuth Application client_id.
             oauth_client_secret: Corresponding client secret.
-            login_hint: User's ``sub`` UUID.
+            login_hint: The user's ``sub`` claim (an email, or a user-id UUID);
+                forwarded to :meth:`initiate` verbatim.
             binding_message: Pre-rendered consent string (F-05).
             actor_token: Agent's I4 token.
             scope: Space-separated scope string.

@@ -61,6 +61,7 @@ for _pkg in (
     "it_server",
     "it_server.auth",
     "it_server.mcp",
+    "it_server.service",
 ):
     if _pkg not in sys.modules:
         _stub = _types.ModuleType(_pkg)
@@ -74,6 +75,7 @@ for _src, _dst in (
     ("it_server", "it_server"),
     ("it_server.auth", "it_server.auth"),
     ("it_server.mcp", "it_server.mcp"),
+    ("it_server.service", "it_server.service"),
 ):
     if _dst not in sys.modules:
         _stub = _types.ModuleType(_dst)
@@ -90,6 +92,9 @@ _correlation_mod = _load("common.logging.correlation", "common/logging/correlati
 _it_validators_mod = _load(
     "it_server.auth.validators", "it_server/auth/validators.py"
 )
+# Load store and service before tools so they're in sys.modules and accessible.
+_it_store_mod = _load("it_server.service.store", "it_server/service/store.py")
+_it_service_mod = _load("it_server.service.it_service", "it_server/service/it_service.py")
 _it_tools_mod = _load("it_server.mcp.tools", "it_server/mcp/tools.py")
 
 # Types
@@ -110,7 +115,8 @@ build_it_mcp_router = _it_tools_mod.build_it_mcp_router
 ISSUER = "https://api.asgardeo.io/t/ddademo/oauth2/token"
 IT_AGENT_CLIENT_ID = "it_agent-oauth-client-uuid"
 IT_AGENT_UUID = "it_agent-identity-uuid-0001"
-SUBJECT = "employee_user-sub-uuid-0001"  # Sprint 4 S4.2: store keys by username now
+# S5.12: email-form sub (all OAuth apps now assert email as OIDC subject).
+SUBJECT = "employee_user@example.com"
 JTI = "jti-it-mcp-test-001"
 REQUEST_ID = "req-test-uuid-it-001"
 
@@ -153,6 +159,14 @@ def sign_token(rsa_keypair):
 # ---------------------------------------------------------------------------
 # Per-test fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_store():
+    """Reset the in-memory IT store before each test (S5.12: no seed data)."""
+    _it_store_mod.reset_data()
+    yield
+    _it_store_mod.reset_data()
 
 
 @pytest.fixture
@@ -276,6 +290,20 @@ async def test_get_my_assets_returns_user_assets(rsa_keypair, sign_token, it_sel
     """T-IT-MCP-03: Sprint 4 S4.2 — valid it_assets_self_rest + username claim
     returns the user's assets keyed by username.
     """
+    # S5.12: no seed data — register the user and append their assets first.
+    _it_store_mod.ensure_user(
+        SUBJECT, "Employee", "User",
+        username="employee_user", email=SUBJECT,
+    )
+    _it_store_mod.assets.append(
+        {"asset_id": "AST-12345", "username": "employee_user", "type": "laptop",
+         "model": "MBP 14 M3", "status": "outstanding"}
+    )
+    _it_store_mod.assets.append(
+        {"asset_id": "AST-12346", "username": "employee_user", "type": "phone",
+         "model": "iPhone 15 Pro", "status": "returned"}
+    )
+
     _, public_jwk = rsa_keypair
     token = sign_token(it_self_payload)
     app = _build_app(public_jwk)
@@ -292,7 +320,7 @@ async def test_get_my_assets_returns_user_assets(rsa_keypair, sign_token, it_sel
     # Sprint 4 S4.2: shape changed to {assets, total} — no employee_id field.
     assert "assets" in data
     assert "total" in data
-    assert data["total"] == 2  # employee_user has 2 seeded assets (laptop + phone)
+    assert data["total"] == 2  # employee_user has 2 live-setup assets (laptop + phone)
     asset_ids = {a["asset_id"] for a in data["assets"]}
     assert "AST-12345" in asset_ids
     assert all("status" in a for a in data["assets"])
@@ -493,6 +521,16 @@ async def test_get_my_assets_username_drives_lookup(rsa_keypair, sign_token, it_
     ``claims.username`` from the validated token. Switching the username
     claim should switch the returned rows.
     """
+    # S5.12: no seed — register hr_admin_user and append their asset first.
+    _it_store_mod.ensure_user(
+        "hr_admin_user@example.com", "HR", "Admin",
+        username="hr_admin_user", email="hr_admin_user@example.com",
+    )
+    _it_store_mod.assets.append(
+        {"asset_id": "AST-22001", "username": "hr_admin_user", "type": "monitor",
+         "model": "Dell UltraSharp 27", "status": "outstanding"}
+    )
+
     _, public_jwk = rsa_keypair
     payload = dict(it_self_payload, username="hr_admin_user")
     token = sign_token(payload)
@@ -542,19 +580,34 @@ async def test_get_my_assets_missing_self_scope_returns_401(rsa_keypair, sign_to
 
 
 # ---------------------------------------------------------------------------
-# T-IT-MCP-14: Sprint 4 S4.2 — username claim absent → fail-closed 401
+# T-IT-MCP-14: Sprint 4 — username claim absent → fall back to sub→username
+# (revised: WSO2 IS OBO/CIBA tokens carry only `sub`, not the `username`
+# profile claim, so the self-service path resolves sub→username via the seed).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_my_assets_missing_username_claim_returns_401(rsa_keypair, sign_token, it_self_payload):
-    """T-IT-MCP-14: Sprint 4 S4.2 — username claim required by Stage 5 §E1.
+async def test_get_my_assets_resolves_username_from_sub(rsa_keypair, sign_token, it_self_payload):
+    """T-IT-MCP-14: ``username`` claim absent, ``sub`` resolves via store to
+    the registered user → that user's assets are returned (200)."""
+    # S5.12: no seed — register the user (REST-auth path) so sub→username resolves,
+    # then append their assets.
+    _it_store_mod.ensure_user(
+        SUBJECT, "Employee", "User",
+        username="employee_user", email=SUBJECT,
+    )
+    _it_store_mod.assets.append(
+        {"asset_id": "AST-12345", "username": "employee_user", "type": "laptop",
+         "model": "MBP 14 M3", "status": "outstanding"}
+    )
+    _it_store_mod.assets.append(
+        {"asset_id": "AST-12346", "username": "employee_user", "type": "phone",
+         "model": "iPhone 15 Pro", "status": "returned"}
+    )
 
-    No fallback to ``sub`` (deliberately fail-closed per the design lock).
-    """
     _, public_jwk = rsa_keypair
     payload = dict(it_self_payload)
-    payload.pop("username")
+    payload.pop("username")  # token carries only `sub` — no username claim
     token = sign_token(payload)
     app = _build_app(public_jwk)
     client = TestClient(app, raise_server_exceptions=True)
@@ -565,10 +618,32 @@ async def test_get_my_assets_missing_username_claim_returns_401(rsa_keypair, sig
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
-    assert resp.status_code == 401
-    body = resp.json()
-    detail = body.get("detail", body)
-    assert detail["error_id"] == "ERR-AUTH-007"
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2  # employee_user's 2 live-setup assets resolved via sub
+    assert "AST-12345" in {a["asset_id"] for a in data["assets"]}
+
+
+@pytest.mark.asyncio
+async def test_get_my_assets_unresolvable_sub_returns_empty(rsa_keypair, sign_token, it_self_payload):
+    """``username`` absent and ``sub`` matches no seeded user → empty list (200),
+    not a 500/401 — the caller simply has no assets on record."""
+    _, public_jwk = rsa_keypair
+    payload = dict(it_self_payload)
+    payload.pop("username")
+    payload["sub"] = "00000000-0000-0000-0000-000000000000"
+    token = sign_token(payload)
+    app = _build_app(public_jwk)
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.post(
+        "/mcp/tools/get_my_assets",
+        json={},
+        headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"assets": [], "total": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -594,7 +669,9 @@ def it_write_payload() -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_issue_asset_valid_write_token(rsa_keypair, sign_token, it_write_payload):
-    """T-IT-MCP-11: Token with it_assets_write_rest issues an asset successfully."""
+    """T-IT-MCP-11: Token with it_assets_write_rest issues an asset successfully —
+    and (S5.17) the assignment is *persisted* so the employee panel / Devices
+    report reflect it; the issuance is no longer a no-op stub."""
     _, public_jwk = rsa_keypair
     token = sign_token(it_write_payload)
     app = _build_app(public_jwk)
@@ -602,16 +679,23 @@ async def test_issue_asset_valid_write_token(rsa_keypair, sign_token, it_write_p
 
     resp = client.post(
         "/mcp/tools/issue_asset",
-        json={"asset_id": "MBP-14-001", "employee_id": "user-uuid-abc123"},
+        json={"asset_id": "MBP-14-001", "employee_id": "alice"},
         headers={"Authorization": f"Bearer {token}", "X-Request-ID": REQUEST_ID},
     )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["asset_id"] == "MBP-14-001"
-    assert data["employee_id"] == "user-uuid-abc123"
+    assert data["employee_id"] == "alice"
     assert data["issued_by"] == IT_AGENT_UUID  # act.sub
     assert "issued_at" in data
+
+    # S5.17: it actually landed in the store, model/type filled from catalogue.
+    assert _it_store_mod.get_assets_for_username("alice") == [
+        {"asset_id": "MBP-14-001", "username": "alice", "type": "laptop",
+         "model": "MacBook Pro 14", "status": "outstanding"}
+    ]
+    assert _it_service_mod.get_my_assets("alice")["total"] == 1
 
 
 @pytest.mark.asyncio

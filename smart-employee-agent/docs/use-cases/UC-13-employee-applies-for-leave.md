@@ -3,6 +3,8 @@
 > **Build status (revised after Stage 3 user back-track 2026-05-10):** **hybrid — backend existing (`hr_service.apply_leave` shipped Sprint 1–2); SPA "My Leaves" panel is NEW in Sprint 4.**
 >
 > Sprint 4 keeps the chat path unchanged but adds a visible UI surface so the employee sees their applied leaves on the home page without having to ask the agent. After applying via chat, the panel re-fetches and shows the new request without page reload. See [`docs/architecture/sprint-4.md`](../architecture/sprint-4.md) §2 items 6 + 10.
+>
+> **Sprint 5 update:** the "Main flow" below assumed an LLM orchestrator that extracts `{leave_type, start_date, end_date, reason}` from the user's sentence — that LLM did not exist until S5. Sprint 5 adds (a) the LLM router/composer ([UC-17](UC-17-llm-routed-chat.md)) and (b) the missing `apply_leave` chat tool: a new `hr_server` MCP route `POST /mcp/tools/apply_leave` (scope `hr_self_rest`) + an `hr.apply_leave` entry in the HR Agent dispatcher `_TOOL_REGISTRY` (CIBA scope `openid hr_self_rest`, required args `leave_type`/`start_date`/`end_date`). With S5, this use case works end-to-end as written. In keyword-fallback mode the chat instead surfaces the leave types via `hr.read_policy` (Sprint 4) plus a hint to phrase the request with dates.
 
 **Sprint:** 1 (chat path built), 4 (My Leaves panel + documentation)
 **Priority:** High

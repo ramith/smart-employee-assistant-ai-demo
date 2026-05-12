@@ -90,6 +90,11 @@ Console → **Applications** → **+ New Application** → **Standard-Based Appl
 - ☑ **Client Credentials**
 - Client Authentication method: **Client Secret Basic**
 
+**User Attributes tab — Subject (S5.12) — REQUIRED:**
+- ☑ **Email** under "User Attribute Selection".
+- Under **Subject**: ☑ **Assign alternate subject identifier**, **Subject attribute = Email**, **Subject type = Public**.
+- Why: token-A (this app's user token, behind the SPA's `/api/me/*` proxy) must carry the **same `sub`** as the per-agent CIBA/OBO tokens (token-C, issued by `hr-agent`/`it-agent`, which are also email-subject — see Step 3). If this app emits the default `userid` UUID while the agent apps emit the email, per-user state desyncs (e.g. a leave applied via chat doesn't show in "My Leaves"). The original S5.11 diagnosis assumed this app was already email-subject — verify it actually is.
+
 **Capture for `orchestrator/.env`:**
 - Client ID → `ORCHESTRATOR_MCP_CLIENT_ID`
 - Client Secret → `ORCHESTRATOR_MCP_CLIENT_SECRET`
@@ -136,6 +141,11 @@ Then go to Console → **Applications** → find the auto-created app named afte
 **Roles tab — IMPORTANT:**
 - **Role Audience: Organization** (default is Application; flip to Organization). Application-audience roles don't propagate across the agent chain; Organization audience does. Required for Sprint 2/3 role-based scopes (e.g. `hr_admin` for `approve_leave`).
 
+**User Attributes tab — Subject (S5.12) — DO THIS for `hr-agent` and `it-agent` (NOT `orchestrator-agent`):**
+- Under **Subject**: ☑ **Assign alternate subject identifier**, **Subject attribute = Email**, **Subject type = Public**, leave "Include user domain" / "Include organization name" unchecked. Also ☑ **Email** under "User Attribute Selection".
+- Why: the per-agent CIBA/OBO token (token-C) issued by these apps must carry the **same `sub`** as the orchestrator session token (token-A from `orchestrator-mcp-client` — which **also** needs Subject = Email, see Step 2), or per-user state keyed by `sub` desyncs across code paths. **All three of `orchestrator-mcp-client` + `hr-agent` + `it-agent` must agree** — set the same Subject config on all three. See [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md). The agent's *own* actor token is unaffected — an agent identity has no `email` attribute, so IS falls back to the `userid` UUID for it (which is what `act.sub` / `trusted_act_subs` need).
+- **`orchestrator-agent`**: leave the default subject. It only ever mints its own actor token (the user code-exchange happens at `orchestrator-mcp-client`), so flipping it buys nothing.
+
 Click **Update** to save.
 
 Capture from the Agent's General/Credentials tab AND the auto-created OAuth App's Info/Protocol tab:
@@ -159,14 +169,15 @@ The scope structure mirrors the existing `hr_server/service/hr_service.py` 4-tie
 ### 5.1 HR API
 - **Identifier:** `urn:hr:api`
 - **Display name:** HR API
-- **Scopes (4 — full tier model):**
+- **Scopes (5):**
 
 | Scope | Display name | Description | Tier / who has it |
 |---|---|---|---|
 | `hr_basic_rest` | View company HR info | Holidays, leave policy | every employee |
 | `hr_self_rest` | View own leave info | Own leave balance + own requests | every employee (default Sprint 1 demo path) |
-| `hr_read_rest` | View all leave requests | Dashboard view across all employees | **HR Admin only** |
-| `hr_approve_rest` | Approve/reject leave | Modify leave requests | **HR Admin only** |
+| `hr_read_rest` | View all leave requests | Dashboard view across all employees + cubicle/seat reads (`get_cubicle_summary`, `get_vacant_cubicles_on_floor`, `lookup_employee`) | **HR Admin only** |
+| `hr_approve_rest` | Approve/reject leave | Modify leave requests; also `get_all_leave_requests` (the `hr.read_all_leaves` chat skill) | **HR Admin only** |
+| `hr_assets_write_rest` | Assign cubicles/seats | `assign_cubicle` (the cubicle/seat-assign chat flow) | **HR Admin only** |
 
 ### 5.2 IT API
 - **Identifier:** `urn:it:api`
@@ -185,17 +196,25 @@ Console → **Roles** → **+ New Role**
 | Role | Audience | Granted scopes |
 |---|---|---|
 | `HR Admin` | **Organization** | **All HR API scopes** (`hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`) **+ `it_assets_write_rest`**. Rationale: HR admins also take their own leave; they should be a superset of Employee for HR-domain operations. |
-| `Employee` | **Organization** | `hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`. Granted to `employee_user`. |
+| `Employee` | **Organization** | `hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`. Granted to `employee@example.com`. |
 
-The denial path tests (N30, N31, UC-08) still work cleanly: `employee_user` does NOT have `hr_approve_rest` or `it_assets_write_rest` in its role, so any CIBA request for those scopes fails — that's the security demo.
+The denial path tests (N30, N31, UC-08) still work cleanly: the Employee-role user does NOT have `hr_approve_rest` or `it_assets_write_rest` in its role, so any CIBA request for those scopes fails — that's the security demo.
 
-Console → **Users** → **+ Add User**:
+Console → **Users** → **+ Add User** — **username = email** for every user (see the box below):
 
-| Username | Password | Role |
-|---|---|---|
-| `employee_user` | `NewsMax@1234` | **Employee** (explicit role assignment) |
-| `hr_admin_user` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
-| `probe.user` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in Sprint 1 demo) |
+| Username | Email Address | Password | Role |
+|---|---|---|---|
+| `employee@example.com` | `employee@example.com` | `NewsMax@1234` | **Employee** (explicit role assignment) |
+| `hradmin@example.com` | `hradmin@example.com` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
+| `probe.user@example.com` | `probe.user@example.com` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in the demo) |
+
+*(The exact local-parts don't matter — pick whatever you want for demo day. What matters is `username == email`. The names above are just the current demo set.)*
+
+> **The convention (S5.18.1): `username == email`.** Create every user with the IS **username set to their email address**, and the same value as the Email attribute. Rationale: the email is the OIDC `sub` (§4 — alternate subject = Email), so it's both the per-user data key (token-A == token-C) *and* the CIBA `login_hint`; making the *username* equal it too means `username == email == sub == login_hint` — one identifier, and the `login_hint` resolves directly as a plain username (no Multi-Attribute Login needed). For a user created *without* an email attribute, `sub` falls back to the `userid` UUID, which IS also resolves as a `login_hint` — still works, just not the recommended shape.
+>
+> *(History: S5.12→S5.17 used `username == email-local-part` and stripped `@domain` off the `login_hint`; S5.18 stopped stripping and tried IS Multi-Attribute Login; in practice the simplest, most robust shape for the demo turned out to be `username == email` — adopted S5.18.1. Multi-Attribute Login can be left on or off; with email-form usernames it's a no-op.)*
+>
+> There is **no** seeded demo roster — the demo runs against whatever users you create here; `lookup_employee` / the report username→email joins resolve them from the token's profile claims on first sign-in.
 
 Credentials captured in `scripts/probes/.test-users.env` (gitignored).
 
@@ -207,10 +226,10 @@ For each agent's **auto-created OAuth Application**:
 
 | Subscribe app | To resource | Authorized scopes |
 |---|---|---|
-| `hr-agent`'s OAuth App | HR API | all 4: `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest` |
-| `it-agent`'s OAuth App | IT API | both: `it_assets_read_rest`, `it_assets_write_rest` |
+| `hr-agent`'s OAuth App | HR API | **all 5**: `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`, `hr_assets_write_rest` |
+| `it-agent`'s OAuth App | IT API | **all of**: `it_assets_read_rest`, `it_assets_write_rest`, `it_assets_self_rest` |
 
-(The agent's CIBA initiation requests a SUBSET of these per-tool; the IS consent screen narrows further to what the user's role permits. So an Employee asking for `hr_approve_rest` will be denied by IS even though hr-agent's OAuth App is subscribed to it.)
+(The agent's CIBA initiation requests a SUBSET of these per-tool; the IS consent screen narrows further to what the user's role permits. So an Employee asking for `hr_approve_rest` will be denied by IS even though hr-agent's OAuth App is subscribed to it. **Conversely, if the OAuth app is NOT subscribed to a scope a tool requests, IS silently strips it from the issued token-C — the failure surfaces as a 401/ERR-MCP-003 from the MCP server, not at CIBA initiation.** `hr_assets_write_rest` is easy to miss here — `scripts/check-is-config.py` Section 4c verifies it.)
 
 Console → Applications → that app → **API Authorization** tab → **+ Authorize resource** → pick the API → check the scopes → **Add**.
 
@@ -344,6 +363,12 @@ CIBA grant not enabled on the agent's OAuth App's Protocol tab. Re-check Step 4.
 
 ### Consent widget appears but never resolves
 Notification Channel not set to External. Re-check Step 4.
+
+### `"external notification channel is not supported for federated users"` from `/oauth2/ciba`
+IS couldn't resolve the `login_hint` (= the inbound token's `sub`, an email) to a local user. The convention is **`username == email`** (§5.5) — check that the user's IS *username* is their full email address (not the bare local-part, not a UUID). If you're relying on Multi-Attribute Login instead of the email-form username, confirm it's enabled with `http://wso2.org/claims/emailaddress` in the allowed list (Console → Login & Registration → Alternative Login Identifiers). Also possible: an agent OAuth app lost its email-subject config (Step 4's User Attributes → Subject), so `sub` isn't actually the email. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md) §6.
+
+### Leave applied via chat doesn't appear in "My Leaves" / a sidebar widget is empty after a chat action
+The per-user `sub` keying desynced — `hr-agent`/`it-agent` lost their **Subject = Email** config (Step 4, User Attributes → Subject), so token-C carries a UUID while token-A carries the email. Re-apply it. Also confirm the user has an `emailaddress` attribute. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md).
 
 ### `"Impersonator is not found in subject token"` from any /token call
 You're trying RFC 8693 token-exchange — that's NOT used in v4. The orchestrator should be calling `/oauth2/token` with `grant_type=authorization_code` (Pattern C) or polling with `grant_type=urn:openid:params:grant-type:ciba`. Check the request shape in logs.

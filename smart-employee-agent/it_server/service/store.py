@@ -3,15 +3,15 @@
 Mirrors hr_server/service/store.py — same shape, same auto-registration
 pattern, same logging style.
 
-Sprint 4 S4.2 (UC-12): one-shot data migration. The legacy ``employee_id``
-field has been dropped and the seed is rekeyed by ``username`` (per
-sprint-4.md §7 identity model). Asset rows now look like
-``{asset_id, username, type, model, status}``. The ``users`` dict is also
-pre-seeded with the four named demo users (``employee_user``,
-``hr_admin_user``, ``jane.doe``, ``bob.smith``) — same shape as
-``hr_server/service/store.py`` so ``it_service.get_my_assets`` and the
-joined reporting helper can resolve username → email without an extra
-lookup.
+Asset rows look like ``{asset_id, username, type, model, status}`` (keyed by
+``username``). There is no seeded asset-assignment or named-user data — the
+store starts empty for user-specific state and is populated live: the REST
+auth path carries the ``username``/``email`` profile claims (token-A) into
+``ensure_user`` so ``it_service.get_my_assets`` (and the joined reporting
+helper) can resolve ``sub`` → ``username`` → ``email`` for whoever signs in,
+and asset assignments are created via the issuance tool at runtime (S5.12).
+The asset *catalogue* (``_ASSET_CATALOGUE`` — what's available to issue) is
+generic and stays.
 """
 import copy
 import logging
@@ -20,53 +20,11 @@ from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
-# ─── Global Seed Data (sample assets — for demo) ─────────────────────────────
+# ─── Global Seed Data ────────────────────────────────────────────────────────
 #
-# Sprint 4 S4.2: rekeyed by ``username`` (Sprint 1's numeric ``employee_id``
-# is gone). The four demo users mirror the HR seed (``hr_server/service/store.py``):
-#   - ``employee_user``  : 1 laptop (outstanding) + 1 phone (returned)
-#   - ``hr_admin_user``  : 1 laptop (outstanding)
-#   - ``jane.doe``       : 1 laptop (outstanding)
-#   - ``bob.smith``      : 1 laptop (outstanding)
-
-_SEED_ASSETS: List[Dict] = [
-    {"asset_id": "AST-12345", "username": "employee_user", "type": "laptop", "model": "MBP 14 M3", "status": "outstanding"},
-    {"asset_id": "AST-12346", "username": "employee_user", "type": "phone", "model": "iPhone 15", "status": "returned"},
-    {"asset_id": "AST-22001", "username": "hr_admin_user", "type": "laptop", "model": "Dell XPS 13", "status": "outstanding"},
-    {"asset_id": "AST-30115", "username": "jane.doe", "type": "laptop", "model": "MBP 16 M3", "status": "outstanding"},
-    {"asset_id": "AST-40220", "username": "bob.smith", "type": "laptop", "model": "ThinkPad X1 Carbon", "status": "outstanding"},
-]
-
-# Sprint 4 S4.2 — pre-seeded named demo users; mirror hr_server/service/store.py.
-# Keys are JWT sub (UUID-shaped) so a future ``ensure_user(sub, ...)`` path
-# (analogous to HR's) can look up by sub. The reporting helper joins on
-# ``username``, so the value dict carries both.
-_SEED_USERS = [
-    {
-        "username": "employee_user",
-        "email": "employee.user@example.com",
-        "sub": "employee_user-sub-uuid-0001",
-        "name": "Employee User",
-    },
-    {
-        "username": "hr_admin_user",
-        "email": "hr.admin.user@example.com",
-        "sub": "hr_admin_user-sub-uuid-0002",
-        "name": "HR Admin User",
-    },
-    {
-        "username": "jane.doe",
-        "email": "jane.doe@example.com",
-        "sub": "jane.doe-sub-uuid-0003",
-        "name": "Jane Doe",
-    },
-    {
-        "username": "bob.smith",
-        "email": "bob.smith@example.com",
-        "sub": "bob.smith-sub-uuid-0004",
-        "name": "Bob Smith",
-    },
-]
+# No pre-assigned assets — assignments are made live via the issuance flow so
+# the demo data tracks whoever actually signs in (not a fixed roster).
+_SEED_ASSETS: List[Dict] = []
 
 # ─── Asset Catalogue (demo: assets available for issuance) ──────────────────
 
@@ -92,27 +50,21 @@ def get_asset_catalogue(asset_type: str | None = None) -> List[Dict]:
 # ─── Mutable In-Memory Stores ────────────────────────────────────────────────
 
 assets: List[Dict] = []
-# Sprint 4 S4.2: pre-seeded by reset_data(); keyed by sub (UUID). Each value
-# is ``{username, email, sub, name, first_seen}``. ``ensure_user`` continues
-# to upsert by sub at runtime if a fresh sub appears (auto-register pattern).
+# Keyed by the JWT ``sub`` claim. Each value is
+# ``{username, email, sub, name, first_seen}``. Populated only at runtime:
+# the REST auth path calls ``ensure_user`` with the token-A profile claims, so
+# ``lookup_user_by_sub`` (used by the token-C ``it.get_my_assets`` MCP tool,
+# which has only ``sub``) can resolve ``sub`` → ``username``. Both token forms
+# carry the same ``sub`` for a user since S5.12 (see hr_server/service/store).
 users: Dict[str, Dict] = {}
 
 
 def reset_data() -> None:
-    """Reset all stores. Asset seed re-applied; named-user seed re-applied."""
+    """Reset all stores. Asset seed re-applied; user data cleared."""
     global assets, users
     prior_users = len(users) if users else 0
     assets = copy.deepcopy(_SEED_ASSETS)
     users = {}
-    for entry in _SEED_USERS:
-        sub = entry["sub"]
-        users[sub] = {
-            "username": entry["username"],
-            "email": entry["email"],
-            "sub": sub,
-            "name": entry["name"],
-            "first_seen": str(dt_date.today()),
-        }
     if prior_users:
         logger.warning(
             "[STORE RESET] IT data reset — cleared %d user(s); seed assets re-applied",
@@ -120,34 +72,49 @@ def reset_data() -> None:
         )
 
 
-def ensure_user(sub: str, first_name: str = "", last_name: str = "") -> Dict:
+def ensure_user(
+    sub: str,
+    first_name: str = "",
+    last_name: str = "",
+    *,
+    username: str | None = None,
+    email: str | None = None,
+) -> Dict:
     """Ensure a user record exists. Mirrors hr_server's pattern.
 
-    Returns the user record. Auto-registers a sub seen for the first time;
-    the named-user seed (``_SEED_USERS``) is loaded by ``reset_data`` so
-    callers that hit a pre-seeded user just get the existing record back.
+    ``username``/``email`` are the token's profile claims when available — the
+    REST auth path / token-A carries them; OBO/CIBA tool calls (token-C) pass
+    ``None`` and don't overwrite. Returns the user record.
     """
     full_name = f"{first_name} {last_name}".strip()
     if sub not in users:
         users[sub] = {
             "sub": sub,
-            "username": "",
-            "email": "",
+            "username": username or "",
+            "email": email or "",
             "name": full_name,
             "first_seen": str(dt_date.today()),
         }
         logger.info(
-            "[USER SEEN] sub=%s name=%s",
-            sub, full_name or "(no name)",
+            "[USER SEEN] sub=%s username=%s name=%s",
+            sub, username or "(none)", full_name or "(no name)",
         )
-    return users[sub]
+        return users[sub]
+    record = users[sub]
+    if full_name and full_name != record.get("name"):
+        record["name"] = full_name
+    if username and not record.get("username"):
+        record["username"] = username
+    if email and not record.get("email"):
+        record["email"] = email
+    return record
 
 
 def get_assets_for_username(username: str) -> List[Dict]:
     """Return all assets currently assigned to *username*.
 
-    Sprint 4 S4.2: replaces the legacy ``get_assets_for_employee(employee_id)``
-    helper. Match is case-sensitive (usernames are pre-normalised in the seed).
+    Match is exact (case-sensitive) — never substring/startswith, or one
+    user's assets could leak to another.
     """
     if not username:
         return []
@@ -161,12 +128,67 @@ def get_asset_by_id(asset_id: str) -> Dict | None:
     return None
 
 
+def catalogue_entry_by_id(asset_id: str) -> Dict | None:
+    """Return the *catalogue* entry for ``asset_id`` (``model`` / ``type`` /
+    ``available_count``), or ``None`` if it isn't a catalogued asset."""
+    if not asset_id:
+        return None
+    for c in _ASSET_CATALOGUE:
+        if c["asset_id"] == asset_id:
+            return c
+    return None
+
+
+def record_issuance(
+    asset_id: str,
+    username: str,
+    *,
+    model: str = "",
+    asset_type: str = "",
+) -> Dict:
+    """Create — or move — an asset-assignment row, and return it.
+
+    A physical asset has at most one holder, so the match is on ``asset_id``:
+    an existing row is reassigned to ``username``; otherwise a new row is
+    appended. ``status`` is set to ``"outstanding"``. When the id is
+    catalogued and this is a *new* assignment, ``available_count`` is
+    decremented (floor 0). Stdlib-only, no I/O — the store is in-memory.
+    """
+    for a in assets:
+        if a["asset_id"] == asset_id:
+            a["username"] = username
+            a["status"] = "outstanding"
+            if model:
+                a["model"] = model
+            if asset_type:
+                a["type"] = asset_type
+            logger.info(
+                "[ASSET ISSUED] asset_id=%s reassigned -> username=%s", asset_id, username
+            )
+            return a
+    row = {
+        "asset_id": asset_id,
+        "username": username,
+        "type": asset_type,
+        "model": model or asset_id,
+        "status": "outstanding",
+    }
+    assets.append(row)
+    cat = catalogue_entry_by_id(asset_id)
+    if cat is not None and int(cat.get("available_count", 0)) > 0:
+        cat["available_count"] = int(cat["available_count"]) - 1
+    logger.info(
+        "[ASSET ISSUED] asset_id=%s -> username=%s type=%s",
+        asset_id, username, asset_type or "(uncatalogued)",
+    )
+    return row
+
+
 def lookup_user_by_username(username: str) -> Dict | None:
     """Return the user record whose ``username`` matches, or ``None``.
 
     Used by ``it_service.get_all_asset_assignments`` to surface ``email``
-    alongside ``username`` in the report rows. The store carries both as
-    soon as the named-user seed loads.
+    alongside ``username`` in the report rows. Match is exact.
     """
     if not username:
         return None
@@ -174,6 +196,20 @@ def lookup_user_by_username(username: str) -> Dict | None:
         if record.get("username") == username:
             return record
     return None
+
+
+def lookup_user_by_sub(sub: str) -> Dict | None:
+    """Return the user record for a JWT ``sub``, or ``None``.
+
+    The self-service IT-asset path resolves ``sub`` → ``username`` here.
+    token-A (REST proxy) and token-C (it_agent CIBA) carry the same ``sub``
+    for a given user since S5.12, so this is a direct lookup. Returns ``None``
+    until the user has been seen on the REST auth path (which populates
+    ``username``/``email`` from the token-A profile claims).
+    """
+    if not sub:
+        return None
+    return users.get(sub)
 
 
 # Initialize on import.

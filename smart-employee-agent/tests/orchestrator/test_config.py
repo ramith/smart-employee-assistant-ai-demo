@@ -157,6 +157,35 @@ class TestSuccessfulConstruction:
         cfg = OrchestratorConfig.from_env(env)
         assert cfg.gemini_api_key == "key-abc123"
 
+    def test_gemini_model_default_and_override(self) -> None:
+        assert OrchestratorConfig.from_env(_base_env()).gemini_model == "gemini-2.5-flash"
+        env = {**_base_env(), "GEMINI_MODEL": "gemini-2.5-pro"}
+        assert OrchestratorConfig.from_env(env).gemini_model == "gemini-2.5-pro"
+
+    def test_llm_timeout_and_max_tokens_parsed(self) -> None:
+        cfg = OrchestratorConfig.from_env(_base_env())
+        assert cfg.llm_timeout_s == 8.0
+        assert cfg.llm_max_output_tokens == 512
+        env = {**_base_env(), "LLM_TIMEOUT_S": "12.5", "LLM_MAX_OUTPUT_TOKENS": "256"}
+        cfg2 = OrchestratorConfig.from_env(env)
+        assert cfg2.llm_timeout_s == 12.5
+        assert cfg2.llm_max_output_tokens == 256
+
+    def test_llm_mode_without_key_does_not_crash(self, caplog) -> None:
+        """LLM_FALLBACK_MODE=llm + no GEMINI_API_KEY → warns, keeps mode, no exception
+        (main.py then builds llm_client=None → keyword-only behaviour)."""
+        env = {k: v for k, v in _base_env().items() if k != "GEMINI_API_KEY"}
+        env["LLM_FALLBACK_MODE"] = "llm"
+        with caplog.at_level("WARNING"):
+            cfg = OrchestratorConfig.from_env(env)
+        assert cfg.llm_fallback_mode == "llm"
+        assert cfg.gemini_api_key is None
+        assert any("GEMINI_API_KEY is empty" in r.message for r in caplog.records)
+
+    def test_llm_fallback_mode_blank_defaults_to_keyword(self) -> None:
+        env = {**_base_env(), "LLM_FALLBACK_MODE": "   "}
+        assert OrchestratorConfig.from_env(env).llm_fallback_mode == "keyword"
+
     def test_cookie_secure_parsed_truthy_values(self) -> None:
         for truthy in ("true", "True", "TRUE", "1", "yes", "YES"):
             env = {**_base_env(), "COOKIE_SECURE": truthy}

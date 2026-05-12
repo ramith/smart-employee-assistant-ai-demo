@@ -385,3 +385,49 @@ class TestInternalAuthRedaction:
         out = redact(line)
         assert "shared-secret-here" not in out
         assert "<REDACTED>" in out
+
+
+class TestGoogleApiKeyRedaction:
+    """S5 (security audit F-4): a Gemini/Google API key (AIza + 35 url-safe chars)
+    must be stripped from any log line — e.g. if a langchain/google transport
+    error embeds ?key=AIza… in a URL."""
+
+    _SAMPLE_KEY = "AIza" + "x" * 35  # 39-char sentinel of the Google-API-key shape; NOT a real key
+
+    def test_api_key_stripped_from_url_in_log_line(self) -> None:
+        from common.logging.redaction import redact
+
+        line = f"router call failed: HTTPError GET https://generativelanguage.googleapis.com/v1/x?key={self._SAMPLE_KEY} -> 403"
+        out = redact(line)
+        assert self._SAMPLE_KEY not in out
+        assert "<REDACTED_API_KEY>" in out
+
+    def test_api_key_stripped_when_bare(self) -> None:
+        from common.logging.redaction import redact
+
+        out = redact(f"google_api_key={self._SAMPLE_KEY}")
+        assert self._SAMPLE_KEY not in out
+        assert "<REDACTED_API_KEY>" in out
+
+    def test_non_key_aiza_prefix_not_over_redacted(self) -> None:
+        """The bare word 'AIza' (too short to be a key) is left alone."""
+        from common.logging.redaction import redact
+
+        out = redact("the exit criterion greps for AIza prefixes in tracked files")
+        assert "AIza" in out
+        assert "<REDACTED_API_KEY>" not in out
+
+    def test_filter_strips_api_key_from_record(self) -> None:
+        import logging
+
+        from common.logging.redaction import RedactionFilter
+
+        rec = logging.LogRecord(
+            name="t", level=logging.WARNING, pathname=__file__, lineno=1,
+            msg="llm_router_failed reason=%s", args=(f"GET https://x?key={self._SAMPLE_KEY}",),
+            exc_info=None,
+        )
+        assert RedactionFilter().filter(rec) is True
+        rendered = rec.getMessage()
+        assert self._SAMPLE_KEY not in rendered
+        assert "<REDACTED_API_KEY>" in rendered

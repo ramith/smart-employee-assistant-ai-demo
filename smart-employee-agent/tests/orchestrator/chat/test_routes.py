@@ -1031,3 +1031,86 @@ def test_action_text_propagates_through_ciba_url_event() -> None:
     assert ciba_url[0].action_text == "Assign cubicle C-027 to jane.doe"
     # Scope still carries the write-tier marker so SPA can apply amber tint.
     assert "hr_assets_write_rest" in ciba_url[0].scope
+
+
+# ---------------------------------------------------------------------------
+# S5.6 — a chat turn is recorded in session.chat_history (user then assistant)
+# ---------------------------------------------------------------------------
+
+
+def test_chat_turn_is_recorded_in_session_history() -> None:
+    result = _result_payload({"balance": {"annual": 20, "sick": 10, "personal": 5}})
+    hr_client = MagicMock()
+    hr_client.message_send = AsyncMock(return_value=result)
+    tool_calls = [ToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={})]
+    app, session = _build_app(tool_calls=tool_calls, hr_a2a_client=hr_client)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "what's my leave balance?"},
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+    _drain_queue(session)  # let the background fan-out task run
+
+    assert len(session.chat_history) == 2
+    assert session.chat_history[0] == ("user", "what's my leave balance?")
+    assert session.chat_history[1][0] == "assistant"
+    assert session.chat_history[1][1]  # non-empty reply text recorded
+
+
+def test_no_route_turn_is_recorded() -> None:
+    # Empty tool_calls → "I don't know" path; both turns still recorded.
+    app, session = _build_app(tool_calls=[])
+    client = TestClient(app)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "what's the weather"},
+        cookies={"orch_sid": session.session_id},
+    )
+    assert resp.status_code == 200
+    _drain_queue(session)
+    assert session.chat_history == [
+        ("user", "what's the weather"),
+        ("assistant", "I don't know how to help with that."),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Sprint 5 — _render_result for hr.read_all_leaves
+# ---------------------------------------------------------------------------
+
+_render_result = _routes_mod._render_result
+
+
+def test_render_result_read_all_leaves_non_empty() -> None:
+    """hr.read_all_leaves with rows → bullet-list format."""
+    rows = [
+        {
+            "request_id": "LR007",
+            "employee": "Jane Doe",
+            "type": "Annual Leave",
+            "start_date": "2026-06-10",
+            "end_date": "2026-06-14",
+            "days_requested": 5,
+            "status": "Pending",
+        }
+    ]
+    payload = _result_payload({"leave_requests": rows})
+    text = _render_result("HR Agent", "hr.read_all_leaves", payload)
+    assert "Leave requests:" in text
+    assert "LR007" in text
+    assert "Jane Doe" in text
+    assert "Annual Leave" in text
+    assert "2026-06-10" in text
+    assert "2026-06-14" in text
+    assert "5d" in text
+    assert "Pending" in text
+
+
+def test_render_result_read_all_leaves_empty() -> None:
+    """hr.read_all_leaves with empty list → 'No leave requests found.'"""
+    payload = _result_payload({"leave_requests": []})
+    text = _render_result("HR Agent", "hr.read_all_leaves", payload)
+    assert text == "No leave requests found."

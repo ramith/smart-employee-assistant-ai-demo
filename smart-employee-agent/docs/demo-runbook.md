@@ -149,7 +149,7 @@ end-to-end flow including both CIBA legs and both MCP calls.
 
 ### Identity-first denial trace (UC-08)
 
-Pick a denied request id (e.g. `please approve LV-004` from `employee_user`).
+Pick a denied request id (e.g. `please approve LV-004` from the Employee-role user).
 The same grep produces a chain that ends with the IS-issued downgraded scope
 and the resource server's refusal:
 

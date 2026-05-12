@@ -70,6 +70,18 @@ class _AuthContext:
     def __init__(self, payload: dict):
         self.payload = payload
         self.sub: str = payload.get("sub") or ""
+        # token-A's access token may not carry the `username` / `email` profile
+        # claims (some IS configs keep them ID-token-only). Since S5.12 the OIDC
+        # subject IS the user's email and the IS username == the email's
+        # local-part, so derive both from `sub` when the claims are absent —
+        # keeps username-keyed lookups (cubicle/seat match, lookup_employee,
+        # asset resolution) working on the SPA REST path the same way the
+        # MCP-tool path's _username_for(claims) already does.
+        self.email: str | None = payload.get("email") or (self.sub if "@" in self.sub else None)
+        self.username: str | None = (
+            payload.get("username")
+            or (self.sub.split("@", 1)[0] if "@" in self.sub else None)
+        )
         self.scopes: list[str] = (
             payload.get("scope", "").split() if payload.get("scope") else []
         )
@@ -120,8 +132,13 @@ def _make_authenticate(deps: RestApiDeps):
             )
 
         ctx = _AuthContext(payload)
-        if ctx.sub and ctx.first_name:
-            store.ensure_user(ctx.sub, ctx.first_name, ctx.last_name)
+        if ctx.sub:
+            # token-A carries the username/email profile claims — persist them
+            # so lookup_employee / report joins resolve real users (no seed).
+            store.ensure_user(
+                ctx.sub, ctx.first_name, ctx.last_name,
+                username=ctx.username, email=ctx.email,
+            )
 
         act = payload.get("act")
         endpoint = request.url.path
@@ -237,6 +254,30 @@ def build_rest_router(deps: RestApiDeps) -> APIRouter:
             ctx.sub, ctx.first_name, ctx.last_name
         )
         return JSONResponse({"data": leaves, "count": len(leaves)})
+
+    @router.get("/api/me/cubicle")
+    async def get_my_cubicle(request: Request):
+        """Return the authenticated user's own cubicle assignment.
+
+        Sprint 4 (UC-12 / sidebar). Bearer token-A; scope ``hr_self_rest``.
+        Identity is resolved from ``sub`` (the only claim OBO tokens reliably
+        carry), with the ``username`` profile claim as a fallback. Returns the
+        assignment record or ``{assigned: false}`` — no envelope wrapping.
+        """
+        ctx = await authenticate(request)
+        if isinstance(ctx, JSONResponse):
+            return ctx
+        err = _require_scope(ctx, "hr_self_rest")
+        if err:
+            return err
+        if not ctx.sub:
+            return JSONResponse(
+                {"error_id": "ERR-AUTH-claim-missing", "detail": "sub claim absent"},
+                status_code=401,
+            )
+        return JSONResponse(
+            await hr_service.get_my_cubicle(sub=ctx.sub, username=ctx.username)
+        )
 
     @router.get("/api/reports/leave-requests")
     async def get_pending_leave_requests(request: Request):

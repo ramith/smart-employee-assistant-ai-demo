@@ -78,6 +78,10 @@ __all__ = ["HRDispatcherDeps", "HRDispatcher"]
 _REQUIRED_ARGS: dict[str, list[str]] = {
     "hr.approve_leave": ["leave_id"],
     "hr.reject_leave": ["leave_id", "reason"],
+    # S5.1: a partial LLM call (e.g. "I want leave" with no dates) fails here,
+    # before any CIBA round-trip, with ERR-AGENT-002 — the composer then asks
+    # the user for the missing dates.
+    "hr.apply_leave": ["leave_type", "start_date", "end_date"],
 }
 
 
@@ -104,17 +108,38 @@ def _jti_of(token: object) -> str:
 
 
 _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] = {
+    # hr_basic tier — company leave policy (not user-specific). Scope-override
+    # to hr_basic_rest so the CIBA token-C carries exactly what the tool needs.
+    "hr.read_policy": (
+        "View the company leave policy",
+        "get_leave_policy",
+        lambda args: {},
+        "openid hr_basic_rest",
+    ),
     "hr.read_balance": (
         "View your leave balance",
         "get_leave_balance",
-        lambda args: {"employee_id": args.get("employee_id")},
+        lambda args: {},  # self-service: hr_server keys on token.sub (legacy employee_id arg dropped)
         None,
     ),
     "hr.read_history": (
         "View your leave history",
         "get_leave_history",
-        lambda args: {"employee_id": args.get("employee_id")},
+        lambda args: {},  # self-service: hr_server keys on token.sub
         None,
+    ),
+    # S5.1: UC-13 chat path. Self-service write → explicit hr_self_rest scope
+    # override (the same self scope the read tools use, per scope-policy.md).
+    "hr.apply_leave": (
+        "Apply for leave on your behalf",
+        "apply_leave",
+        lambda args: {
+            "leave_type": args.get("leave_type"),
+            "start_date": args.get("start_date"),
+            "end_date": args.get("end_date"),
+            "reason": args.get("reason", ""),
+        },
+        "openid hr_self_rest",
     ),
     "hr.approve_leave": (
         "Approve a leave request on your behalf",
@@ -133,17 +158,21 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "openid hr_approve_rest",
     ),
     # ── Sprint 4 S4.1 cubicle tools (UC-11) ──────────────────────────────────
+    # The cubicle/seat *reads* are admin-grade (whole-org view): the hr_server
+    # MCP tools require ``hr_read_rest``, so the CIBA token-C MUST carry it —
+    # the env default (``hr_self_rest``) is NOT enough (→ ERR-MCP-003). Employee
+    # role lacks ``hr_read_rest`` → IS denies the CIBA consent → "no permission".
     "hr.cubicle_summary": (
         "View vacant cubicles by floor",
         "get_cubicle_summary",
         lambda args: {},
-        None,
+        "openid hr_read_rest",
     ),
     "hr.cubicle_list_floor": (
         "View vacant cubicles on floor",
         "get_vacant_cubicles_on_floor",
         lambda args: {"floor": int(args.get("floor", 1))},
-        None,
+        "openid hr_read_rest",
     ),
     "hr.cubicle_assign": (
         "Assign cubicle to employee",
@@ -159,7 +188,7 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "Look up an employee",
         "lookup_employee",
         lambda args: {"username_or_email": args.get("name", "")},
-        None,
+        "openid hr_read_rest",  # hr_server lookup_employee requires hr_read_rest
     ),
     # ── Sprint 4 S4.2 cubicle self-service (UC-12 HR leg) ─────────────────────
     "hr.cubicle_lookup_self": (
@@ -167,6 +196,20 @@ _TOOL_REGISTRY: dict[str, tuple[str, str, Callable[[dict], dict], str | None]] =
         "get_my_cubicle",
         lambda args: {},
         None,
+    ),
+    # ── Sprint 5 — HR Admin list all leave requests (hr.read_all_leaves) ──────
+    # Scope: hr_approve_rest (same as approve/reject — whoever can approve is
+    # who would ask). Employee role lacks this scope → IS denies CIBA consent →
+    # ERR-CIBA-005 / ERR-MCP-003 path surfaces "no permission" copy.
+    # No required args (both status and employee_name are optional filters).
+    "hr.read_all_leaves": (
+        "View all leave requests",
+        "get_all_leaves",
+        lambda args: {
+            "status": args.get("status"),
+            "employee_name": args.get("employee_name"),
+        },
+        "openid hr_approve_rest",
     ),
 }
 

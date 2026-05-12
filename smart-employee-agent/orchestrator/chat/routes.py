@@ -62,6 +62,12 @@ from orchestrator.events.sse import (
     SseChannel,
     SseErrorEvent,
 )
+# S5 — LLM routing + composition. These modules are stdlib-only (no langchain
+# import); the concrete GeminiLLMClient is imported lazily by main.py only when
+# LLM_FALLBACK_MODE=llm + a key is configured.
+from orchestrator.llm.client import ChatHistory, LLMClient, ToolOutcome
+from orchestrator.llm.composer import compose_reply
+from orchestrator.llm.router import resolve_tool_calls
 
 __all__ = [
     "ChatRouterDeps",
@@ -92,9 +98,13 @@ class ChatRouterDeps:
     Attributes:
         config: Orchestrator service configuration.
         session_store: In-memory session store.
-        keyword_router: Deterministic keyword-based message router.
+        keyword_router: Deterministic keyword-based message router (always wired —
+            it is the fallback for LLM mode and the only router in keyword mode).
         agent_registry: Registry of loaded AgentCards.
         a2a_clients: Mapping of agent_id → A2AClient; wired up by Wave 8 main.py.
+        llm_client: Optional Gemini-backed LLM client. Non-None only when
+            ``config.llm_fallback_mode == "llm"`` and a key is configured;
+            ``None`` ⇒ keyword-only behaviour (Sprint 1–4).
     """
 
     config: OrchestratorConfig
@@ -102,6 +112,7 @@ class ChatRouterDeps:
     keyword_router: KeywordRouter
     agent_registry: AgentRegistry
     a2a_clients: dict[str, A2AClient]
+    llm_client: LLMClient | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +263,9 @@ async def _run_serial_fan_out(
     tool_calls: list[ToolCall],
     request_id: str,
     deps: ChatRouterDeps,
+    *,
+    user_message: str = "",
+    history: ChatHistory | None = None,
 ) -> None:
     """Execute tool calls one by one and push SSE events for each outcome.
 
@@ -262,23 +276,53 @@ async def _run_serial_fan_out(
     Serial discipline (Q2): the second specialist starts only after the first
     has fully resolved (consent approved + MCP call complete, OR error).
 
-    Final answer (S1.4b): per-tool text fragments are concatenated with
-    double-newline separators into a single ChatMessageEvent at the end.
+    Final answer: in keyword mode the per-tool text fragments are concatenated
+    with double-newline separators; in ``LLM_FALLBACK_MODE=llm`` the structured
+    per-tool outcomes are handed to the LLM composer (with the concatenation as
+    the fallback). Either way exactly one ``ChatMessageEvent`` is published.
 
     Args:
         session: The caller's authenticated session.
-        tool_calls: Ordered list of ToolCall objects from the keyword router.
+        tool_calls: Ordered list of ToolCall objects (LLM router or keyword router).
         request_id: Correlation ID for this request.
         deps: Router dependency bundle.
+        user_message: The raw user message (fed to the LLM composer; ignored in
+            keyword mode and by non-chat callers, e.g. the reports reject flow).
     """
     channel = SseChannel(session.sse_queue)
     per_tool_outputs: list[str] = []
+    # S5: structured per-tool outcomes for the LLM composer (parallel to the
+    # text fragments, which remain the composer's fallback).
+    outcomes: list[ToolOutcome] = []
     total_tools = len(tool_calls)
+
+    def _record(
+        agent_id: str,
+        tool_id: str,
+        *,
+        fragment: str,
+        ok: bool,
+        data: dict | None = None,
+        error_id: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        per_tool_outputs.append(fragment)
+        outcomes.append(
+            ToolOutcome(
+                agent_id=agent_id,
+                tool_id=tool_id,
+                ok=ok,
+                data=data,
+                error_id=error_id,
+                reason=reason,
+            )
+        )
 
     for tool_index, tool_call in enumerate(tool_calls):
         agent_id = tool_call.agent_id
 
-        # DEBUG: one line per tool iteration showing what the keyword router decided.
+        # DEBUG: one line per tool iteration showing what the router decided
+        # (LLM router in llm-mode, keyword router otherwise / on fallback).
         _logger.debug(
             "chat_fan_out | tool_iteration request_id=%s index=%d/%d "
             "tool_id=%s agent_id=%s args_keys=%s",
@@ -305,8 +349,13 @@ async def _run_serial_fan_out(
                     request_id=request_id,
                 )
             )
-            per_tool_outputs.append(
-                f"I could not reach the agent '{agent_id}' — it is not registered."
+            _record(
+                agent_id,
+                tool_call.tool_id,
+                fragment=f"I could not reach the agent '{agent_id}' — it is not registered.",
+                ok=False,
+                error_id="ERR-AGENT-002",
+                reason="agent_not_registered",
             )
             continue
 
@@ -338,8 +387,13 @@ async def _run_serial_fan_out(
                     request_id=request_id,
                 )
             )
-            per_tool_outputs.append(
-                f"I could not connect to the agent '{agent_id}'."
+            _record(
+                agent_id,
+                tool_call.tool_id,
+                fragment=f"I could not connect to the agent '{agent_id}'.",
+                ok=False,
+                error_id="ERR-AGENT-002",
+                reason="no_a2a_client",
             )
             continue
 
@@ -376,13 +430,16 @@ async def _run_serial_fan_out(
                 exc,
             )
             fragment = f"I could not reach {agent_label}. Please try again in a moment."
-            per_tool_outputs.append(fragment)
+            _record(
+                agent_id, tool_call.tool_id, fragment=fragment, ok=False,
+                error_id="ERR-A2A-SEND", reason=str(exc)[:200],
+            )
             continue
 
         if isinstance(first, ResultPayload):
             # Tool ran synchronously — no consent needed.
             fragment = _render_result(agent_label, tool_call.tool_id, first)
-            per_tool_outputs.append(fragment)
+            _record(agent_id, tool_call.tool_id, fragment=fragment, ok=True, data=first.data)
             continue
 
         if isinstance(first, ErrorPayload):
@@ -393,14 +450,19 @@ async def _run_serial_fan_out(
                 first.reason,
             )
             fragment = _friendly_error(first.error_id, first.reason, agent_label)
-            per_tool_outputs.append(fragment)
+            _record(
+                agent_id, tool_call.tool_id, fragment=fragment, ok=False,
+                error_id=first.error_id, reason=first.reason,
+            )
             continue
 
         # ConsentRequiredPayload — enter the two-phase CIBA path.
         if not isinstance(first, ConsentRequiredPayload):
             # Unexpected payload type — defensive guard.
-            per_tool_outputs.append(
-                f"Received an unexpected response from {agent_label}."
+            _record(
+                agent_id, tool_call.tool_id,
+                fragment=f"Received an unexpected response from {agent_label}.",
+                ok=False, error_id="ERR-AGENT-UNEXPECTED", reason="unexpected payload type",
             )
             continue
 
@@ -470,7 +532,10 @@ async def _run_serial_fan_out(
                     )
                 )
                 fragment = f"There was a problem completing consent for {agent_label}. Please try again."
-                per_tool_outputs.append(fragment)
+                _record(
+                    agent_id, tool_call.tool_id, fragment=fragment, ok=False,
+                    error_id="ERR-CIBA-COMPLETE", reason=str(exc)[:200],
+                )
                 # Clean up pending entry.
                 session.pending_ciba.pop(consent.auth_req_id, None)
                 # BLOCK-A: signal the cancel barrier even on error.
@@ -501,7 +566,7 @@ async def _run_serial_fan_out(
                 )
             )
             fragment = _render_result(agent_label, tool_call.tool_id, second)
-            per_tool_outputs.append(fragment)
+            _record(agent_id, tool_call.tool_id, fragment=fragment, ok=True, data=second.data)
 
         elif isinstance(second, ErrorPayload):
             terminal_state = _state_from_error_id(second.error_id)
@@ -519,27 +584,53 @@ async def _run_serial_fan_out(
                 second.reason,
             )
             fragment = _friendly_error(second.error_id, second.reason, agent_label)
-            per_tool_outputs.append(fragment)
+            _record(
+                agent_id, tool_call.tool_id, fragment=fragment, ok=False,
+                error_id=second.error_id, reason=second.reason,
+            )
 
         else:
             # Should not happen — await_completion only returns Result or Error.
-            per_tool_outputs.append(f"Received an unexpected response from {agent_label}.")
+            _record(
+                agent_id, tool_call.tool_id,
+                fragment=f"Received an unexpected response from {agent_label}.",
+                ok=False, error_id="ERR-AGENT-UNEXPECTED", reason="unexpected payload type",
+            )
 
         # Clean up PendingCIBA entry once resolved.
         session.pending_ciba.pop(consent.auth_req_id, None)
 
-    # --- Compose final answer (S1.4b — concatenation, no LLM) ---
+    # --- Compose final answer ---
+    # Keyword-mode fallback = the per-tool fragments concatenated. In
+    # LLM_FALLBACK_MODE=llm this is replaced by an LLM-composed reply (with
+    # this string as the composer's own fallback). The whole compose + publish
+    # is wrapped so a terminal ChatMessageEvent is *structurally* guaranteed —
+    # even if compose_reply / publish raises, the SPA still gets a reply.
     if per_tool_outputs:
-        final_content = "\n\n".join(per_tool_outputs)
+        fallback_text = "\n\n".join(per_tool_outputs)
     else:
-        final_content = "I was unable to retrieve any results. Please try again."
+        fallback_text = "I was unable to retrieve any results. Please try again."
 
-    await channel.publish(
-        ChatMessageEvent(
-            content=final_content,
-            request_id=request_id,
+    published_content = fallback_text
+    try:
+        final_content = await compose_reply(
+            user_message, outcomes, fallback_text, deps, history=history
         )
-    )
+        await channel.publish(ChatMessageEvent(content=final_content, request_id=request_id))
+        published_content = final_content
+    except Exception as exc:  # noqa: BLE001 — never let the chat hang on a terminal failure
+        _logger.error(
+            "chat_fan_out | terminal_compose_or_publish_failed request_id=%s error=%r",
+            request_id, exc,
+        )
+        try:
+            await channel.publish(ChatMessageEvent(content=fallback_text, request_id=request_id))
+        except Exception:  # noqa: BLE001 — best-effort; nothing more we can do
+            pass
+
+    # S5.6: record this turn's assistant reply so the next turn's router/composer
+    # see it (the user message was recorded by post_chat before the fan-out spawned).
+    session.record_chat_turn("assistant", published_content)
 
     _logger.info(
         "chat_fan_out | done request_id=%s tools=%d",
@@ -551,26 +642,121 @@ async def _run_serial_fan_out(
 def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str:
     """Produce a human-readable fragment from a ResultPayload.
 
-    Sprint 1: per-tool formatting switch keyed on tool_id.
-    Sprint 2 will replace this with an LLM composition call.
+    Per-tool formatting switch keyed on tool_id; this is the keyword-mode reply
+    (and the LLM composer's fallback). ``result.data`` is run through
+    ``strip_sensitive`` first so an IS ``sub`` / token can never reach the chat
+    reply (sprint-5.md §2.7).
 
     Args:
         agent_label: Display name of the specialist (e.g. "HR Agent").
-        tool_id: Tool identifier from the keyword router (e.g. "hr.read_balance").
+        tool_id: Tool identifier (e.g. "hr.read_balance").
         result: The successful ResultPayload from the specialist.
 
     Returns:
         A plain-text string suitable for inclusion in the final chat message.
         The SPA renders it via ``textContent``, so no HTML is used here.
     """
-    data = result.data
+    from orchestrator.llm.prompts import strip_sensitive
+
+    data = strip_sensitive(result.data) if isinstance(result.data, dict) else (result.data or {})
 
     if tool_id == "hr.read_balance":
+        balance = data.get("balance")
+        if isinstance(balance, dict):
+            return (
+                f"Your leave balance: {balance.get('annual', '?')} annual, "
+                f"{balance.get('sick', '?')} sick, "
+                f"{balance.get('personal', '?')} personal day(s) remaining."
+            )
+        # Legacy / canned shape fallback.
         days = data.get("leave_days", "?")
         leave_type = data.get("leave_type", "annual")
         as_of = data.get("as_of_date", "")
         date_clause = f" (as of {as_of})" if as_of else ""
         return f"You have {days} days of {leave_type} leave remaining{date_clause}."
+
+    if tool_id == "hr.read_policy":
+        types = data.get("leave_types") or []
+        if not types:
+            return "No leave policy is configured."
+        lines = ["You can apply for these leave types:"]
+        for t in types:
+            if isinstance(t, dict):
+                name = t.get("leave_type", "?")
+                maxd = t.get("max_days_per_year", "?")
+                notice = t.get("min_notice_days", 0)
+                suffix = f", {notice} day(s) notice required" if notice else ""
+                lines.append(f"  • {name} — up to {maxd} day(s) per year{suffix}")
+            else:
+                lines.append(f"  • {t}")
+        to_apply = data.get("to_apply") or []
+        if to_apply:
+            lines.append("To apply, give me: " + "; ".join(str(x) for x in to_apply) + ".")
+        lines.append(
+            'For example: "annual leave from 2026-06-10 to 2026-06-14, reason: family trip".'
+        )
+        return "\n".join(lines)
+
+    if tool_id == "hr.apply_leave":
+        if data.get("success"):
+            ref = data.get("request_id", "?")
+            return f"Your leave request has been submitted (ref {ref}) and is pending approval."
+        # Business rejection: surface the service's message verbatim.
+        return data.get("message") or "Your leave request could not be submitted."
+
+    if tool_id == "hr.cubicle_lookup_self":
+        if data.get("assigned"):
+            return (
+                f"Your cubicle is {data.get('cubicle_id', '?')} "
+                f"on floor {data.get('floor', '?')}."
+            )
+        return "You don't have a cubicle assigned yet."
+
+    if tool_id == "hr.cubicle_summary":
+        floors = sorted(
+            (k for k in data.keys() if k.startswith("floor_")),
+            key=lambda k: int(k.split("_")[1]) if k.split("_")[1].isdigit() else 0,
+        )
+        if not floors:
+            return "No cubicle data available."
+        parts = []
+        for fk in floors:
+            stats = data.get(fk, {})
+            parts.append(
+                f"Floor {fk.split('_')[1]}: {stats.get('vacant', '?')} vacant "
+                f"of {stats.get('total', '?')}"
+            )
+        return (
+            "Vacant cubicles by floor — " + "; ".join(parts) + ". "
+            "Which floor would you like to allocate on?"
+        )
+
+    if tool_id == "hr.cubicle_list_floor":
+        if data.get("error"):
+            return data.get("message") or "That floor is not valid (use 1–4)."
+        vacant = data.get("vacant", [])
+        floor = data.get("floor", "?")
+        if not vacant:
+            return f"Floor {floor} has no vacant cubicles. Try another floor (1–4)."
+        return (
+            f"Floor {floor} has {len(vacant)} vacant cubicle(s): " + ", ".join(vacant) + ". "
+            "Which seat would you like, and for which employee?"
+        )
+
+    if tool_id == "hr.cubicle_assign":
+        if data.get("error") == "cubicle_already_occupied":
+            holder = data.get("current_holder", {})
+            return (
+                f"That cubicle is already assigned to "
+                f"{holder.get('username', 'someone else')}."
+            )
+        if data.get("error"):
+            return data.get("message") or "Could not assign that cubicle."
+        assigned_to = data.get("assigned_to", {})
+        return (
+            f"Assigned {data.get('cubicle_id', '?')} (floor {data.get('floor', '?')}) "
+            f"to {assigned_to.get('username', '?')}."
+        )
 
     if tool_id == "hr.read_history":
         entries = data.get("entries", [])
@@ -588,11 +774,40 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
                 lines.append(f"  • {e}")
         return "\n".join(lines)
 
+    if tool_id == "hr.read_all_leaves":
+        rows = data.get("leave_requests", [])
+        if not rows:
+            return "No leave requests found."
+        lines = ["Leave requests:"]
+        for row in rows:
+            if isinstance(row, dict):
+                lines.append(
+                    f"  • {row.get('request_id', '?')} — "
+                    f"{row.get('employee', '?')} — "
+                    f"{row.get('type', '?')} "
+                    f"{row.get('start_date', '?')}→{row.get('end_date', '?')} "
+                    f"({row.get('days_requested', '?')}d) "
+                    f"[{row.get('status', '?')}]"
+                )
+            else:
+                lines.append(f"  • {row}")
+        return "\n".join(lines)
+
     if tool_id == "hr.approve_leave":
-        leave_id = data.get("leave_id", "?")
-        approved_at = data.get("approved_at", "")
-        date_clause = f" on {approved_at[:10]}" if approved_at else ""
-        return f"Leave request {leave_id} has been approved{date_clause}."
+        if not data.get("success"):
+            return data.get("message") or "That leave request could not be approved."
+        rid = data.get("request_id") or data.get("leave_id") or "?"
+        emp = data.get("employee")
+        return f"You approved leave request {rid}" + (f" for {emp}." if emp else ".")
+
+    if tool_id == "hr.reject_leave":
+        if not data.get("success"):
+            return data.get("message") or "That leave request could not be rejected."
+        rid = data.get("request_id") or data.get("leave_id") or "?"
+        emp = data.get("employee")
+        reason = data.get("rejection_reason") or data.get("reason")
+        tail = (f" for {emp}" if emp else "") + (f" (reason: {reason})" if reason else "") + "."
+        return f"You rejected leave request {rid}" + tail
 
     if tool_id == "it.list_available_assets":
         assets = data.get("assets", [])
@@ -618,7 +833,7 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
             if isinstance(a, dict):
                 lines.append(
                     f"  • {a.get('model', '?')} ({a.get('asset_id', '?')})"
-                    f" — {a.get('type', '?')}, assigned since {a.get('assigned_since', '?')}"
+                    f" — {a.get('type', '?')}, {a.get('status', '?')}"
                 )
             else:
                 lines.append(f"  • {a}")
@@ -626,12 +841,15 @@ def _render_result(agent_label: str, tool_id: str, result: ResultPayload) -> str
 
     if tool_id == "it.issue_asset":
         asset_id = data.get("asset_id", "?")
-        employee_id = data.get("employee_id", "?")
+        # `employee_id` is dropped by strip_sensitive when it's a UUID sub;
+        # prefer a display username if the tool provides one.
+        recipient = data.get("employee_username") or data.get("employee_id") or "the requested employee"
         issued_at = data.get("issued_at", "")
         date_clause = f" on {issued_at[:10]}" if issued_at else ""
-        return f"Asset {asset_id} issued to {employee_id}{date_clause}."
+        return f"Asset {asset_id} issued to {recipient}{date_clause}."
 
     # Generic fallback for any future tool not yet in the switch above.
+    # `data` is already strip_sensitive'd at the top of this function.
     pairs = ", ".join(f"{k}: {v}" for k, v in data.items())
     return f"{agent_label} returned: {pairs}."
 
@@ -668,10 +886,15 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
         Flow:
         1. Authenticate via ``orch_sid`` cookie → 401 on miss.
         2. Resolve request_id from contextvar or generate a fresh UUID4.
-        3. Route the message with the keyword router.
+        3. Route the message via ``resolve_tool_calls`` (one LLM call in
+           ``LLM_FALLBACK_MODE=llm``, capped at ``LLM_TIMEOUT_S`` seconds, then
+           keyword-router fallback; pure keyword routing otherwise).
         4. If no tool calls: push "I don't know" ChatMessageEvent; return ChatAck.
         5. Otherwise: spawn ``_run_serial_fan_out`` as a background Task; return
            ChatAck immediately so the SPA is unblocked.
+
+        Note: step 3 may add a Gemini round-trip before ChatAck is returned —
+        the SPA shows a transient "Thinking…" affordance to cover it.
 
         Args:
             body: Parsed ``ChatRequest`` with the user's message.
@@ -711,25 +934,39 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
             len(body.message),
         )
 
-        # Keyword routing.
-        tool_calls: list[ToolCall] = deps.keyword_router.route(body.message)
+        # S5.6: snapshot the prior turns *before* recording this one — the
+        # router/composer want the conversation up to but not including the
+        # current message.
+        prior_history: ChatHistory = session.history_snapshot()
+
+        # Routing — LLM-primary (history-aware, with keyword fallback) or keyword-only.
+        tool_calls: list[ToolCall] = await resolve_tool_calls(
+            body.message, deps, history=prior_history
+        )
 
         if not tool_calls:
             _logger.info(
                 "chat_request | no_route request_id=%s", request_id
             )
+            no_route_reply = "I don't know how to help with that."
             channel = SseChannel(session.sse_queue)
             await channel.publish(
-                ChatMessageEvent(
-                    content="I don't know how to help with that.",
-                    request_id=request_id,
-                )
+                ChatMessageEvent(content=no_route_reply, request_id=request_id)
             )
+            session.record_chat_turn("user", body.message)
+            session.record_chat_turn("assistant", no_route_reply)
             return ChatAck(request_id=request_id)
+
+        # Record the user turn now (the assistant turn is recorded by the
+        # fan-out once the reply is published).
+        session.record_chat_turn("user", body.message)
 
         # Spawn fan-out task; return ack immediately.
         asyncio.create_task(
-            _run_serial_fan_out(session, tool_calls, request_id, deps),
+            _run_serial_fan_out(
+                session, tool_calls, request_id, deps,
+                user_message=body.message, history=prior_history,
+            ),
             name=f"fan_out:{request_id}",
         )
 
