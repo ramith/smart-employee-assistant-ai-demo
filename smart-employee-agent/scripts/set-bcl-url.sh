@@ -8,17 +8,18 @@
 # This script PATCHes it via the Applications admin API.
 #
 # Usage:
-#   IS_ADMIN_USER=admin IS_ADMIN_PASS=admin BCL_URL=http://localhost:8123/backchannel-logout \\
+#   IS_ADMIN_USER=admin IS_ADMIN_PASS=NewsMax@1234 BCL_URL=http://localhost:8123/backchannel-logout \
 #       ./scripts/set-bcl-url.sh
 #
 # Required env:
-#   IS_ADMIN_USER   IS Console admin username (e.g. "admin")
-#   IS_ADMIN_PASS   IS Console admin password
-#   BCL_URL         The URL IS should POST logout_token to (your tunnel target)
+#   IS_ADMIN_USER           IS Console admin username (e.g. "admin")
+#   IS_ADMIN_PASS           IS Console admin password
+#   BCL_URL                 The URL IS should POST logout_token to (your tunnel target)
+#   ORCHESTRATOR_MCP_CLIENT_ID   Consumer key of orchestrator-mcp-client (from orchestrator/.env)
 #
 # Optional env:
 #   IS_BASE         IS base URL                (default: https://13.60.190.47:9443)
-#   APP_CLIENT_ID   Target consumer key        (default: orchestrator-mcp-client)
+#   APP_CLIENT_ID   Override consumer key      (default: $ORCHESTRATOR_MCP_CLIENT_ID)
 #   INSECURE_TLS    "1" to curl -k             (default: 1 for the dev RC)
 #
 # This script is idempotent — running it twice produces the same end state.
@@ -26,12 +27,13 @@
 set -euo pipefail
 
 IS_BASE="${IS_BASE:-https://13.60.190.47:9443}"
-APP_CLIENT_ID="${APP_CLIENT_ID:-Ry9Wx_Q7w2FSi27miUpYr3O0xR4a}"  # orchestrator-mcp-client
+APP_CLIENT_ID="${APP_CLIENT_ID:-${ORCHESTRATOR_MCP_CLIENT_ID:-}}"
 INSECURE_TLS="${INSECURE_TLS:-1}"
 
 : "${IS_ADMIN_USER:?set IS_ADMIN_USER}"
 : "${IS_ADMIN_PASS:?set IS_ADMIN_PASS}"
 : "${BCL_URL:?set BCL_URL (the target URL IS should POST to)}"
+: "${APP_CLIENT_ID:?set ORCHESTRATOR_MCP_CLIENT_ID (or APP_CLIENT_ID) to the orchestrator-mcp-client consumer key}"
 
 CURL_FLAGS=(-sS --fail-with-body)
 [ "$INSECURE_TLS" = "1" ] && CURL_FLAGS+=(-k)

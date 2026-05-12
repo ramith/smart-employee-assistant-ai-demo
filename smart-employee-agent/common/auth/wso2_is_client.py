@@ -177,6 +177,47 @@ class WSO2ISClient:
             )
         return response.json()
 
+    # ── App-Native Auth — step 2 (raw) ────────────────────────────────────────
+
+    async def post_authn_raw(
+        self,
+        *,
+        flow_id: str,
+        authenticator_id: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """POST ``/oauth2/authn`` and return the raw response body.
+
+        Unlike :meth:`post_authn`, this method does **not** inspect ``flowStatus``
+        or extract the authorization code — it simply returns the parsed JSON body
+        so callers can handle multi-step login flows (e.g. Identifier First +
+        Basic Auth) by looping until ``flowStatus`` reaches ``SUCCESS_COMPLETED``.
+
+        Raises:
+            CIBAInitiationError: If IS returns a non-2xx status code.
+        """
+        response = await self._http.post(
+            self.authn_url,
+            json={
+                "flowId": flow_id,
+                "selectedAuthenticator": {
+                    "authenticatorId": authenticator_id,
+                    "params": params,
+                },
+            },
+        )
+        if response.status_code != 200:
+            logger.error(
+                "post_authn_raw failed | status=%d body=%s",
+                response.status_code,
+                response.text[:500],
+            )
+            raise CIBAInitiationError(
+                f"POST /oauth2/authn returned HTTP {response.status_code}",
+                details={"http_status": response.status_code, "body": response.text[:500]},
+            )
+        return response.json()
+
     # ── App-Native Auth — step 2 ───────────────────────────────────────────────
 
     async def post_authn(
