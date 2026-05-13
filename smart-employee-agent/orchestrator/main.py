@@ -342,6 +342,11 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
 
     app = FastAPI(title="Orchestrator", lifespan=lifespan)
 
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    FastAPIInstrumentor.instrument_app(app)
+    HTTPXClientInstrumentor().instrument()
+
     # ── CORS (must be added before CorrelationIdMiddleware so that preflight
     #    OPTIONS requests are served before the correlation middleware generates
     #    a spurious X-Request-ID warning).

@@ -13,4 +13,4 @@ USER 10014
 
 EXPOSE 8002
 
-CMD ["python", "-m", "it_agent.main"]
+CMD ["amp-instrument", "python", "-m", "it_agent.main"]

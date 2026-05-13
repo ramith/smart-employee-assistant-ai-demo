@@ -210,6 +210,11 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
     # ── App construction ───────────────────────────────────────────────────────
     app = FastAPI(title="HR Agent", lifespan=lifespan)
 
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    FastAPIInstrumentor.instrument_app(app)
+    HTTPXClientInstrumentor().instrument()
+
     # Middleware: correlation ID must be outermost so all route handlers see it.
     app.add_middleware(CorrelationIdMiddleware)
 

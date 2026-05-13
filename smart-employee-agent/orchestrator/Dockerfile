@@ -19,4 +19,4 @@ USER 10014
 
 EXPOSE 8080
 
-CMD ["python", "-m", "orchestrator.main"]
+CMD ["amp-instrument", "python", "-m", "orchestrator.main"]

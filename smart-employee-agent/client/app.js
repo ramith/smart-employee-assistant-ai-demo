@@ -1103,6 +1103,14 @@ function handleSseEvent(event) {
       setConnStatus("healthy");
       dismissToastsByClass("conn-lost");
       toast(COPY.toastReconnected, "success", 3000);
+      // Re-fetch sidebar panels now that SSE confirms the session cookie is
+      // working. The initial fetches in showAppShell() run immediately after
+      // the post-login navigation, before the browser has fully committed the
+      // Set-Cookie from /auth/exchange; this second attempt runs once the
+      // session is proven valid.
+      fetchMyLeaves();
+      fetchMyCubicle();
+      fetchMyAssets();
       break;
 
     case "routing":

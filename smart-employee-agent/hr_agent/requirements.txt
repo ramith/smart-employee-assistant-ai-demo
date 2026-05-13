@@ -5,3 +5,6 @@ pydantic~=2.11.7
 python-dotenv~=1.0.0
 PyJWT[crypto]>=2.12.0
 langchain-mcp-adapters>=0.1.18  # pinned for per-request header injection
+amp-instrumentation
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
