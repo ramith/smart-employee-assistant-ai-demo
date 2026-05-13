@@ -63,11 +63,13 @@ from orchestrator.events.sse import (
     SseErrorEvent,
 )
 # S5 — LLM routing + composition. These modules are stdlib-only (no langchain
-# import); the concrete GeminiLLMClient is imported lazily by main.py only when
+# import); the concrete OpenAILLMClient is imported lazily by main.py only when
 # LLM_FALLBACK_MODE=llm + a key is configured.
 from orchestrator.llm.client import ChatHistory, LLMClient, ToolOutcome
 from orchestrator.llm.composer import compose_reply
 from orchestrator.llm.router import resolve_tool_calls
+from opentelemetry import trace as otel_trace
+from traceloop.sdk.decorators import aworkflow  # type: ignore[import-not-found]
 
 __all__ = [
     "ChatRouterDeps",
@@ -258,6 +260,7 @@ def _state_from_error_id(error_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+@aworkflow(name="chat_fan_out")
 async def _run_serial_fan_out(
     session: Session,
     tool_calls: list[ToolCall],
@@ -318,287 +321,298 @@ async def _run_serial_fan_out(
             )
         )
 
+    _tracer = otel_trace.get_tracer(__name__)
     for tool_index, tool_call in enumerate(tool_calls):
-        agent_id = tool_call.agent_id
+        with _tracer.start_as_current_span(
+            f"{tool_call.tool_id}.task",
+            attributes={
+                "traceloop.span.kind": "tool",
+                "traceloop.entity.name": tool_call.tool_id,
+                "tool.agent_id": str(tool_call.agent_id),
+                "tool.tool_id": tool_call.tool_id,
+                "tool.args": str(tool_call.args),
+            },
+        ):
+            agent_id = tool_call.agent_id
 
-        # DEBUG: one line per tool iteration showing what the router decided
-        # (LLM router in llm-mode, keyword router otherwise / on fallback).
-        _logger.debug(
-            "chat_fan_out | tool_iteration request_id=%s index=%d/%d "
-            "tool_id=%s agent_id=%s args_keys=%s",
-            request_id,
-            tool_index + 1,
-            total_tools,
-            tool_call.tool_id,
-            agent_id,
-            list(tool_call.args.keys()),
-        )
-
-        # --- Resolve agent card ---
-        card = deps.agent_registry.get(agent_id)
-        if card is None:
-            _logger.warning(
-                "chat_fan_out | agent_not_in_registry agent_id=%s request_id=%s",
-                agent_id,
+            # DEBUG: one line per tool iteration showing what the router decided
+            # (LLM router in llm-mode, keyword router otherwise / on fallback).
+            _logger.debug(
+                "chat_fan_out | tool_iteration request_id=%s index=%d/%d "
+                "tool_id=%s agent_id=%s args_keys=%s",
                 request_id,
+                tool_index + 1,
+                total_tools,
+                tool_call.tool_id,
+                agent_id,
+                list(tool_call.args.keys()),
             )
-            await channel.publish(
-                SseErrorEvent(
+
+            # --- Resolve agent card ---
+            card = deps.agent_registry.get(agent_id)
+            if card is None:
+                _logger.warning(
+                    "chat_fan_out | agent_not_in_registry agent_id=%s request_id=%s",
+                    agent_id,
+                    request_id,
+                )
+                await channel.publish(
+                    SseErrorEvent(
+                        error_id="ERR-AGENT-002",
+                        message=f"Agent '{agent_id}' is not registered.",
+                        request_id=request_id,
+                    )
+                )
+                _record(
+                    agent_id,
+                    tool_call.tool_id,
+                    fragment=f"I could not reach the agent '{agent_id}' — it is not registered.",
+                    ok=False,
                     error_id="ERR-AGENT-002",
-                    message=f"Agent '{agent_id}' is not registered.",
+                    reason="agent_not_registered",
+                )
+                continue
+
+            agent_label: str = card.label
+
+            # --- Emit routing event ---
+            await channel.publish(
+                RoutingEvent(
                     request_id=request_id,
+                    agent_id=agent_id,
+                    agent_label=agent_label,
+                    tool_index=tool_index,
+                    total_tools=total_tools,
                 )
             )
-            _record(
-                agent_id,
-                tool_call.tool_id,
-                fragment=f"I could not reach the agent '{agent_id}' — it is not registered.",
-                ok=False,
-                error_id="ERR-AGENT-002",
-                reason="agent_not_registered",
-            )
-            continue
 
-        agent_label: str = card.label
-
-        # --- Emit routing event ---
-        await channel.publish(
-            RoutingEvent(
-                request_id=request_id,
-                agent_id=agent_id,
-                agent_label=agent_label,
-                tool_index=tool_index,
-                total_tools=total_tools,
-            )
-        )
-
-        # --- Resolve A2A client ---
-        client = deps.a2a_clients.get(agent_id)
-        if client is None:
-            _logger.error(
-                "chat_fan_out | no_a2a_client agent_id=%s request_id=%s",
-                agent_id,
-                request_id,
-            )
-            await channel.publish(
-                SseErrorEvent(
-                    error_id="ERR-AGENT-002",
-                    message=f"No A2A client configured for agent '{agent_id}'.",
-                    request_id=request_id,
+            # --- Resolve A2A client ---
+            client = deps.a2a_clients.get(agent_id)
+            if client is None:
+                _logger.error(
+                    "chat_fan_out | no_a2a_client agent_id=%s request_id=%s",
+                    agent_id,
+                    request_id,
                 )
-            )
-            _record(
-                agent_id,
-                tool_call.tool_id,
-                fragment=f"I could not connect to the agent '{agent_id}'.",
-                ok=False,
-                error_id="ERR-AGENT-002",
-                reason="no_a2a_client",
-            )
-            continue
+                await channel.publish(
+                    SseErrorEvent(
+                        error_id="ERR-AGENT-002",
+                        message=f"No A2A client configured for agent '{agent_id}'.",
+                        request_id=request_id,
+                    )
+                )
+                _record(
+                    agent_id,
+                    tool_call.tool_id,
+                    fragment=f"I could not connect to the agent '{agent_id}'.",
+                    ok=False,
+                    error_id="ERR-AGENT-002",
+                    reason="no_a2a_client",
+                )
+                continue
 
-        # --- Phase 1: message/send ---
-        # 3B.2 FIX-17: forward last_logout_reason on the FIRST agent call
-        # only, then null it on the Session. The reason is a one-shot
-        # signal: once the user's first re-CIBA after a logout has
-        # rendered its reason-aware binding message, subsequent CIBAs
-        # in the same session should fall back to FRESH/REFRESH.
-        last_logout_reason = session.last_logout_reason
-        if last_logout_reason is not None:
-            session.last_logout_reason = None
-            _logger.info(
-                "chat_fan_out | propagating_logout_reason rid=%s reason=%s agent_id=%s",
-                request_id,
-                last_logout_reason,
-                agent_id,
-            )
+            # --- Phase 1: message/send ---
+            # 3B.2 FIX-17: forward last_logout_reason on the FIRST agent call
+            # only, then null it on the Session. The reason is a one-shot
+            # signal: once the user's first re-CIBA after a logout has
+            # rendered its reason-aware binding message, subsequent CIBAs
+            # in the same session should fall back to FRESH/REFRESH.
+            last_logout_reason = session.last_logout_reason
+            if last_logout_reason is not None:
+                session.last_logout_reason = None
+                _logger.info(
+                    "chat_fan_out | propagating_logout_reason rid=%s reason=%s agent_id=%s",
+                    request_id,
+                    last_logout_reason,
+                    agent_id,
+                )
 
-        first: Any
-        try:
-            first = await client.message_send(
-                session.token_a.access_token,
-                tool_call.tool_id,
-                tool_call.args,
-                request_id=request_id,
-                last_logout_reason=last_logout_reason,
-            )
-        except (A2AError, Exception) as exc:  # noqa: BLE001
-            _logger.error(
-                "chat_fan_out | message_send_failed agent_id=%s request_id=%s error=%r",
-                agent_id,
-                request_id,
-                exc,
-            )
-            fragment = f"I could not reach {agent_label}. Please try again in a moment."
-            _record(
-                agent_id, tool_call.tool_id, fragment=fragment, ok=False,
-                error_id="ERR-A2A-SEND", reason=str(exc)[:200],
-            )
-            continue
-
-        if isinstance(first, ResultPayload):
-            # Tool ran synchronously — no consent needed.
-            fragment = _render_result(agent_label, tool_call.tool_id, first)
-            _record(agent_id, tool_call.tool_id, fragment=fragment, ok=True, data=first.data)
-            continue
-
-        if isinstance(first, ErrorPayload):
-            _logger.warning(
-                "chat_fan_out | message_send_error agent_id=%s error_id=%s reason=%s",
-                agent_id,
-                first.error_id,
-                first.reason,
-            )
-            fragment = _friendly_error(first.error_id, first.reason, agent_label)
-            _record(
-                agent_id, tool_call.tool_id, fragment=fragment, ok=False,
-                error_id=first.error_id, reason=first.reason,
-            )
-            continue
-
-        # ConsentRequiredPayload — enter the two-phase CIBA path.
-        if not isinstance(first, ConsentRequiredPayload):
-            # Unexpected payload type — defensive guard.
-            _record(
-                agent_id, tool_call.tool_id,
-                fragment=f"Received an unexpected response from {agent_label}.",
-                ok=False, error_id="ERR-AGENT-UNEXPECTED", reason="unexpected payload type",
-            )
-            continue
-
-        consent: ConsentRequiredPayload = first
-
-        # 6a. Push CibaUrlEvent.
-        await channel.publish(
-            CibaUrlEvent(
-                request_id=request_id,
-                agent_id=agent_id,
-                agent_label=agent_label,
-                action=consent.action,
-                auth_url=consent.auth_url,
-                binding_code=request_id[:8],
-                expires_in=consent.expires_in,
-                scope=consent.scope,
-                is_refresh=consent.is_refresh,
-                prior_consent_at=consent.prior_consent_at,
-                # 3B.2 FIX-17: forward the dispatcher's reason-aware
-                # binding_message so the SPA can surface it directly
-                # (WSO2 IS doesn't reliably show it on its consent UI).
-                binding_message=consent.binding_message,
-                # Sprint 4 S4.1: forward the server-rendered action_text
-                # for parameterised admin-action copy.
-                action_text=consent.action_text,
-            )
-        )
-
-        # 6b. Register PendingCIBA in the session.
-        pending = PendingCIBA(
-            auth_req_id=consent.auth_req_id,
-            agent_id=agent_id,
-            request_id=request_id,
-            started_at=_utc_now(),
-        )
-        session.pending_ciba[consent.auth_req_id] = pending
-
-        # 6c. (intentionally no eager VERIFYING publish — that race-replaced the
-        # AWAITING_APPROVAL UI before the user could click the auth_url. The
-        # widget stays in AWAITING_APPROVAL until await_completion resolves.)
-
-        # 6d. Phase 2: await_completion (long-poll until user approves or flow expires).
-        # BLOCK-A (mid-sprint review): set pending.cancelled_ack in finally so a
-        # concurrent UC-09 logout cascade's cancel barrier (logout_handler.py
-        # _cancel_pending_ciba) can confirm the poll task has exited and will
-        # not mint a new token-B between cancel_event.set() and fan-out.
-        second: Any
-        try:
+            first: Any
             try:
-                second = await client.await_completion(
+                first = await client.message_send(
                     session.token_a.access_token,
-                    consent.auth_req_id,
+                    tool_call.tool_id,
+                    tool_call.args,
                     request_id=request_id,
+                    last_logout_reason=last_logout_reason,
                 )
             except (A2AError, Exception) as exc:  # noqa: BLE001
                 _logger.error(
-                    "chat_fan_out | await_completion_failed agent_id=%s auth_req_id=%s error=%r",
+                    "chat_fan_out | message_send_failed agent_id=%s request_id=%s error=%r",
                     agent_id,
-                    consent.auth_req_id,
+                    request_id,
                     exc,
                 )
+                fragment = f"I could not reach {agent_label}. Please try again in a moment."
+                _record(
+                    agent_id, tool_call.tool_id, fragment=fragment, ok=False,
+                    error_id="ERR-A2A-SEND", reason=str(exc)[:200],
+                )
+                continue
+
+            if isinstance(first, ResultPayload):
+                # Tool ran synchronously — no consent needed.
+                fragment = _render_result(agent_label, tool_call.tool_id, first)
+                _record(agent_id, tool_call.tool_id, fragment=fragment, ok=True, data=first.data)
+                continue
+
+            if isinstance(first, ErrorPayload):
+                _logger.warning(
+                    "chat_fan_out | message_send_error agent_id=%s error_id=%s reason=%s",
+                    agent_id,
+                    first.error_id,
+                    first.reason,
+                )
+                fragment = _friendly_error(first.error_id, first.reason, agent_label)
+                _record(
+                    agent_id, tool_call.tool_id, fragment=fragment, ok=False,
+                    error_id=first.error_id, reason=first.reason,
+                )
+                continue
+
+            # ConsentRequiredPayload — enter the two-phase CIBA path.
+            if not isinstance(first, ConsentRequiredPayload):
+                # Unexpected payload type — defensive guard.
+                _record(
+                    agent_id, tool_call.tool_id,
+                    fragment=f"Received an unexpected response from {agent_label}.",
+                    ok=False, error_id="ERR-AGENT-UNEXPECTED", reason="unexpected payload type",
+                )
+                continue
+
+            consent: ConsentRequiredPayload = first
+
+            # 6a. Push CibaUrlEvent.
+            await channel.publish(
+                CibaUrlEvent(
+                    request_id=request_id,
+                    agent_id=agent_id,
+                    agent_label=agent_label,
+                    action=consent.action,
+                    auth_url=consent.auth_url,
+                    binding_code=request_id[:8],
+                    expires_in=consent.expires_in,
+                    scope=consent.scope,
+                    is_refresh=consent.is_refresh,
+                    prior_consent_at=consent.prior_consent_at,
+                    # 3B.2 FIX-17: forward the dispatcher's reason-aware
+                    # binding_message so the SPA can surface it directly
+                    # (WSO2 IS doesn't reliably show it on its consent UI).
+                    binding_message=consent.binding_message,
+                    # Sprint 4 S4.1: forward the server-rendered action_text
+                    # for parameterised admin-action copy.
+                    action_text=consent.action_text,
+                )
+            )
+
+            # 6b. Register PendingCIBA in the session.
+            pending = PendingCIBA(
+                auth_req_id=consent.auth_req_id,
+                agent_id=agent_id,
+                request_id=request_id,
+                started_at=_utc_now(),
+            )
+            session.pending_ciba[consent.auth_req_id] = pending
+
+            # 6c. (intentionally no eager VERIFYING publish — that race-replaced the
+            # AWAITING_APPROVAL UI before the user could click the auth_url. The
+            # widget stays in AWAITING_APPROVAL until await_completion resolves.)
+
+            # 6d. Phase 2: await_completion (long-poll until user approves or flow expires).
+            # BLOCK-A (mid-sprint review): set pending.cancelled_ack in finally so a
+            # concurrent UC-09 logout cascade's cancel barrier (logout_handler.py
+            # _cancel_pending_ciba) can confirm the poll task has exited and will
+            # not mint a new token-B between cancel_event.set() and fan-out.
+            second: Any
+            try:
+                try:
+                    second = await client.await_completion(
+                        session.token_a.access_token,
+                        consent.auth_req_id,
+                        request_id=request_id,
+                    )
+                except (A2AError, Exception) as exc:  # noqa: BLE001
+                    _logger.error(
+                        "chat_fan_out | await_completion_failed agent_id=%s auth_req_id=%s error=%r",
+                        agent_id,
+                        consent.auth_req_id,
+                        exc,
+                    )
+                    await channel.publish(
+                        CibaStateChangeEvent(
+                            request_id=request_id,
+                            state="ERROR",
+                            message=str(exc),
+                        )
+                    )
+                    fragment = f"There was a problem completing consent for {agent_label}. Please try again."
+                    _record(
+                        agent_id, tool_call.tool_id, fragment=fragment, ok=False,
+                        error_id="ERR-CIBA-COMPLETE", reason=str(exc)[:200],
+                    )
+                    # Clean up pending entry.
+                    session.pending_ciba.pop(consent.auth_req_id, None)
+                    # BLOCK-A: signal the cancel barrier even on error.
+                    pending.cancelled_ack.set()
+                    continue
+            finally:
+                # BLOCK-A: ack regardless of branch — the poll has exited so any
+                # concurrent logout cascade can stop waiting.
+                pending.cancelled_ack.set()
+
+            # 6e. Push terminal CIBA state.
+            if isinstance(second, ResultPayload):
                 await channel.publish(
                     CibaStateChangeEvent(
                         request_id=request_id,
-                        state="ERROR",
-                        message=str(exc),
+                        state="DONE",
                     )
                 )
-                fragment = f"There was a problem completing consent for {agent_label}. Please try again."
+                # 6f. Record the issued token in the session log (S1.11a Sprint 3 hook).
+                session.completed_ciba_log.append(
+                    IssuedTokenRecord(
+                        session_id=session.session_id,
+                        agent_id=agent_id,
+                        jti=second.token_jti,
+                        exp=second.token_exp,
+                        iat=second.token_iat,
+                        auth_req_id=consent.auth_req_id,
+                    )
+                )
+                fragment = _render_result(agent_label, tool_call.tool_id, second)
+                _record(agent_id, tool_call.tool_id, fragment=fragment, ok=True, data=second.data)
+
+            elif isinstance(second, ErrorPayload):
+                terminal_state = _state_from_error_id(second.error_id)
+                await channel.publish(
+                    CibaStateChangeEvent(
+                        request_id=request_id,
+                        state=terminal_state,  # type: ignore[arg-type]
+                    )
+                )
+                # 6g. Graceful degradation — continue to next tool.
+                _logger.warning(
+                    "chat_fan_out | await_completion_error agent_id=%s error_id=%s reason=%s",
+                    agent_id,
+                    second.error_id,
+                    second.reason,
+                )
+                fragment = _friendly_error(second.error_id, second.reason, agent_label)
                 _record(
                     agent_id, tool_call.tool_id, fragment=fragment, ok=False,
-                    error_id="ERR-CIBA-COMPLETE", reason=str(exc)[:200],
+                    error_id=second.error_id, reason=second.reason,
                 )
-                # Clean up pending entry.
-                session.pending_ciba.pop(consent.auth_req_id, None)
-                # BLOCK-A: signal the cancel barrier even on error.
-                pending.cancelled_ack.set()
-                continue
-        finally:
-            # BLOCK-A: ack regardless of branch — the poll has exited so any
-            # concurrent logout cascade can stop waiting.
-            pending.cancelled_ack.set()
 
-        # 6e. Push terminal CIBA state.
-        if isinstance(second, ResultPayload):
-            await channel.publish(
-                CibaStateChangeEvent(
-                    request_id=request_id,
-                    state="DONE",
+            else:
+                # Should not happen — await_completion only returns Result or Error.
+                _record(
+                    agent_id, tool_call.tool_id,
+                    fragment=f"Received an unexpected response from {agent_label}.",
+                    ok=False, error_id="ERR-AGENT-UNEXPECTED", reason="unexpected payload type",
                 )
-            )
-            # 6f. Record the issued token in the session log (S1.11a Sprint 3 hook).
-            session.completed_ciba_log.append(
-                IssuedTokenRecord(
-                    session_id=session.session_id,
-                    agent_id=agent_id,
-                    jti=second.token_jti,
-                    exp=second.token_exp,
-                    iat=second.token_iat,
-                    auth_req_id=consent.auth_req_id,
-                )
-            )
-            fragment = _render_result(agent_label, tool_call.tool_id, second)
-            _record(agent_id, tool_call.tool_id, fragment=fragment, ok=True, data=second.data)
 
-        elif isinstance(second, ErrorPayload):
-            terminal_state = _state_from_error_id(second.error_id)
-            await channel.publish(
-                CibaStateChangeEvent(
-                    request_id=request_id,
-                    state=terminal_state,  # type: ignore[arg-type]
-                )
-            )
-            # 6g. Graceful degradation — continue to next tool.
-            _logger.warning(
-                "chat_fan_out | await_completion_error agent_id=%s error_id=%s reason=%s",
-                agent_id,
-                second.error_id,
-                second.reason,
-            )
-            fragment = _friendly_error(second.error_id, second.reason, agent_label)
-            _record(
-                agent_id, tool_call.tool_id, fragment=fragment, ok=False,
-                error_id=second.error_id, reason=second.reason,
-            )
-
-        else:
-            # Should not happen — await_completion only returns Result or Error.
-            _record(
-                agent_id, tool_call.tool_id,
-                fragment=f"Received an unexpected response from {agent_label}.",
-                ok=False, error_id="ERR-AGENT-UNEXPECTED", reason="unexpected payload type",
-            )
-
-        # Clean up PendingCIBA entry once resolved.
-        session.pending_ciba.pop(consent.auth_req_id, None)
+            # Clean up PendingCIBA entry once resolved.
+            session.pending_ciba.pop(consent.auth_req_id, None)
 
     # --- Compose final answer ---
     # Keyword-mode fallback = the per-tool fragments concatenated. In

@@ -199,6 +199,24 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
     root_logger = logging.getLogger()
     root_logger.addFilter(RedactionFilter())
 
+    # LangChain OTEL instrumentation — piggybacks on the SDK configured by amp-instrument.
+    try:
+        from opentelemetry.instrumentation.langchain import LangchainInstrumentor
+        LangchainInstrumentor().instrument()
+        logger.info("langchain_otel_instrumentation_enabled")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("langchain_otel_instrumentation_skipped reason=%r", exc)
+
+    # Traceloop SDK — activates @aworkflow/@atask decorators used throughout the
+    # orchestrator. disable_batch=True avoids a second span processor since
+    # amp-instrument already exports spans.
+    try:
+        from traceloop.sdk import Traceloop
+        Traceloop.init(app_name="smart_employee", disable_batch=True)
+        logger.info("traceloop_sdk_initialized")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("traceloop_sdk_init_skipped reason=%r", exc)
+
     # ── Shared resources (constructed outside lifespan for CORS wiring) ───────
     # A2A clients and AgentRegistry are stateless — safe to build before
     # lifespan starts.  IS client and PatternCExchanger need an event loop,
@@ -211,31 +229,29 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
     keyword_router = KeywordRouter()  # DEFAULT_RULES per F-14 — always the fallback
     session_store = SessionStore()
 
-    # S5: build the Gemini-backed LLM client only in llm-mode with a key. The
-    # langchain import is lazy (inside orchestrator/llm/gemini.py, imported here
-    # only on this branch) so keyword-only deployments don't need the package.
-    # Any failure constructing it → degrade to keyword-only, never crash.
+    # S5: LLM client — OpenAI direct. Lazy import so keyword-only deployments
+    # don't need langchain-openai installed.
     llm_client = None
-    if cfg.llm_fallback_mode == "llm" and cfg.gemini_api_key:
+    if cfg.llm_fallback_mode == "llm" and cfg.openai_api_key:
         try:
-            from orchestrator.llm.gemini import GeminiLLMClient
+            from orchestrator.llm.amp_client import OpenAILLMClient
 
-            llm_client = GeminiLLMClient(
-                api_key=cfg.gemini_api_key,
-                model=cfg.gemini_model,
+            llm_client = OpenAILLMClient(
+                api_key=cfg.openai_api_key,
+                model=cfg.openai_model,
                 timeout_s=cfg.llm_timeout_s,
                 max_output_tokens=cfg.llm_max_output_tokens,
                 public_timeout_s=cfg.public_chat_llm_timeout_s,
             )
             logger.info(
-                "llm_client_enabled model=%s timeout_s=%.1f max_output_tokens=%d",
-                cfg.gemini_model, cfg.llm_timeout_s, cfg.llm_max_output_tokens,
+                "llm_client_enabled source=openai model=%s timeout_s=%.1f max_output_tokens=%d",
+                cfg.openai_model, cfg.llm_timeout_s, cfg.llm_max_output_tokens,
             )
-        except Exception as exc:  # noqa: BLE001 — e.g. langchain not installed; keyword-only
+        except Exception as exc:  # noqa: BLE001
             logger.warning("llm_client_unavailable reason=%r — running keyword-only", exc)
             llm_client = None
     elif cfg.llm_fallback_mode == "llm":
-        logger.info("llm_mode_requested_without_key — running keyword-only")
+        logger.info("llm_mode_requested_without_openai_key — running keyword-only")
 
     # 3B.1: BCL replay-protection set. Lifespan-managed sweep loop wired below.
     seen_logout_tokens = SeenLogoutTokens()

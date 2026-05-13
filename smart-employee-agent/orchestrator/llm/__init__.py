@@ -13,11 +13,11 @@ Module map:
   composer.py  — ``compose_reply(message, outcomes, fallback_text, deps)``: one
                  LLM call → the natural-language reply, with the keyword-mode
                  ``_render_result`` concatenation as the fallback. **Stdlib + client only.**
-  gemini.py    — ``GeminiLLMClient(LLMClient)`` wrapping ``langchain-google-genai``.
-                 **This is the ONLY module that imports langchain.** It is imported
-                 lazily by ``orchestrator/main.py`` only when ``LLM_FALLBACK_MODE=llm``
-                 and a key is configured, so keyword-only deployments (and the test
-                 venv) never need the package.
+  amp_client.py — ``OpenAILLMClient(LLMClient)`` wrapping ``langchain-openai``'s
+                 ``ChatOpenAI``. **This is the ONLY module that imports langchain.**
+                 It is imported lazily by ``orchestrator/main.py`` only when
+                 ``LLM_FALLBACK_MODE=llm`` and ``OPENAI_API_KEY`` is configured,
+                 so keyword-only deployments (and the test venv) never need the package.
 
 Security invariant (sprint-5.md §2): the LLM picks which tools are tried and
 writes the reply prose — it never chooses scopes, writes consent copy, emits

@@ -1,8 +1,8 @@
 """The ``LLMClient`` Protocol and the data types that cross it.
 
 Stdlib-only on purpose: every other ``orchestrator/`` module imports from here
-(never from ``gemini.py``), so the package stays importable without
-``langchain-google-genai`` installed.
+(never from ``amp_client.py``), so the package stays importable without
+``langchain-openai`` installed.
 """
 
 from __future__ import annotations
@@ -116,7 +116,7 @@ class ToolOutcome:
 
 @runtime_checkable
 class LLMClient(Protocol):
-    """What ``orchestrator/chat`` depends on. ``GeminiLLMClient`` implements it;
+    """What ``orchestrator/chat`` depends on. ``OpenAILLMClient`` implements it;
     tests inject a ``FakeLLMClient``."""
 
     async def route(

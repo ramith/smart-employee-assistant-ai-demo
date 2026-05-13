@@ -120,13 +120,13 @@ class OrchestratorConfig:
         session_ttl_seconds: Session time-to-live in seconds.
         llm_fallback_mode: Routing mode — ``"keyword"`` (default) or ``"llm"``.
             In ``"llm"`` mode the orchestrator routes + composes chat replies via
-            Gemini, with the keyword router / ``_render_result`` as the automatic
-            fallback; if the key is missing it degrades to keyword-only.
-        gemini_api_key: Gemini API key (only consulted when ``llm_fallback_mode="llm"``).
-        gemini_model: Gemini model id (default ``"gemini-2.5-flash"``).
+            ChatOpenAI (OpenAI direct), with the keyword router / ``_render_result``
+            as the automatic fallback; if the key is missing it degrades to keyword-only.
+        openai_api_key: OpenAI API key (only consulted when ``llm_fallback_mode="llm"``).
+        openai_model: OpenAI model id (default ``"gpt-4o"``).
         llm_timeout_s: Per-LLM-call hard timeout in seconds (default ``8.0``);
             on timeout the orchestrator falls back.
-        llm_max_output_tokens: Cap on Gemini output tokens per call (default ``512``).
+        llm_max_output_tokens: Cap on LLM output tokens per call (default ``512``).
         cookie_secure: Set Secure flag on session cookie (False in dev).
     """
 
@@ -186,10 +186,8 @@ class OrchestratorConfig:
     # the SPA is now served from `orchestrator/main.py` StaticFiles mount;
     # the legacy `client:3001` container is no longer the SPA host.
     post_logout_redirect_uri: str = "http://localhost:8090/"
-    gemini_api_key: str | None = None
-    # S5 — Gemini routing/composer knobs (only consulted when
-    # llm_fallback_mode == "llm" and gemini_api_key is set).
-    gemini_model: str = "gemini-2.5-flash"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o"
     llm_timeout_s: float = 8.0
     llm_max_output_tokens: int = 512
 
@@ -320,8 +318,8 @@ class OrchestratorConfig:
 
         # LLM (F-14 / S5)
         llm_fallback_mode = (env.get("LLM_FALLBACK_MODE", "keyword").strip() or "keyword")
-        gemini_api_key: str | None = env.get("GEMINI_API_KEY", "").strip() or None
-        gemini_model = env.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+        openai_api_key: str | None = env.get("OPENAI_API_KEY", "").strip() or None
+        openai_model = env.get("OPENAI_MODEL", "gpt-4o").strip() or "gpt-4o"
         llm_timeout_s = _parse_float(env.get("LLM_TIMEOUT_S", "8") or "8", "LLM_TIMEOUT_S", minimum=0.1)
         public_chat_llm_timeout_s = _parse_float(
             env.get("PUBLIC_CHAT_LLM_TIMEOUT_S", "5") or "5",
@@ -331,12 +329,10 @@ class OrchestratorConfig:
         llm_max_output_tokens = _parse_positive_int(
             env.get("LLM_MAX_OUTPUT_TOKENS", "512") or "512", "LLM_MAX_OUTPUT_TOKENS"
         )
-        if llm_fallback_mode == "llm" and not gemini_api_key:
-            # Graceful degradation, not a crash (exit-criterion §6.13): main.py
-            # will see no key and build llm_client=None → resolve_tool_calls /
-            # compose_reply both no-op to the keyword router / _render_result.
+
+        if llm_fallback_mode == "llm" and not openai_api_key:
             logger.warning(
-                "LLM_FALLBACK_MODE=llm but GEMINI_API_KEY is empty — running keyword-only."
+                "LLM_FALLBACK_MODE=llm but OPENAI_API_KEY is not set — running keyword-only."
             )
 
         # Cookie security
@@ -344,12 +340,12 @@ class OrchestratorConfig:
 
         logger.info(
             "orchestrator_config_loaded | is_base_url=%s hr_agent_url=%s it_agent_url=%s "
-            "llm_fallback_mode=%s gemini_model=%s port=%d",
+            "llm_fallback_mode=%s openai_model=%s port=%d",
             is_base_url,
             hr_agent_url,
             it_agent_url,
             llm_fallback_mode,
-            gemini_model,
+            openai_model,
             port,
         )
 
@@ -377,8 +373,8 @@ class OrchestratorConfig:
             session_cookie_name=session_cookie_name,
             session_ttl_seconds=session_ttl_seconds,
             llm_fallback_mode=llm_fallback_mode,
-            gemini_api_key=gemini_api_key,
-            gemini_model=gemini_model,
+            openai_api_key=openai_api_key,
+            openai_model=openai_model,
             llm_timeout_s=llm_timeout_s,
             public_chat_llm_timeout_s=public_chat_llm_timeout_s,
             llm_max_output_tokens=llm_max_output_tokens,

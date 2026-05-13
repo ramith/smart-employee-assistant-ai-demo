@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from traceloop.sdk.decorators import atask  # type: ignore[import-not-found]
+
 from orchestrator.chat.keyword_fallback import ToolCall
 from orchestrator.llm.client import ChatHistory, LLMError, RoutedToolCall, ToolCatalogueEntry
 
@@ -95,6 +97,7 @@ def _validate(routed: list[RoutedToolCall], deps: "ChatRouterDeps") -> list[Tool
     return out
 
 
+@atask(name="llm_router")
 async def resolve_tool_calls(
     user_message: str,
     deps: "ChatRouterDeps",
