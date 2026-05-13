@@ -80,6 +80,7 @@ class _AuthContext:
         self.email: str | None = payload.get("email") or (self.sub if "@" in self.sub else None)
         self.username: str | None = (
             payload.get("username")
+            or payload.get("preferred_username")
             or (self.sub.split("@", 1)[0] if "@" in self.sub else None)
         )
         self.scopes: list[str] = (
