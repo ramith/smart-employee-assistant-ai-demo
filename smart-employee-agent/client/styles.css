@@ -648,9 +648,9 @@ textarea, input {
 /* ── Left sidebar ───────────────────────────────────────────────────────────── */
 
 .left-sidebar {
-  flex: 0 0 260px;
-  min-width: 220px;
-  max-width: 280px;
+  flex: 0 0 330px;
+  min-width: 180px;
+  max-width: 520px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow-y: auto;
@@ -776,35 +776,25 @@ textarea, input {
    The full 6-column table is too wide at 260px; show a compact 4-column
    variant (Request ID and End date columns hidden via the HTML change). */
 .sidebar-card .my-leaves-table {
-  font-size: 0.75rem;
-  /* Pin the layout so the four columns share the narrow card width evenly and
-     the Status column is never pushed off / clipped. (renderMyLeavesPanel emits
-     exactly four <td> per row — Type | Start | Days | Status — matching <thead>.) */
-  table-layout: fixed;
+  font-size: 0.8125rem;
+  /* Let the browser size each column to its content — no clipping. */
+  table-layout: auto;
   width: 100%;
+  border-spacing: 0;
 }
 
 .sidebar-card .my-leaves-table thead th,
 .sidebar-card .my-leaves-table tbody td {
-  padding: 0.375rem 0.5rem;
+  padding: 0.4rem 0.625rem;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .sidebar-card .my-leaves-table thead th {
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
-/* Column widths (sum = 100%): Type holds "Personal Leave"; Start is MM-DD;
-   Days is one digit; Status holds a "Rejected" pill. */
-.sidebar-card .my-leaves-table th:nth-child(1),
-.sidebar-card .my-leaves-table td:nth-child(1) { width: 38%; }
-.sidebar-card .my-leaves-table th:nth-child(2),
-.sidebar-card .my-leaves-table td:nth-child(2) { width: 20%; }
+/* Days column: centre-align the number */
 .sidebar-card .my-leaves-table th:nth-child(3),
-.sidebar-card .my-leaves-table td:nth-child(3) { width: 14%; text-align: center; }
-.sidebar-card .my-leaves-table th:nth-child(4),
-.sidebar-card .my-leaves-table td:nth-child(4) { width: 28%; }
+.sidebar-card .my-leaves-table td:nth-child(3) { text-align: center; }
 
 .sidebar-card .my-leaves-empty {
   font-size: 0.8125rem;
@@ -821,7 +811,7 @@ textarea, input {
 }
 
 .sidebar-card .my-leaves-body {
-  padding: 0 0.75rem 0.625rem;
+  padding: 0.25rem 0.75rem 0.75rem;
 }
 
 /* On narrow viewports (below 720px) stack sidebar above chat */
@@ -843,6 +833,28 @@ textarea, input {
   #chat-main {
     flex: 1 1 auto;
   }
+}
+
+/* ── Sidebar resize handle ──────────────────────────────────────────────────── */
+
+.sidebar-resize-handle {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  transition: background 0.15s;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle--dragging {
+  background: var(--primary-border);
+}
+/* Widen the hit-target without changing visual width */
+.sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -4px; right: -4px;
 }
 
 /* ── Main chat area ─────────────────────────────────────────────────────────── */
