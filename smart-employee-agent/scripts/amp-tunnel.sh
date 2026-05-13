@@ -13,9 +13,19 @@
 #   VM:19090 → localhost:8090  (lets Agent Manager on the VM reach the local orchestrator)
 #
 # Usage:
-#   ./scripts/vm-tunnel.sh          # start in background
-#   ./scripts/vm-tunnel.sh --fg     # start in foreground (Ctrl-C to stop)
-#   ./scripts/vm-tunnel.sh stop     # stop background tunnel
+#   VM_KEY=~/.ssh/my-key.pem ./scripts/amp-tunnel.sh                      # start in background
+#   VM_KEY=~/.ssh/my-key.pem ./scripts/amp-tunnel.sh --fg                 # foreground (Ctrl-C to stop)
+#   VM_KEY=~/.ssh/my-key.pem ./scripts/amp-tunnel.sh stop                 # stop background tunnel
+#
+#   # Override host/user too:
+#   VM_KEY=~/.ssh/my-key.pem VM_HOST=1.2.3.4 VM_USER=ec2-user ./scripts/amp-tunnel.sh
+#
+# Required env:
+#   VM_KEY     Path to the SSH private key (.pem)
+#
+# Optional env (defaults shown):
+#   VM_HOST    13.53.103.131
+#   VM_USER    ubuntu
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,7 +33,7 @@ cd "$(dirname "$0")/.."
 # ── Config ────────────────────────────────────────────────────────────────────
 VM_HOST="${VM_HOST:-13.53.103.131}"
 VM_USER="${VM_USER:-ubuntu}"
-VM_KEY="${VM_KEY:-/Users/shammi/Projects/SARotation/AI-agent-id/dda-poc-key.pem}"
+: "${VM_KEY:?set VM_KEY to the path of your SSH private key}"
 
 PIDFILE=".vm-tunnel.pid"
 LOGFILE=".vm-tunnel.log"
