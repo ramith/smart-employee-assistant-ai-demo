@@ -74,6 +74,7 @@ class GeminiLLMClient:
 
     def __init__(
         self, *, api_key: str, model: str, timeout_s: float, max_output_tokens: int,
+        composer_max_output_tokens: int | None = None,
         public_timeout_s: float | None = None,
     ) -> None:
         # max_retries=2 → at most one quick retry. The default (6) means a 429
@@ -84,6 +85,11 @@ class GeminiLLMClient:
         # the keyword fallback kicks in fast and the log says *why*. (The design
         # already wants "any LLM failure → fall back to keyword", so retrying
         # hard inside the LLM call works against that.)
+        #
+        # Router only emits a short JSON tool-call list (~50 tokens); composer
+        # writes prose over multiple tool outcomes and needs a larger budget to
+        # avoid mid-sentence truncation.  Use separate caps for each.
+        _composer_tokens = composer_max_output_tokens if composer_max_output_tokens is not None else max_output_tokens
         self._router_llm = ChatGoogleGenerativeAI(
             model=model,
             google_api_key=api_key,
@@ -95,7 +101,7 @@ class GeminiLLMClient:
             model=model,
             google_api_key=api_key,
             temperature=0.3,
-            max_output_tokens=max_output_tokens,
+            max_output_tokens=_composer_tokens,
             max_retries=2,
         )
         self._timeout_s = float(timeout_s)

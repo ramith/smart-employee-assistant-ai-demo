@@ -126,7 +126,11 @@ class OrchestratorConfig:
         gemini_model: Gemini model id (default ``"gemini-2.5-flash"``).
         llm_timeout_s: Per-LLM-call hard timeout in seconds (default ``8.0``);
             on timeout the orchestrator falls back.
-        llm_max_output_tokens: Cap on Gemini output tokens per call (default ``512``).
+        llm_max_output_tokens: Cap on Gemini output tokens for the *router* call (default ``256``).
+            The router only emits a short JSON tool-call list so a low cap is fine.
+        llm_composer_max_output_tokens: Cap on Gemini output tokens for the *composer* call
+            (default ``1024``). Needs to be higher than the router cap so multi-tool prose
+            replies are never truncated mid-sentence.
         cookie_secure: Set Secure flag on session cookie (False in dev).
     """
 
@@ -191,7 +195,8 @@ class OrchestratorConfig:
     # llm_fallback_mode == "llm" and gemini_api_key is set).
     gemini_model: str = "gemini-2.5-flash"
     llm_timeout_s: float = 8.0
-    llm_max_output_tokens: int = 512
+    llm_max_output_tokens: int = 256          # router — only needs a short JSON blob
+    llm_composer_max_output_tokens: int = 1024  # composer — prose over multiple tools
 
     # Cookie (F-06)
     cookie_secure: bool = False
@@ -329,7 +334,11 @@ class OrchestratorConfig:
             minimum=0.1,
         )
         llm_max_output_tokens = _parse_positive_int(
-            env.get("LLM_MAX_OUTPUT_TOKENS", "512") or "512", "LLM_MAX_OUTPUT_TOKENS"
+            env.get("LLM_MAX_OUTPUT_TOKENS", "256") or "256", "LLM_MAX_OUTPUT_TOKENS"
+        )
+        llm_composer_max_output_tokens = _parse_positive_int(
+            env.get("LLM_COMPOSER_MAX_OUTPUT_TOKENS", "1024") or "1024",
+            "LLM_COMPOSER_MAX_OUTPUT_TOKENS",
         )
         if llm_fallback_mode == "llm" and not gemini_api_key:
             # Graceful degradation, not a crash (exit-criterion §6.13): main.py
@@ -382,6 +391,7 @@ class OrchestratorConfig:
             llm_timeout_s=llm_timeout_s,
             public_chat_llm_timeout_s=public_chat_llm_timeout_s,
             llm_max_output_tokens=llm_max_output_tokens,
+            llm_composer_max_output_tokens=llm_composer_max_output_tokens,
             cookie_secure=cookie_secure,
         )
 

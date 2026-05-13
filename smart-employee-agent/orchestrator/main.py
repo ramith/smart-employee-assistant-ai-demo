@@ -225,11 +225,13 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
                 model=cfg.gemini_model,
                 timeout_s=cfg.llm_timeout_s,
                 max_output_tokens=cfg.llm_max_output_tokens,
+                composer_max_output_tokens=cfg.llm_composer_max_output_tokens,
                 public_timeout_s=cfg.public_chat_llm_timeout_s,
             )
             logger.info(
-                "llm_client_enabled model=%s timeout_s=%.1f max_output_tokens=%d",
-                cfg.gemini_model, cfg.llm_timeout_s, cfg.llm_max_output_tokens,
+                "llm_client_enabled model=%s timeout_s=%.1f router_max_tokens=%d composer_max_tokens=%d",
+                cfg.gemini_model, cfg.llm_timeout_s,
+                cfg.llm_max_output_tokens, cfg.llm_composer_max_output_tokens,
             )
         except Exception as exc:  # noqa: BLE001 — e.g. langchain not installed; keyword-only
             logger.warning("llm_client_unavailable reason=%r — running keyword-only", exc)
