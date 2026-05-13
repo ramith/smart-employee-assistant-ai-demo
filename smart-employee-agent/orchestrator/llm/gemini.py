@@ -96,6 +96,10 @@ class GeminiLLMClient:
             temperature=0.0,
             max_output_tokens=max_output_tokens,
             max_retries=2,
+            # Disable thinking for the router: it only needs to emit a short JSON
+            # tool-call list; thinking tokens would consume the entire output budget
+            # (Gemini 2.5 Flash enables thinking by default on this model series).
+            thinking_budget=0,
         )
         self._composer_llm = ChatGoogleGenerativeAI(
             model=model,
@@ -103,6 +107,10 @@ class GeminiLLMClient:
             temperature=0.3,
             max_output_tokens=_composer_tokens,
             max_retries=2,
+            # Disable thinking for the composer too: the tool outcomes are already
+            # known facts; reasoning steps only waste the output budget and delay
+            # the reply.
+            thinking_budget=0,
         )
         self._timeout_s = float(timeout_s)
         # Separate budget for the unauthenticated public path — shorter by default
