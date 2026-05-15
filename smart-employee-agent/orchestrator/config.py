@@ -186,6 +186,8 @@ class OrchestratorConfig:
     # the SPA is now served from `orchestrator/main.py` StaticFiles mount;
     # the legacy `client:3001` container is no longer the SPA host.
     post_logout_redirect_uri: str = "http://localhost:8090/"
+    openai_base_url: str | None = None
+    openai_api_header: str = "api-key"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o"
     llm_timeout_s: float = 8.0
@@ -318,6 +320,8 @@ class OrchestratorConfig:
 
         # LLM (F-14 / S5)
         llm_fallback_mode = (env.get("LLM_FALLBACK_MODE", "keyword").strip() or "keyword")
+        openai_base_url: str | None = env.get("OPENAI_BASE_URL", "").strip() or None
+        openai_api_header: str = env.get("OPENAI_API_HEADER", "api-key").strip() or "api-key"
         openai_api_key: str | None = env.get("OPENAI_API_KEY", "").strip() or None
         openai_model = env.get("OPENAI_MODEL", "gpt-4o").strip() or "gpt-4o"
         llm_timeout_s = _parse_float(env.get("LLM_TIMEOUT_S", "8") or "8", "LLM_TIMEOUT_S", minimum=0.1)
@@ -373,6 +377,8 @@ class OrchestratorConfig:
             session_cookie_name=session_cookie_name,
             session_ttl_seconds=session_ttl_seconds,
             llm_fallback_mode=llm_fallback_mode,
+            openai_base_url=openai_base_url,
+            openai_api_header=openai_api_header,
             openai_api_key=openai_api_key,
             openai_model=openai_model,
             llm_timeout_s=llm_timeout_s,

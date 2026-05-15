@@ -103,13 +103,27 @@ class OpenAILLMClient:
         timeout_s: float,
         max_output_tokens: int,
         public_timeout_s: float | None = None,
+        base_url: str | None = None,
+        api_header: str = "api-key",
     ) -> None:
-        common = dict(
-            api_key=api_key,
-            model=model,
-            max_tokens=max_output_tokens,
-            max_retries=2,
-        )
+        if base_url:
+            # AMP AI Gateway: key sent via custom header; bearer token is unused
+            common: dict = dict(
+                base_url=base_url,
+                api_key="not-used",
+                model=model,
+                max_tokens=max_output_tokens,
+                max_retries=2,
+                default_headers={api_header: api_key},
+            )
+        else:
+            # Standard OpenAI: Authorization: Bearer <api_key>
+            common = dict(
+                api_key=api_key,
+                model=model,
+                max_tokens=max_output_tokens,
+                max_retries=2,
+            )
         self._router_llm = ChatOpenAI(**common, temperature=0.0)
         self._composer_llm = ChatOpenAI(**common, temperature=0.3)
         self._timeout_s = float(timeout_s)
