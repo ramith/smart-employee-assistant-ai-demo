@@ -129,33 +129,20 @@ textarea, input {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, #EF3F26 0%, #1a1a1a 50%, #00843D 100%);
+  background: linear-gradient(160deg, #EF3F26 0%, #00843D 35%, #f0f0f0 65%, #1a1a1a 100%);
 }
 
 .signin-box {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 0 2rem 1.75rem;
+  padding: 1.75rem 2rem;
   box-shadow: var(--shadow-lg);
   max-width: 400px;
   width: 90%;
   text-align: center;
   overflow: hidden;
 }
-
-.signin-flag-bar {
-  display: flex;
-  height: 6px;
-  margin: 0 -3rem 2rem;
-}
-.signin-flag-bar span {
-  flex: 1;
-}
-.signin-flag-bar .flag-red   { background: #EF3F26; }
-.signin-flag-bar .flag-black { background: #1a1a1a; }
-.signin-flag-bar .flag-white { background: #e0e0e0; }
-.signin-flag-bar .flag-green { background: #00843D; }
 
 .signin-heading {
   font-size: 1.25rem;
@@ -201,12 +188,43 @@ textarea, input {
   font-size: 0.875rem;
   font-weight: 500;
   margin-bottom: 0.625rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
-.signin-helper {
-  font-size: 0.8rem;
+.uae-pass-btn-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.signin-powered-by {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
   color: var(--text-subtle);
   margin-bottom: 0;
+}
+
+.signin-powered-by strong {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.uae-pass-attr-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.signin-powered-arabic {
+  opacity: 0.65;
+  font-size: 0.7rem;
 }
 
 .signin-error {
@@ -258,7 +276,7 @@ textarea, input {
   box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
 
-/* Toggle header — dark slate for contrast against both white card and green gradient */
+/* Toggle header — deep UAE green for visual harmony with flag gradient and sign-in button */
 .pia-toggle {
   position: relative; /* anchors the absolute chevron */
   width: 100%;
@@ -266,7 +284,7 @@ textarea, input {
   align-items: center;
   justify-content: center;
   padding: 0.75rem 2.5rem; /* side padding leaves room for chevron */
-  background: #1e2428;
+  background: #006430;
   color: #fff;
   border: 1px solid rgba(255,255,255,0.10);
   border-radius: var(--radius-lg); /* full rounding when collapsed */
@@ -275,7 +293,7 @@ textarea, input {
   text-align: center;
   transition: background 0.15s, border-radius 0.01s 0.3s;
 }
-.pia-toggle:hover { background: #262d32; }
+.pia-toggle:hover { background: #00843D; }
 
 .pia-widget--open .pia-toggle {
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;

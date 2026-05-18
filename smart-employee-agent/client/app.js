@@ -17,8 +17,8 @@ const COPY = {
   // §1 Login surface
   signinTitle: "Smart Employee Assistant",
   signinSubtitle: "Sign in to ask about your leave, equipment, and team.",
-  signinCta: "Sign in",
-  signinHelper: "You will be redirected to your identity provider.",
+  signinCta: "Sign in with UAE Pass",
+  signinHelper: "Powered by UAE PASS · الهوية الرقمية",
   signinCertHint: 'First time? Your browser may show a certificate warning for the development identity server. Choose "Advanced" then "Proceed".',
   sessionExpired: "Your session has expired. Sign in again to continue.",
   signedOut: "Signed out. Agent sessions cleared.",  // 3A.4: confirms the cascade ran without listing receivers / jtis
