@@ -105,6 +105,12 @@ def router_system(catalogue: list[ToolCatalogueEntry], *, today: str) -> str:
         "should run.",
         "- If the message doesn't map to any tool (chit-chat, off-topic, or a "
         "question you can't answer with a tool), return [].",
+        "- CRITICAL leave routing: any message that expresses intent to submit, "
+        "apply for, request, book, or take leave — even partially (e.g. only dates "
+        "given, or only type given, or a follow-up like 'go ahead') — MUST use "
+        "hr.apply_leave. NEVER use hr.read_policy when the user wants to create a "
+        "leave request. hr.read_policy is ONLY for purely informational questions "
+        "about what the leave policy is, with no intent to apply.",
         "Available tools:",
     ]
     for e in catalogue:

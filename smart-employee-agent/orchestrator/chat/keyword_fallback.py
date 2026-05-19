@@ -185,12 +185,24 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         agent_id="it_agent",
         tool_id="it.issue_asset",
     ),
-    # Sprint 4 manual-gate fix: "what leaves can I apply for" / "leave types" /
-    # "I want to apply for a leave" → show the company leave policy. (The full
-    # apply-leave flow needs LLM-mode slot-filling for type + dates; in keyword
-    # fallback we surface the available types plus a how-to-phrase-it hint.)
-    # Must precede the generic `leave` rule below so these phrasings don't
-    # collapse to the balance read.
+    # apply_leave: matches when the user names a specific leave type alongside
+    # submit/apply/request/book intent. Must precede read_policy so these
+    # phrasings don't fall through to the policy-read rule.
+    KeywordRule(
+        keywords=(
+            "annual leave from", "sick leave from", "personal leave from",
+            "apply for annual", "apply for sick", "apply for personal",
+            "submit annual", "submit sick", "submit personal",
+            "request annual", "request sick", "request personal",
+            "book annual", "book sick", "book personal",
+            "take annual", "take sick", "take personal",
+        ),
+        agent_id="hr_agent",
+        tool_id="hr.apply_leave",
+    ),
+    # read_policy: purely informational questions with no specific leave type or
+    # dates. "apply for" alone (without a leave type) stays here so the user
+    # gets the policy hint before they know which type to pick.
     KeywordRule(
         keywords=(
             "leave types", "leave policy", "types of leave", "kinds of leave",
@@ -244,8 +256,10 @@ Rule 3 — IT assets read
 # ---------------------------------------------------------------------------
 
 
-_LEAVE_ID_RE = re.compile(r"\bLV-\d+\b", re.IGNORECASE)
+_LEAVE_ID_RE = re.compile(r"\b(?:LV-\d+|LR\d+|LR-\d+)\b", re.IGNORECASE)
 _ASSET_ID_RE = re.compile(r"\b[A-Z]{2,4}-[A-Z0-9]+-\d+\b", re.IGNORECASE)
+_LEAVE_TYPE_RE = re.compile(r"\b(Annual Leave|Sick Leave|Personal Leave)\b", re.IGNORECASE)
+_ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 # "to <name>" — captures the next non-space token after "to" or "for".
 _RECIPIENT_RE = re.compile(r"\b(?:to|for)\s+(\S+)", re.IGNORECASE)
 # Sprint 4 S4.1 (UC-11): cubicle ID (C-027) + floor number.
@@ -272,6 +286,23 @@ def _extract_inline_args(tool_id: str, message: str) -> dict:
     Returns an empty dict when nothing parses; the dispatcher then surfaces
     ERR-AGENT-002 to the user instead of silently substituting defaults.
     """
+    if tool_id == "hr.apply_leave":
+        out: dict = {}
+        m_type = _LEAVE_TYPE_RE.search(message)
+        if m_type:
+            out["leave_type"] = m_type.group(1).title()
+            if out["leave_type"].lower() == "annual leave":
+                out["leave_type"] = "Annual Leave"
+            elif out["leave_type"].lower() == "sick leave":
+                out["leave_type"] = "Sick Leave"
+            elif out["leave_type"].lower() == "personal leave":
+                out["leave_type"] = "Personal Leave"
+        dates = _ISO_DATE_RE.findall(message)
+        if len(dates) >= 1:
+            out["start_date"] = dates[0]
+        if len(dates) >= 2:
+            out["end_date"] = dates[1]
+        return out
     if tool_id == "hr.approve_leave":
         match = _LEAVE_ID_RE.search(message)
         if match:
