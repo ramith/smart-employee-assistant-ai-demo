@@ -34,6 +34,8 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
+from traceloop.sdk.decorators import atask  # type: ignore[import-not-found]
+
 import jwt as _pyjwt  # mid-sprint fix: decode jti from token-B JWT (no sig-verify;
                      # IS just minted it and hr_server will verify on the MCP call)
 from datetime import datetime, timedelta, timezone
@@ -396,6 +398,7 @@ class HRDispatcher:
 
     # ── DispatchProtocol entry point ──────────────────────────────────────────
 
+    @atask(name="hr_agent.dispatch")
     async def __call__(
         self,
         *,
@@ -717,6 +720,7 @@ class HRDispatcher:
 
     # ── Background task ───────────────────────────────────────────────────────
 
+    @atask(name="hr_agent.run_tool")
     async def _run_to_completion(
         self,
         *,

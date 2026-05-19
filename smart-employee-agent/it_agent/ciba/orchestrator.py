@@ -23,6 +23,7 @@ from typing import Callable
 import httpx
 import jwt as _pyjwt  # mid-sprint fix: decode jti from token-B JWT (no sig-verify;
                      # IS just minted it, it_server validates on the MCP call)
+from traceloop.sdk.decorators import atask  # type: ignore[import-not-found]
 
 
 def _jti_of(token: object) -> str:
@@ -216,6 +217,7 @@ class ITDispatcher:
 
     # ── DispatchProtocol entry point ──────────────────────────────────────────
 
+    @atask(name="it_agent.dispatch")
     async def __call__(
         self,
         *,
@@ -454,6 +456,7 @@ class ITDispatcher:
 
     # ── Background task ───────────────────────────────────────────────────────
 
+    @atask(name="it_agent.run_tool")
     async def _run_to_completion(
         self,
         *,

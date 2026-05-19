@@ -99,6 +99,16 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
     install_logging(level="INFO")
     logging.getLogger().addFilter(RedactionFilter())
 
+    # Traceloop SDK — activates @atask decorators used in the HR dispatcher.
+    # disable_batch=True avoids a second span processor since amp-instrument
+    # already exports spans.
+    try:
+        from traceloop.sdk import Traceloop
+        Traceloop.init(app_name="hr_agent", disable_batch=True)
+        logger.info("traceloop_sdk_initialized")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("traceloop_sdk_init_skipped reason=%r", exc)
+
     # ── In-process CIBA pending state map (Q5 single-process) ─────────────────
     # Shared between the lifespan (which owns HRDispatcher) and the A2A router
     # (which exposes /a2a/await and /a2a/cancel). Both are wired in the same
@@ -209,11 +219,6 @@ def create_app(config: HRAgentConfig | None = None) -> FastAPI:
 
     # ── App construction ───────────────────────────────────────────────────────
     app = FastAPI(title="HR Agent", lifespan=lifespan)
-
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-    FastAPIInstrumentor.instrument_app(app)
-    HTTPXClientInstrumentor().instrument()
 
     # Middleware: correlation ID must be outermost so all route handlers see it.
     app.add_middleware(CorrelationIdMiddleware)
