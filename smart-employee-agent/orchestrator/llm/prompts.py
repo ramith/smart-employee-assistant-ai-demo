@@ -95,11 +95,23 @@ def router_bind_system(*, today: str) -> str:
         "Rules:",
         f"- Dates must be ISO format YYYY-MM-DD. Today is {today}.",
         "- leave_type must be exactly one of: Annual Leave, Sick Leave, Personal Leave.",
-        "- Call multiple tools ONLY if the user explicitly requested more than one action.",
-        "- NEVER call a policy or informational tool (e.g. read_policy, cubicle_summary) unless "
-        "the user explicitly asked for that information. Do not add supplemental context tools.",
-        "- If the message doesn't map to any available tool (chit-chat, off-topic), call no tools.",
-    ])
+        "- If the message maps to more than one tool, list them in the order they "
+        "should run.",
+        "- If the message doesn't map to any tool (chit-chat, off-topic, or a "
+        "question you can't answer with a tool), return [].",
+        "- CRITICAL leave routing: any message that expresses intent to submit, "
+        "apply for, request, book, or take leave — even partially (e.g. only dates "
+        "given, or only type given, or a follow-up like 'go ahead') — MUST use "
+        "hr.apply_leave. NEVER use hr.read_policy when the user wants to create a "
+        "leave request. hr.read_policy is ONLY for purely informational questions "
+        "about what the leave policy is, with no intent to apply.",
+        "Available tools:",
+    ]
+    for e in catalogue:
+        args = ", ".join(e.args) if e.args else "(none)"
+        lines.append(f'- agent_id="{e.agent_id}" tool_id="{e.tool_id}": {e.description}')
+        lines.append(f"    args: {args}")
+    return "\n".join(lines)
 
 
 def _coerce_text(content: Any) -> str:
