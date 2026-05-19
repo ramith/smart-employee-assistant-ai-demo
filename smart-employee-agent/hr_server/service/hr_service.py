@@ -365,6 +365,12 @@ async def get_my_cubicle(sub: str = "", username: str | None = None) -> Dict:
     name_needle = (username or "").strip().lower()
     if not sub_needle and not name_needle:
         return {"assigned": False}
+    # When the username claim is absent from CIBA tokens, resolve sub → username
+    # via the user store (mirrors it_service.get_my_assets sub→username resolution).
+    if sub_needle and not name_needle:
+        record = store.users.get(sub_needle)
+        if record:
+            name_needle = (record.get("username") or "").strip().lower()
     for row in store.cubicles:
         if not row["occupied"]:
             continue
