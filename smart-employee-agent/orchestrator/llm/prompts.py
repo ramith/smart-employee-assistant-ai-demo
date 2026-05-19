@@ -105,13 +105,7 @@ def router_bind_system(*, today: str) -> str:
         "hr.apply_leave. NEVER use hr.read_policy when the user wants to create a "
         "leave request. hr.read_policy is ONLY for purely informational questions "
         "about what the leave policy is, with no intent to apply.",
-        "Available tools:",
-    ]
-    for e in catalogue:
-        args = ", ".join(e.args) if e.args else "(none)"
-        lines.append(f'- agent_id="{e.agent_id}" tool_id="{e.tool_id}": {e.description}')
-        lines.append(f"    args: {args}")
-    return "\n".join(lines)
+    ])
 
 
 def _coerce_text(content: Any) -> str:
