@@ -1093,11 +1093,22 @@ def build_hr_mcp_router(deps: HRMcpToolRouterDeps) -> APIRouter:
             body.employee_username,
         )
 
+        # Normalise email-form identifiers to the local part (mirrors it_service.issue_asset).
+        # Stored username must equal ctx.username / claims.username, both of which are
+        # derived as sub.split("@")[0] when the JWT carries no explicit username claim.
+        raw_username = body.employee_username
+        employee_username = raw_username.split("@", 1)[0] if "@" in raw_username else raw_username
+
+        # Resolve the employee's sub so get_my_cubicle can match on sub when
+        # the username claim is absent from CIBA tokens.
+        employee_lookup = await hr_service.lookup_employee(raw_username)
+        resolved_sub: str | None = employee_lookup.get("sub") or None
+
         result = await hr_service.assign_cubicle(
             cubicle_id=body.cubicle_id,
-            employee_username=body.employee_username,
+            employee_username=employee_username,
             employee_email=body.employee_email or "",
-            sub=None,
+            sub=resolved_sub,
         )
 
         # Branch the response shape on success.

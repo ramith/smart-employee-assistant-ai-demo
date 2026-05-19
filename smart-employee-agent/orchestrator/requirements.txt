@@ -15,7 +15,7 @@ PyJWT[crypto]>=2.12.0
 # v4 topology (orchestrator → A2A → agent → CIBA → MCP) doesn't use it.
 langchain>=1.2.11
 langchain-core>=0.3
-langchain-google-genai>=3.2.0
+langchain-openai>=0.3.0
+opentelemetry-instrumentation-langchain
 amp-instrumentation
-opentelemetry-instrumentation-fastapi
-opentelemetry-instrumentation-httpx
+traceloop-sdk>=0.33.0

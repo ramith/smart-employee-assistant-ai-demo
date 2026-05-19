@@ -23,7 +23,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from orchestrator.llm.gemini import GeminiLLMClient
+    from orchestrator.llm.amp_client import OpenAILLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class PublicInfoHandler:
     requests are served by ``_static_fallback``.
     """
 
-    def __init__(self, llm_client: "GeminiLLMClient | None" = None) -> None:
+    def __init__(self, llm_client: "OpenAILLMClient | None" = None) -> None:
         self._llm = llm_client
 
     def _build_system_prompt(self) -> str:

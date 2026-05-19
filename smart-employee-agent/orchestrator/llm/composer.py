@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from traceloop.sdk.decorators import atask  # type: ignore[import-not-found]
+
 from orchestrator.llm.client import ChatHistory, LLMError, ToolOutcome
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -25,6 +27,7 @@ __all__ = ["compose_reply"]
 logger = logging.getLogger(__name__)
 
 
+@atask(name="llm_composer")
 async def compose_reply(
     user_message: str,
     outcomes: list[ToolOutcome],

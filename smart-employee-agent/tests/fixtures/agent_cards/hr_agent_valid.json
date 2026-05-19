@@ -74,7 +74,7 @@
     {
       "id": "hr.cubicle_assign",
       "name": "Assign a cubicle to an employee",
-      "description": "Assign ONE specific cubicle/seat to ONE specific employee — the FINAL step of cubicle/seat allocation (HR Admin, write). ('cubicle' == 'seat'.) Use ONLY when the message names BOTH a cubicle id (e.g. C-027 — a bare number like 'seat 27' means C-027) AND an employee (e.g. 'assign C-027 to jane.doe', 'give seat 14 to bob.smith'). If either is missing, use hr.cubicle_summary (no floor/seat picked yet) or hr.cubicle_list_floor (floor known) instead. Needs `cubicle_id` (the C-NNN id) and `employee_username`; `employee_email` optional.",
+      "description": "Assign ONE specific cubicle/seat to ONE specific employee — the FINAL step of cubicle/seat allocation (HR Admin, write). ('cubicle' == 'seat'.) Use ONLY when the message names BOTH a cubicle id (e.g. C-027 — a bare number like 'seat 27' means C-027) AND an employee (e.g. 'assign C-027 to jane.doe', 'give seat 14 to bob.smith'). If either is missing, use hr.cubicle_summary (no floor/seat picked yet) or hr.cubicle_list_floor (floor known) instead. Needs `cubicle_id` (the C-NNN id) and `employee_username`. Always put the employee identifier in `employee_username` regardless of whether it looks like a username or email address. Only also set `employee_email` if a separate email was explicitly provided in addition to a username.",
       "scope": "hr_assets_write_rest",
       "required_scopes": ["hr_assets_write_rest"],
       "args": ["cubicle_id", "employee_username", "employee_email"]

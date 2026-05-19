@@ -15,15 +15,11 @@ import re
 from typing import Any
 
 from orchestrator.llm.client import (
-    LLMError,
-    RoutedToolCall,
-    ToolCatalogueEntry,
     ToolOutcome,
 )
 
 __all__ = [
-    "router_system",
-    "parse_router_output",
+    "router_bind_system",
     "composer_system",
     "render_outcomes",
     "strip_sensitive",
@@ -83,22 +79,20 @@ def strip_sensitive(value: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Router prompt + output parsing
+# Router prompt (bind_tools / function-calling mode)
 # ---------------------------------------------------------------------------
 
 
-def router_system(catalogue: list[ToolCatalogueEntry], *, today: str) -> str:
-    """Build the router system prompt from the tool catalogue."""
-    lines = [
+def router_bind_system(*, today: str) -> str:
+    """Concise system prompt for the bind_tools router.
+
+    Tool schemas are injected by ChatOpenAI.bind_tools(), so no tool listing
+    or JSON format instructions are needed here.
+    """
+    return "\n".join([
         "You are the routing layer of an internal HR/IT employee assistant.",
-        "Decide which tool(s) to call to fully satisfy the user's message, and "
-        "extract each tool's arguments from the message.",
-        "Respond with ONLY a JSON array — no prose, no markdown code fences.",
-        'Each element: {"agent_id": "<exact agent_id>", "tool_id": "<exact tool_id>", "args": { ... }}',
+        "Select the tool(s) needed to fully satisfy the user's request and extract each tool's arguments.",
         "Rules:",
-        "- Use only the agent_id / tool_id strings listed below — never invent one.",
-        "- Include only the argument names a tool accepts (listed below). Omit any "
-        "argument you cannot determine from the message.",
         f"- Dates must be ISO format YYYY-MM-DD. Today is {today}.",
         "- leave_type must be exactly one of: Annual Leave, Sick Leave, Personal Leave.",
         "- If the message maps to more than one tool, list them in the order they "
@@ -135,57 +129,6 @@ def _coerce_text(content: Any) -> str:
                 parts.append(str(block))
         return "".join(parts)
     return str(content)
-
-
-def _strip_code_fence(text: str) -> str:
-    s = text.strip()
-    if s.startswith("```"):
-        # drop the first line (``` or ```json) and a trailing ```
-        nl = s.find("\n")
-        s = s[nl + 1 :] if nl != -1 else s[3:]
-        if s.rstrip().endswith("```"):
-            s = s.rstrip()[:-3]
-    return s.strip()
-
-
-def parse_router_output(content: Any) -> list[RoutedToolCall]:
-    """Parse the router LLM's text into ``RoutedToolCall``s.
-
-    An empty JSON array (``[]``) is valid and returns ``[]`` — the model
-    legitimately found nothing. Anything that won't parse as a JSON array, or a
-    non-empty array with zero well-formed items, raises ``LLMError`` (the caller
-    then falls back to the keyword router).
-    """
-    text = _strip_code_fence(_coerce_text(content))
-    if not text:
-        raise LLMError("router returned empty content")
-    try:
-        parsed = json.loads(text)
-    except (ValueError, TypeError) as exc:
-        raise LLMError(f"router output is not valid JSON: {exc}") from exc
-    if not isinstance(parsed, list):
-        raise LLMError(f"router output is not a JSON array (got {type(parsed).__name__})")
-    out: list[RoutedToolCall] = []
-    skipped = 0
-    for item in parsed:
-        if not isinstance(item, dict):
-            skipped += 1
-            continue
-        agent_id = item.get("agent_id")
-        tool_id = item.get("tool_id")
-        if not isinstance(agent_id, str) or not agent_id:
-            skipped += 1
-            continue
-        if not isinstance(tool_id, str) or not tool_id:
-            skipped += 1
-            continue
-        args = item.get("args")
-        out.append(RoutedToolCall(agent_id=agent_id, tool_id=tool_id, args=args if isinstance(args, dict) else {}))
-    if not out and parsed:
-        raise LLMError("router output had items but none were well-formed")
-    if skipped:
-        logger.debug("parse_router_output skipped %d malformed item(s)", skipped)
-    return out
 
 
 # ---------------------------------------------------------------------------
