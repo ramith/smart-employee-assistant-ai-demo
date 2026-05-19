@@ -133,7 +133,7 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         tool_id="hr.cubicle_list_floor",
     ),
     KeywordRule(
-        keywords=("assign cubicle", "assign c-", "assign seat"),
+        keywords=("assign cubicle", "assign c-", "assign seat", "cubicle", "seat", "assign"),
         agent_id="hr_agent",
         tool_id="hr.cubicle_assign",
     ),
