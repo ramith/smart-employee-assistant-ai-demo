@@ -181,7 +181,7 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         tool_id="hr.approve_leave",
     ),
     KeywordRule(
-        keywords=("issue", "assign", "give"),
+        keywords=("issue", "give"),
         agent_id="it_agent",
         tool_id="it.issue_asset",
     ),
