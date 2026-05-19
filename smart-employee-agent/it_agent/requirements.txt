@@ -8,3 +8,4 @@ langchain-mcp-adapters>=0.1.18  # pinned for per-request header injection
 amp-instrumentation
 opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-httpx
+traceloop-sdk>=0.33.0

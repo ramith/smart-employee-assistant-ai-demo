@@ -84,6 +84,19 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
         "Multi-worker support requires Redis-backed denylist (Sprint 4+)."
     )
 
+    # ── Logging ───────────────────────────────────────────────────────────────
+    install_logging(level="INFO")
+
+    # Traceloop SDK — activates @atask decorators used in the IT dispatcher.
+    # disable_batch=True avoids a second span processor since amp-instrument
+    # already exports spans.
+    try:
+        from traceloop.sdk import Traceloop
+        Traceloop.init(app_name="it_agent", disable_batch=True)
+        logger.info("traceloop_sdk_initialized")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("traceloop_sdk_init_skipped reason=%r", exc)
+
     # ── 1. WSO2ISClient ────────────────────────────────────────────────────────
     is_client = WSO2ISClient(cfg.is_client_config())
 
@@ -172,11 +185,6 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
         version="1.0.0-sprint1",
         lifespan=lifespan,
     )
-
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-    FastAPIInstrumentor.instrument_app(app)
-    HTTPXClientInstrumentor().instrument()
 
     # X-Request-ID propagation (F-13, F-16: generate with WARN when absent)
     app.add_middleware(CorrelationIdMiddleware)
