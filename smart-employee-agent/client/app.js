@@ -17,8 +17,8 @@ const COPY = {
   // §1 Login surface
   signinTitle: "Smart Employee Assistant",
   signinSubtitle: "Sign in to ask about your leave, equipment, and team.",
-  signinCta: "Sign in",
-  signinHelper: "You will be redirected to your identity provider.",
+  signinCta: "Sign in with UAE Pass",
+  signinHelper: "Powered by UAE PASS · الهوية الرقمية",
   signinCertHint: 'First time? Your browser may show a certificate warning for the development identity server. Choose "Advanced" then "Proceed".',
   sessionExpired: "Your session has expired. Sign in again to continue.",
   signedOut: "Signed out. Agent sessions cleared.",  // 3A.4: confirms the cascade ran without listing receivers / jtis
@@ -1103,6 +1103,14 @@ function handleSseEvent(event) {
       setConnStatus("healthy");
       dismissToastsByClass("conn-lost");
       toast(COPY.toastReconnected, "success", 3000);
+      // Re-fetch sidebar panels now that SSE confirms the session cookie is
+      // working. The initial fetches in showAppShell() run immediately after
+      // the post-login navigation, before the browser has fully committed the
+      // Set-Cookie from /auth/exchange; this second attempt runs once the
+      // session is proven valid.
+      fetchMyLeaves();
+      fetchMyCubicle();
+      fetchMyAssets();
       break;
 
     case "routing":
@@ -2355,6 +2363,46 @@ window.addEventListener("DOMContentLoaded", init);
 
 // Expose for inline onclick handlers that may exist
 window.app = { signIn };
+
+// ─── Sidebar resize handle ────────────────────────────────────────────────────
+(function () {
+  var STORAGE_KEY = "sidebar-width";
+  window.addEventListener("DOMContentLoaded", function () {
+    var handle  = document.getElementById("sidebar-resize-handle");
+    var sidebar = document.getElementById("left-sidebar");
+    if (!handle || !sidebar) return;
+
+    // Restore saved width
+    var saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) sidebar.style.flexBasis = saved + "px";
+
+    var startX, startW;
+
+    handle.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      startX = e.clientX;
+      startW = sidebar.getBoundingClientRect().width;
+      handle.classList.add("sidebar-resize-handle--dragging");
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    });
+
+    document.addEventListener("mousemove", function (e) {
+      if (!handle.classList.contains("sidebar-resize-handle--dragging")) return;
+      var delta = e.clientX - startX;
+      var newW  = Math.min(Math.max(startW + delta, 180), 520);
+      sidebar.style.flexBasis = newW + "px";
+    });
+
+    document.addEventListener("mouseup", function () {
+      if (!handle.classList.contains("sidebar-resize-handle--dragging")) return;
+      handle.classList.remove("sidebar-resize-handle--dragging");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      localStorage.setItem(STORAGE_KEY, sidebar.getBoundingClientRect().width);
+    });
+  });
+}());
 
 // ── Public info chat widget (Sprint 6 — unauthenticated) ─────────────────────
 // No auth dependency. Only touches #public-chat-* DOM elements.

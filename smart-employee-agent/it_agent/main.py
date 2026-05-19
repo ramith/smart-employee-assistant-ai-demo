@@ -173,6 +173,11 @@ def create_app(config: ITAgentConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    FastAPIInstrumentor.instrument_app(app)
+    HTTPXClientInstrumentor().instrument()
+
     # X-Request-ID propagation (F-13, F-16: generate with WARN when absent)
     app.add_middleware(CorrelationIdMiddleware)
 

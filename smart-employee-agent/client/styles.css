@@ -129,33 +129,20 @@ textarea, input {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(160deg, #EF3F26 0%, #1a1a1a 50%, #00843D 100%);
+  background: linear-gradient(160deg, #EF3F26 0%, #00843D 35%, #f0f0f0 65%, #1a1a1a 100%);
 }
 
 .signin-box {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 0 2rem 1.75rem;
+  padding: 1.75rem 2rem;
   box-shadow: var(--shadow-lg);
   max-width: 400px;
   width: 90%;
   text-align: center;
   overflow: hidden;
 }
-
-.signin-flag-bar {
-  display: flex;
-  height: 6px;
-  margin: 0 -3rem 2rem;
-}
-.signin-flag-bar span {
-  flex: 1;
-}
-.signin-flag-bar .flag-red   { background: #EF3F26; }
-.signin-flag-bar .flag-black { background: #1a1a1a; }
-.signin-flag-bar .flag-white { background: #e0e0e0; }
-.signin-flag-bar .flag-green { background: #00843D; }
 
 .signin-heading {
   font-size: 1.25rem;
@@ -201,12 +188,43 @@ textarea, input {
   font-size: 0.875rem;
   font-weight: 500;
   margin-bottom: 0.625rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
 }
 
-.signin-helper {
-  font-size: 0.8rem;
+.uae-pass-btn-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.signin-powered-by {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
   color: var(--text-subtle);
   margin-bottom: 0;
+}
+
+.signin-powered-by strong {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.uae-pass-attr-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.signin-powered-arabic {
+  opacity: 0.65;
+  font-size: 0.7rem;
 }
 
 .signin-error {
@@ -258,7 +276,7 @@ textarea, input {
   box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
 
-/* Toggle header — dark slate for contrast against both white card and green gradient */
+/* Toggle header — deep UAE green for visual harmony with flag gradient and sign-in button */
 .pia-toggle {
   position: relative; /* anchors the absolute chevron */
   width: 100%;
@@ -266,7 +284,7 @@ textarea, input {
   align-items: center;
   justify-content: center;
   padding: 0.75rem 2.5rem; /* side padding leaves room for chevron */
-  background: #1e2428;
+  background: #006430;
   color: #fff;
   border: 1px solid rgba(255,255,255,0.10);
   border-radius: var(--radius-lg); /* full rounding when collapsed */
@@ -275,7 +293,7 @@ textarea, input {
   text-align: center;
   transition: background 0.15s, border-radius 0.01s 0.3s;
 }
-.pia-toggle:hover { background: #262d32; }
+.pia-toggle:hover { background: #00843D; }
 
 .pia-widget--open .pia-toggle {
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
@@ -648,9 +666,9 @@ textarea, input {
 /* ── Left sidebar ───────────────────────────────────────────────────────────── */
 
 .left-sidebar {
-  flex: 0 0 260px;
-  min-width: 220px;
-  max-width: 280px;
+  flex: 0 0 330px;
+  min-width: 180px;
+  max-width: 520px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow-y: auto;
@@ -776,35 +794,25 @@ textarea, input {
    The full 6-column table is too wide at 260px; show a compact 4-column
    variant (Request ID and End date columns hidden via the HTML change). */
 .sidebar-card .my-leaves-table {
-  font-size: 0.75rem;
-  /* Pin the layout so the four columns share the narrow card width evenly and
-     the Status column is never pushed off / clipped. (renderMyLeavesPanel emits
-     exactly four <td> per row — Type | Start | Days | Status — matching <thead>.) */
-  table-layout: fixed;
+  font-size: 0.8125rem;
+  /* Let the browser size each column to its content — no clipping. */
+  table-layout: auto;
   width: 100%;
+  border-spacing: 0;
 }
 
 .sidebar-card .my-leaves-table thead th,
 .sidebar-card .my-leaves-table tbody td {
-  padding: 0.375rem 0.5rem;
+  padding: 0.4rem 0.625rem;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .sidebar-card .my-leaves-table thead th {
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
 }
 
-/* Column widths (sum = 100%): Type holds "Personal Leave"; Start is MM-DD;
-   Days is one digit; Status holds a "Rejected" pill. */
-.sidebar-card .my-leaves-table th:nth-child(1),
-.sidebar-card .my-leaves-table td:nth-child(1) { width: 38%; }
-.sidebar-card .my-leaves-table th:nth-child(2),
-.sidebar-card .my-leaves-table td:nth-child(2) { width: 20%; }
+/* Days column: centre-align the number */
 .sidebar-card .my-leaves-table th:nth-child(3),
-.sidebar-card .my-leaves-table td:nth-child(3) { width: 14%; text-align: center; }
-.sidebar-card .my-leaves-table th:nth-child(4),
-.sidebar-card .my-leaves-table td:nth-child(4) { width: 28%; }
+.sidebar-card .my-leaves-table td:nth-child(3) { text-align: center; }
 
 .sidebar-card .my-leaves-empty {
   font-size: 0.8125rem;
@@ -821,7 +829,7 @@ textarea, input {
 }
 
 .sidebar-card .my-leaves-body {
-  padding: 0 0.75rem 0.625rem;
+  padding: 0.25rem 0.75rem 0.75rem;
 }
 
 /* On narrow viewports (below 720px) stack sidebar above chat */
@@ -843,6 +851,28 @@ textarea, input {
   #chat-main {
     flex: 1 1 auto;
   }
+}
+
+/* ── Sidebar resize handle ──────────────────────────────────────────────────── */
+
+.sidebar-resize-handle {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  transition: background 0.15s;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle--dragging {
+  background: var(--primary-border);
+}
+/* Widen the hit-target without changing visual width */
+.sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -4px; right: -4px;
 }
 
 /* ── Main chat area ─────────────────────────────────────────────────────────── */

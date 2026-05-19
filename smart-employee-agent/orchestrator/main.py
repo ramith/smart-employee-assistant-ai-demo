@@ -241,6 +241,7 @@ def create_app(config: OrchestratorConfig | None = None) -> FastAPI:
                 model=cfg.openai_model,
                 timeout_s=cfg.llm_timeout_s,
                 max_output_tokens=cfg.llm_max_output_tokens,
+                composer_max_output_tokens=cfg.llm_composer_max_output_tokens,
                 public_timeout_s=cfg.public_chat_llm_timeout_s,
                 base_url=cfg.openai_base_url,
                 api_header=cfg.openai_api_header,

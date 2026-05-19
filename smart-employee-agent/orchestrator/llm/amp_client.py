@@ -102,13 +102,15 @@ class OpenAILLMClient:
         model: str,
         timeout_s: float,
         max_output_tokens: int,
+        composer_max_output_tokens: int | None = None,
         public_timeout_s: float | None = None,
         base_url: str | None = None,
         api_header: str = "api-key",
     ) -> None:
+        composer_tokens = composer_max_output_tokens if composer_max_output_tokens is not None else max_output_tokens
         if base_url:
             # AMP AI Gateway: key sent via custom header; bearer token is unused
-            common: dict = dict(
+            router_kwargs: dict = dict(
                 base_url=base_url,
                 api_key="not-used",
                 model=model,
@@ -116,16 +118,30 @@ class OpenAILLMClient:
                 max_retries=2,
                 default_headers={api_header: api_key},
             )
+            composer_kwargs: dict = dict(
+                base_url=base_url,
+                api_key="not-used",
+                model=model,
+                max_tokens=composer_tokens,
+                max_retries=2,
+                default_headers={api_header: api_key},
+            )
         else:
             # Standard OpenAI: Authorization: Bearer <api_key>
-            common = dict(
+            router_kwargs = dict(
                 api_key=api_key,
                 model=model,
                 max_tokens=max_output_tokens,
                 max_retries=2,
             )
-        self._router_llm = ChatOpenAI(**common, temperature=0.0)
-        self._composer_llm = ChatOpenAI(**common, temperature=0.3)
+            composer_kwargs = dict(
+                api_key=api_key,
+                model=model,
+                max_tokens=composer_tokens,
+                max_retries=2,
+            )
+        self._router_llm = ChatOpenAI(**router_kwargs, temperature=0.0)
+        self._composer_llm = ChatOpenAI(**composer_kwargs, temperature=0.3)
         self._timeout_s = float(timeout_s)
         self._public_timeout_s = (
             float(public_timeout_s) if public_timeout_s is not None else self._timeout_s
