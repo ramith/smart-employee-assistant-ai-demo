@@ -69,10 +69,11 @@ echo "      employee : \"How much annual leave do I have, and where's my cubicle
 echo "                 \"I'd like annual leave from 2026-06-10 to 2026-06-14, reason: family trip\""
 echo "      hr_admin : \"Show me vacant cubicles\"  then  \"floor 2\"  then  \"assign C-027 to jane.doe\""
 echo
-echo "    Routing: LLM_FALLBACK_MODE in orchestrator/.env (currently set to 'llm' if a"
-echo "    GEMINI_API_KEY is configured there). The keyword router stays wired as the"
-echo "    automatic fallback — if Gemini is unreachable / rate-limited / the key is"
-echo "    invalid, the chat degrades to the Sprint-4 keyword behaviour, never a hard error."
+echo "    Routing: LLM_FALLBACK_MODE in orchestrator/.env (currently set to 'llm' if an"
+echo "    OPENAI_API_KEY is configured there — OpenAI via the AMP AI Gateway). The keyword"
+echo "    router stays wired as the automatic fallback — if OpenAI / the AMP gateway is"
+echo "    unreachable / rate-limited / the key is invalid, the chat degrades to the"
+echo "    Sprint-4 keyword behaviour, never a hard error."
 echo
 echo "    Pre-flight IS check (run if anything 401s): ./scripts/check-is-config.py"
 echo "    Manual gate runbook: docs/architecture/sprint-5-stage-11-manual-gate.md"

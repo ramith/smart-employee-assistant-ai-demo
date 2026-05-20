@@ -14,8 +14,8 @@ At orchestrator startup, load known cards from local JSON files::
 
 During a request the orchestrator uses the registry two ways:
 
-1. ``registry.llm_tool_list()`` → flattened list of skill dicts injected
-   into the Gemini system prompt.
+1. ``registry.llm_tool_list()`` → flattened list of skill dicts exposed to the
+   OpenAI router as function schemas (via ``ChatOpenAI.bind_tools()``).
 2. ``card = registry.find_by_tool("hr.get_leave_balance")`` → resolves the
    card whose ``base_url`` the orchestrator will route the A2A call to.
 """

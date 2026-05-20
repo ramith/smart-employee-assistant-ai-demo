@@ -1,7 +1,11 @@
 /.env
 /.spike-bcl-autossh.log
 /.spike-bcl-autossh.pid
+/.vm-tunnel.pid
 /tools/_bcl_log/*.log
+# WSO2 IS log artifacts dumped into is_server_logs/ (runtime cruft — never commit)
+*.lck
+is_server_logs/*.log
 idp_capability_test/.substrate.env
 idp_capability_test/.venv/
 scripts/probes/.test-users.env

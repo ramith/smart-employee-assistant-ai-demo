@@ -143,11 +143,29 @@ def composer_system() -> str:
             "for the assistant.",
             "Rules:",
             "- Mention the outcome of every tool listed. Don't drop any.",
+            "- If the body says '(no tools ran)', no tool was called for this "
+            "turn. Answer from the conversation history: if the user's message "
+            "is a short reply, affirmation, or clarification to your last "
+            "question (e.g. 'I can', 'yes', 'go ahead', 'sure'), interpret it "
+            "against that question and ask for the next specific piece of "
+            "information you still need to act. If you genuinely can't see "
+            "what the user wants from history, briefly say so and offer one or "
+            "two concrete things you can help with (HR leave, cubicle/seat "
+            "allocation, IT devices). Never say 'I don't know how to help' "
+            "verbatim.",
             "- If a tool failed with error_id ERR-CIBA-005, say plainly that the "
             "user declined that action and it wasn't done.",
             "- If a tool failed with error_id ERR-AGENT-002, ask the user for the "
             "specific missing information (the reason text names it). Don't say "
             '"something went wrong".',
+            "- If the failure reason mentions 'Failed to obtain actor token', "
+            "'ERR-CIBA-009', 'login.fail.message', or 'agent authentication "
+            "FAILED', the agent has been denied access by the identity provider "
+            "(typically because the agent was deactivated in the IS Console, or "
+            "its credentials were rotated). Say plainly that the agent doesn't "
+            "have permission to perform this action right now, and suggest the "
+            "user check with their administrator. Do NOT quote the raw error or "
+            "mention tokens, OAuth, CIBA, or IS by name.",
             "- For any other failure, give a brief, non-technical apology and (if "
             "useful) what the user could try.",
             "- NEVER quote raw error text, HTTP status codes, JSON, identifier "

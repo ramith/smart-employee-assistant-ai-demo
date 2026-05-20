@@ -11,7 +11,7 @@ The orchestrator's ``chat/routes.py`` calls this when either:
 
 1. The ``LLM_FALLBACK_MODE=keyword`` environment variable is set (default
    in the demo run-book), **or**
-2. The Gemini LLM is unreachable and the chat loop falls back.
+2. The LLM is unreachable and the chat loop falls back.
 
 Example::
 
@@ -133,7 +133,12 @@ DEFAULT_RULES: tuple[KeywordRule, ...] = (
         tool_id="hr.cubicle_list_floor",
     ),
     KeywordRule(
-        keywords=("assign cubicle", "assign c-", "assign seat", "cubicle", "seat", "assign"),
+        # Specific assign phrasings ONLY. Bare "cubicle"/"seat"/"assign" must
+        # NOT live here — this rule is ordered before the cubicle_summary
+        # catch-all below, so broad keywords would steal every vague cubicle
+        # query and misroute it to the write step (which needs a specific
+        # cubicle_id + employee and would otherwise fail with missing args).
+        keywords=("assign cubicle", "assign c-", "assign seat"),
         agent_id="hr_agent",
         tool_id="hr.cubicle_assign",
     ),

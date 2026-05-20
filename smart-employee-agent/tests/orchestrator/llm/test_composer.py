@@ -23,7 +23,7 @@ async def test_compose_uses_llm_reply_when_available() -> None:
 
 @pytest.mark.asyncio
 async def test_compose_falls_back_on_llm_error() -> None:
-    llm = FakeLLMClient(compose_result=LLMError("gemini timed out"))
+    llm = FakeLLMClient(compose_result=LLMError("LLM timed out"))
     deps = make_deps(llm_client=llm, mode="llm")
     reply = await compose_reply("how much leave", _OUTCOMES, fallback_text="FALLBACK", deps=deps)
     assert reply == "FALLBACK"

@@ -17,7 +17,7 @@ An employee (particularly a new hire or someone who has not yet signed in) wants
 1. User types: **"What laptop will I get as a new hire?"** and clicks Send.
 2. Widget sends `POST /public/chat {"message": "What laptop will I get as a new hire?"}`. No auth header.
 3. `PublicInfoHandler` builds the system prompt including the hardware allocation policy knowledge.
-4. Gemini answers from the embedded policy.
+4. OpenAI answers from the embedded policy.
 5. Widget renders the reply in a bot bubble.
 
 **Example reply (LLM mode):**
@@ -42,8 +42,8 @@ An employee (particularly a new hire or someone who has not yet signed in) wants
 - LLM responds per the system prompt guardrail: *"I can only share the general hardware allocation policy here. To view your personal asset assignments, please sign in to the employee portal."*
 - No `it_server` call is made.
 
-### A4 — Gemini unavailable (static fallback)
-- `_static_fallback` detects "laptop" / "hardware" / "equipment" / "device" keyword → returns the pre-written hardware policy template string.
+### A4 — OpenAI / AMP gateway unavailable (static fallback)
+- `_static_fallback` detects "laptop" / "hardware" / "equipment" / "device" keyword → returns the pre-written hardware policy template string. (The client retries transient gateway 5xx with max_retries=5 before falling back.)
 
 ## Notes
 

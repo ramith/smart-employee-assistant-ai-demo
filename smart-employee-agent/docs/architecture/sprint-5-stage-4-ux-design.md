@@ -11,7 +11,7 @@ The chat panel, the consent widget, the sidebar cards, the Reports page — all 
 
 ### 1a. "Thinking…" affordance (router latency)
 
-**Problem:** in keyword mode, `POST /api/chat` returns and the first SSE event (`routing` → `consent_required`) arrives almost instantly. In LLM mode there's now a Gemini round-trip *before* the first event (the router call, ≈0.5–2 s). Without feedback the chat looks frozen.
+**Problem:** in keyword mode, `POST /api/chat` returns and the first SSE event (`routing` → `consent_required`) arrives almost instantly. In LLM mode there's now an OpenAI round-trip *before* the first event (the router call, ≈0.5–2 s). Without feedback the chat looks frozen.
 
 **Solution:** reuse the existing progress element pattern (the same `progressEl` toggled around the sign-in exchange in `client/app.js`). On `POST /api/chat` submit:
 - Append a lightweight assistant-side placeholder bubble: a muted "Thinking…" line with the existing animated-dots affordance (no new spinner asset — reuse the dots used elsewhere, or three CSS-animated `·`).
@@ -31,7 +31,7 @@ Keep it boring. No skeleton screens, no typing animation on the reply, no progre
 
 ### 1b. LLM-composed reply — copy-deck guardrails
 
-The reply text is now whatever Gemini writes (with the keyword `_render_result` concatenation as fallback). The composer **prompt** (Stage 6) enforces:
+The reply text is now whatever OpenAI writes (with the keyword `_render_result` concatenation as fallback). The composer **prompt** (Stage 6) enforces:
 - **Plain text only.** No markdown headings, no HTML, no code fences. Rendered with `textContent` regardless — but the prompt should ask for plain prose so it reads right.
 - **Cover every tool that ran.** If two tools ran, the reply mentions both outcomes. If one was declined (`ERR-CIBA-005`), the reply says so plainly ("I couldn't do X — you declined that one").
 - **Missing-arg → ask, don't apologise vaguely.** If a tool failed with `ERR-AGENT-002` (missing required arg), the reply asks for the specific missing info ("To apply for annual leave I need the start and end dates"). Don't say "something went wrong."
@@ -47,7 +47,7 @@ The consent widget's action text still comes from the server-side `_TOOL_REGISTR
 
 - Chat empty: existing placeholder.
 - Sign-in error, session expiry, network drop: existing flows.
-- New error surface: if Gemini fails *and* the keyword fallback also produces nothing routable, the assistant bubble reads (composed by `_render_result` fallback or a static string): *"I'm not sure what you'd like me to do — try asking about your leave, your cubicle, or your IT assets."* Same styling as a normal reply bubble.
+- New error surface: if OpenAI / the AMP gateway fails *and* the keyword fallback also produces nothing routable, the assistant bubble reads (composed by `_render_result` fallback or a static string): *"I'm not sure what you'd like me to do — try asking about your leave, your cubicle, or your IT assets."* Same styling as a normal reply bubble.
 
 ## 3. Accessibility
 

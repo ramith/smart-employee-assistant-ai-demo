@@ -115,7 +115,7 @@ class OpenAILLMClient:
                 api_key="not-used",
                 model=model,
                 max_tokens=max_output_tokens,
-                max_retries=2,
+                max_retries=5,
                 default_headers={api_header: api_key},
             )
             composer_kwargs: dict = dict(
@@ -123,7 +123,7 @@ class OpenAILLMClient:
                 api_key="not-used",
                 model=model,
                 max_tokens=composer_tokens,
-                max_retries=2,
+                max_retries=5,
                 default_headers={api_header: api_key},
             )
         else:
@@ -132,13 +132,13 @@ class OpenAILLMClient:
                 api_key=api_key,
                 model=model,
                 max_tokens=max_output_tokens,
-                max_retries=2,
+                max_retries=5,
             )
             composer_kwargs = dict(
                 api_key=api_key,
                 model=model,
                 max_tokens=composer_tokens,
-                max_retries=2,
+                max_retries=5,
             )
         self._router_llm = ChatOpenAI(**router_kwargs, temperature=0.0)
         self._composer_llm = ChatOpenAI(**composer_kwargs, temperature=0.3)

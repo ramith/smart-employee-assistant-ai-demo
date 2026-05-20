@@ -1,10 +1,10 @@
 """LLM-driven reply composition for the orchestrator chat loop.
 
 ``compose_reply`` is called by ``chat/routes.py`` at the end of the fan-out:
-in LLM mode it asks Gemini for one natural-language reply covering every
+in LLM mode it asks OpenAI for one natural-language reply covering every
 tool's outcome; on any LLM failure (or in keyword mode) it returns
 ``fallback_text`` — the Sprint-1..4 ``_render_result`` concatenation. So a
-total Gemini outage degrades the chat reply to exactly the keyword-mode
+total OpenAI outage degrades the chat reply to exactly the keyword-mode
 behaviour, never a hard error.
 
 Stdlib + ``orchestrator.llm.client`` only — never imports langchain.
@@ -39,14 +39,16 @@ async def compose_reply(
     """Return the chat reply.
 
     LLM-composed when ``LLM_FALLBACK_MODE=llm``, an ``llm_client`` is wired, and
-    there is at least one outcome to talk about (the prior chat turns in
-    *history* are replayed into the composer prompt so the reply reads as part
-    of the conversation); otherwise (and on any LLM failure) ``fallback_text``.
+    there is either at least one outcome to talk about OR prior history the
+    composer can answer from (so short follow-ups like "I can" / "yes" / "go
+    ahead" route through the LLM instead of the keyword fallback's flat
+    "I don't know how to help"); otherwise (and on any LLM failure)
+    ``fallback_text``.
     """
     use_llm = (
         getattr(deps.config, "llm_fallback_mode", "keyword") == "llm"
         and deps.llm_client is not None
-        and bool(outcomes)
+        and (bool(outcomes) or bool(history))
     )
     if use_llm:
         try:

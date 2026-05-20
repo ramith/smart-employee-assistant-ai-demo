@@ -72,7 +72,7 @@ PublicInfoHandler = _mod.PublicInfoHandler
 
 
 def _make_llm(return_value: str) -> MagicMock:
-    """Return a mock GeminiLLMClient whose compose_public returns *return_value*."""
+    """Return a mock OpenAILLMClient whose compose_public returns *return_value*."""
     llm = MagicMock()
     llm.compose_public = AsyncMock(return_value=return_value)
     return llm

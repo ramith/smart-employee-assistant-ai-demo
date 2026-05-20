@@ -20,6 +20,56 @@ The POC demonstrates **identity-first AI agent governance**: every agent action 
 
 ---
 
+## §0.1 Current reality / addenda (post-Sprint-5 migration — authoritative)
+
+> **This section is the single source of truth for changes made after the dated sprint
+> docs below. Where a sprint sign-off/stage doc disagrees with this section, this section
+> wins.** Updated 2026-05-19.
+
+**1. LLM provider: Gemini → OpenAI via the WSO2 AMP AI Gateway.**
+The orchestrator and the public info widget no longer use Google Gemini. They use
+OpenAI through the AMP AI Gateway (OpenAI-compatible). Concretely:
+- Module `orchestrator/llm/amp_client.py` (`OpenAILLMClient`) replaced the old
+  `orchestrator/llm/gemini.py` (`GeminiLLMClient`). It wraps
+  `langchain_openai.ChatOpenAI`.
+- Env: `OPENAI_API_KEY`, `OPENAI_BASE_URL` (the AMP gateway), `OPENAI_API_HEADER`
+  (default `api-key`), `OPENAI_MODEL` (currently `gpt-4.1`; code default `gpt-4o`).
+  The old `GEMINI_API_KEY` / `GEMINI_MODEL` are gone.
+- **Router uses OpenAI function-calling via `ChatOpenAI.bind_tools()`** — the tool
+  catalogue is injected as function schemas and the model returns structured
+  `tool_calls`. There is **no JSON-array parsing** of the router output; the old
+  `parse_router_output` was removed.
+- Observability: `amp-instrumentation` + `traceloop-sdk` export spans to the AMP
+  console (`AMP_OTEL_ENDPOINT`), plus `opentelemetry-instrumentation-langchain`.
+- Resilience: `max_retries=5` on the OpenAI client (gateway 5xx/upstream resets are
+  transient); on any LLM failure the chat degrades to the keyword router. The composer
+  now also runs on no-tool turns when there is prior history, so short follow-ups
+  ("yes", "go ahead") get a real reply instead of a flat "I don't know how to help".
+
+**2. Actor-token cache is capped at 10 seconds (was effectively ~1 hour).**
+In `common/auth/actor_token_provider.py`:
+- `ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS = 10` caps how long the in-process cache trusts a
+  minted actor token, regardless of the IS-issued `exp` (~1h). The underlying JWT keeps
+  its real `exp` and is still valid downstream; only our cache re-mints sooner.
+- `REFRESH_BUFFER_SECONDS = 2` (was 30). The buffer MUST be < the cap or every token is
+  born stale.
+- New **short-circuit branch**: WSO2 IS 7.3 may return `flowStatus=SUCCESS_COMPLETED`
+  with `authData.code` directly on `POST /oauth2/authorize` when a prior IS session for
+  the OAuth client is still valid. The mint detects this and skips the `/authn` step,
+  going straight to `/token`. (Surfaced once re-mints became frequent under the 10s cap.)
+
+**3. IS agent deactivation only takes effect on the next mint (revocation finding).**
+Live-verified 2026-05-19: deactivating an agent in the IS Console makes IS **reject the
+next fresh token mint** (`ABA-60003: login.fail.message`), but IS does **not** invalidate
+already-issued JWTs, and there is **no per-call introspection backstop** (deferred —
+see [`project_introspection_deferred`]). Net effect: the deactivation lag is bounded by
+the actor-token cache TTL — now **~10 seconds** (it was up to ~1 hour before the cap).
+This is the dominant control until introspection-per-call or push revocation lands.
+The composer renders a plain-language "the agent doesn't have permission to perform this
+action right now" reply on the resulting `ERR-CIBA-009` failure.
+
+---
+
 ## §1. Architecture
 
 ### §1.1 Topology (locked)
@@ -97,7 +147,7 @@ Per-agent CIBA replaces this with per-specialist user consent + depth-1 OBO. Thi
 
 ### Hop 2 — Orchestrator → specialist (A2A)
 - User chats: "find me my leave balance"
-- Orchestrator's LLM (Gemini) selects `hr_agent` from agent-card discovery
+- Orchestrator's LLM (OpenAI via the AMP gateway) selects `hr_agent` from agent-card discovery
 - Orchestrator sends A2A `message/send` request to `http://hr_agent:8001/a2a` with `Authorization: Bearer <token-A>` and `X-Request-ID: <correlation-id>`
 - HR-agent validates token-A: signature via JWKS, `iss`, `act.sub` is in HR's trusted-peer allowlist (`{orchestrator-agent}`)
 - HR-agent extracts `sub` from token-A → user's UUID for use as `login_hint` in CIBA
@@ -157,7 +207,7 @@ Same as HR flow with hr_agent → it_agent. **Serial:** orchestrator does HR ful
 | S1.2 | `common/auth/wso2_is_client.py`: async helpers for App-Native Auth (3-step), Pattern C `/token` exchange, JWKS validation, peer-trust act-chain check | dev | S1.1 |
 | S1.3 | `common/auth/ciba_client.py`: async `initiate_ciba()`, `poll_for_token()`, `acquire_obo()` per python-pro spec — typed dataclasses, full error-class hierarchy, retry/back-off per RFC | dev | S1.2 |
 | S1.4a | Orchestrator backend (auth + session): FastAPI, login routes (`/auth/login`, `/auth/callback`, `/auth/exchange`), in-memory session store (single-process per Q5), SSE event-stream `/events/{session_id}` for pushing `auth_url` to SPA. Reuse `_archive/agent.before-v3/session.py` `SessionStore` dataclass — swap PKCE state fields for `pending_ciba: dict[auth_req_id, CibaState]`. **Hard dependency for S1.5–S1.10.** | dev | S1.2 |
-| S1.4b | Orchestrator LLM integration: Gemini tool-routing + agent-card discovery + **keyword-fallback mode** (`LLM_FALLBACK_MODE=keyword`: "leave"→hr_agent, "laptop"/"asset"→it_agent — deterministic for demo). Can slip to day 8 without blocking auth plumbing. | dev | S1.4a |
+| S1.4b | Orchestrator LLM integration: OpenAI (bind_tools function-calling) tool-routing + agent-card discovery + **keyword-fallback mode** (`LLM_FALLBACK_MODE=keyword`: "leave"→hr_agent, "laptop"/"asset"→it_agent — deterministic for demo). Can slip to day 8 without blocking auth plumbing. | dev | S1.4a |
 | S1.5 | HR-agent backend: FastAPI + A2A endpoint (`/a2a/message/send`), CIBA initiation, polling state per request, MCP client to hr_server | dev | S1.2, S1.3, S1.4a |
 | S1.6 | IT-agent backend: identical shape to HR with `it.*` scope and `/it_server` target | dev | S1.5 |
 | S1.7 | HR/IT MCP servers: trivial FastAPI tools (`get_leave_balance`, `list_available_assets`) with token validation per §4 (validate `aud == own-paired-agent-OAuth-Client-ID` AND `act.sub == paired-agent-id`) | dev | S1.2 |
@@ -169,7 +219,7 @@ Same as HR flow with hr_agent → it_agent. **Serial:** orchestrator does HR ful
 **Out of scope for Sprint 1:** denial UX, error fallbacks beyond hard-coded strings, audit log aggregation, revocation, signed envelopes, parallel fan-out.
 
 **Sprint 1 risks:**
-- LLM tool-routing flakiness (Gemini picks wrong specialist) — mitigate with deterministic keyword fallback in dev.
+- LLM tool-routing flakiness (OpenAI picks wrong specialist) — mitigate with deterministic keyword fallback in dev.
 - WebSocket/SSE for auth_url push — first time this team builds it; budget 1 buffer day.
 - IS rate-limiting CIBA initiations during dev iteration — keep `expires_in` at 300s and use distinct binding_messages per test.
 
@@ -230,7 +280,7 @@ Same as HR flow with hr_agent → it_agent. **Serial:** orchestrator does HR ful
 
 | Threat | Vector | Mitigation in scope |
 |---|---|---|
-| **T1 actor_token theft** | Specialist's I4 token leaks (logs, memory dump, HTTP traces) → attacker initiates CIBA posing as that specialist | Strict log redaction (regex strip JWT-shaped strings); short actor_token TTL (≤5 min in production; default 3600s acceptable for demo); memory-only storage. |
+| **T1 actor_token theft** | Specialist's I4 token leaks (logs, memory dump, HTTP traces) → attacker initiates CIBA posing as that specialist | Strict log redaction (regex strip JWT-shaped strings); in-process actor-token cache capped at **10s** (`ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS`, see §0.1) — the JWT's own `exp` is still IS-issued (~1h) but the cache re-mints every 10s, which also bounds agent-deactivation lag to ~10s; memory-only storage. |
 | **T2 auth_req_id interception** | Network MITM (mitigated by TLS but cert is self-signed in dev) | `verify=False` confined to dev env via `IDP_INSECURE_TLS=1` flag; production must pin a real cert. |
 | **T3 consent fatigue / phishing** | Attacker spams CIBA prompts; user click-throughs | `binding_message` includes specialist name + scope + correlation_id; rate-limit per (client_id, login_hint) — 1 prompt / 5s; refuse if >N in window. |
 | **T4 orchestrator impersonation** | Attacker registers their own MCP-Client app, presents Pattern C token to specialist | Specialist's peer_trust allowlist enforces `act.sub ∈ {orchestrator-agent-id}` on inbound A2A. |

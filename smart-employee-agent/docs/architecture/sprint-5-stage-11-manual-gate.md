@@ -1,7 +1,7 @@
 # Sprint 5 — Stage 11: Manual Gate Runbook
 
 **Date prepared:** 2026-05-11
-**Pre-req:** `./scripts/demo-up.sh` → 6/6 healthy; orchestrator log shows `llm_client_enabled model=gemini-2.5-flash`. (If the log instead shows `llm_mode_requested_without_key` or `llm_client_unavailable`, the LLM path isn't active — fix the key / `LLM_FALLBACK_MODE` in `orchestrator/.env` and re-run; see §0.) Browser at `http://localhost:8090`. Two demo users: `employee_user / NewsMax@1234` (Employee role), `hr_admin_user / NewsMax@1234` (HR Admin role).
+**Pre-req:** `./scripts/demo-up.sh` → 6/6 healthy; orchestrator log shows `llm_client_enabled model=gpt-4.1`. (If the log instead shows `llm_mode_requested_without_key` or `llm_client_unavailable`, the LLM path isn't active — fix the key / `LLM_FALLBACK_MODE` in `orchestrator/.env` and re-run; see §0.) Browser at `http://localhost:8090`. Two demo users: `employee_user / NewsMax@1234` (Employee role), `hr_admin_user / NewsMax@1234` (HR Admin role).
 
 > **What "passes" means:** for each scenario, the chat reply is *coherent natural language* (not the canned `_render_result` strings), the right CIBA consent widget(s) appear with server-sourced action text, the underlying state changes where expected, and the orchestrator log shows the LLM was used (`llm_router_ok tools=[…]`, `llm_composer_ok`). Where a scenario expects the *fallback*, the log shows `llm_router_failed … falling_back_to_keyword` / `llm_composer_failed … falling_back` and the reply is the Sprint-4 keyword wording — that's still a PASS.
 
@@ -10,9 +10,9 @@
 ## 0. Pre-flight
 
 - [ ] `./scripts/demo-up.sh` → smoke PASSED, 6/6 healthy.
-- [ ] `docker compose logs orchestrator | grep llm_client` → `llm_client_enabled model=gemini-2.5-flash timeout_s=8.0 max_output_tokens=512`.
+- [ ] `docker compose logs orchestrator | grep llm_client` → `llm_client_enabled model=gpt-4.1 timeout_s=8.0 max_output_tokens=512`.
 - [ ] `./scripts/check-is-config.py` → green (run only if any leg 401s — unchanged from S4).
-- [ ] Confirm the SPA's "I'm thinking…" line appears for ~0.5–2 s after sending a chat message (the Gemini routing round-trip), then is replaced by the routing / consent / reply.
+- [ ] Confirm the SPA's "I'm thinking…" line appears for ~0.5–2 s after sending a chat message (the OpenAI routing round-trip), then is replaced by the routing / consent / reply.
 
 ## 1. Single-tool free-text routing (employee)
 
@@ -65,11 +65,11 @@ The orchestrator keeps a rolling per-session transcript (last 12 turns) and repl
 - [ ] Expect: the consent widget's action text is *clean* — the markup is stripped by `_sanitise_action_text` (F-08 charset/length cap) before it reaches the widget or the audit log; it renders something like "Assign cubicle C099 to scriptjane.doescript" (the disallowed chars dropped) — and the SPA renders it via `textContent` so no DOM injection regardless. Either decline (no write) or approve (and the MCP tool rejects the bogus username/cubicle as "no such employee" / "cubicle not found" — second backstop).
 - [ ] Verify: no markup in `docker compose logs hr_agent | grep action_text`.
 
-## 8. Gemini-unavailable → keyword fallback (the resilience guarantee)
+## 8. OpenAI-unavailable → keyword fallback (the resilience guarantee)
 
 Pick one of:
-- (a) Edit `orchestrator/.env` → `LLM_FALLBACK_MODE=keyword` (or set an obviously-invalid `GEMINI_API_KEY`), `./scripts/demo-up.sh --no-build` to restart, then chat; **or**
-- (b) Block the orchestrator container's outbound to `generativelanguage.googleapis.com` (e.g. `docker compose exec orchestrator …` iptables, or just pull the laptop's network for a moment) and chat.
+- (a) Edit `orchestrator/.env` → `LLM_FALLBACK_MODE=keyword` (or set an obviously-invalid `OPENAI_API_KEY`), `./scripts/demo-up.sh --no-build` to restart, then chat; **or**
+- (b) Block the orchestrator container's outbound to the AMP gateway (`OPENAI_BASE_URL` host) (e.g. `docker compose exec orchestrator …` iptables, or just pull the laptop's network for a moment) and chat.
 - [ ] Type: **"what's my leave balance"**.
 - [ ] Expect: it still works — within ~8 s (the LLM timeout) the routing falls back to the keyword router; the reply is the Sprint-4 keyword wording (`"Your leave balance: 20 annual, 10 sick, 5 personal day(s) remaining."`); the consent widget still appears; SSE / security unchanged.
 - [ ] Log (case b): `llm_router_failed reason=… falling_back_to_keyword`, and `llm_composer_failed reason=… falling_back`.
@@ -98,9 +98,9 @@ Pick one of:
 6. [ ] §5 HR-Admin cubicle assign via free text → consent shows the named target → write succeeds.
 7. [ ] §6 prompt-injection → zero writes, zero escalation; unknown tools/agents dropped or CIBA denied.
 8. [ ] §7 fabricated-target / markup-in-arg → consent action text + audit line clean; bogus target rejected by the tool.
-9. [ ] §8 Gemini unavailable → keyword fallback within the timeout; demo still works; security/SSE unchanged. **Mode restored to `llm` afterwards.**
+9. [ ] §8 OpenAI / AMP gateway unavailable → keyword fallback within the timeout; demo still works; security/SSE unchanged. **Mode restored to `llm` afterwards.**
 10. [ ] §9 LLM reply rendered as text only.
 11. [ ] §10 regressions: logout cascade, sidebar cards, Reports page, `check-is-config.py` — all OK.
-12. [ ] `git grep -nP 'AIza[0-9A-Za-z_-]{35}'` over tracked files → nothing but the fake test sentinel.
+12. [ ] A repo-wide grep for an OpenAI API key shape (`sk-…`) over tracked files → nothing but the obviously-fake test sentinel.
 
 When all 12 are ticked → proceed to Stage 12 (retro + `sprint-5-signoff.md`).

@@ -4,12 +4,13 @@
 instead of ``keyword_router.route(...)``:
 
 1. If ``LLM_FALLBACK_MODE != "llm"`` or there's no ``llm_client`` → keyword router.
-2. Otherwise: one Gemini call → parse → **validate every returned tool against
+2. Otherwise: one OpenAI call (function-calling via ``ChatOpenAI.bind_tools()``)
+   → read the structured ``tool_calls`` → **validate every returned tool against
    the agent registry** (drop unknown ``agent_id``/``tool_id``; strip
    hallucinated arg keys + non-scalar values; drop the agent-internal
    ``hr.lookup_employee`` if it ever appears) → if any survive, use them;
    else fall back to the keyword router.
-3. Any LLM failure (transport/parse/timeout) → keyword router.
+3. Any LLM failure (transport/timeout) → keyword router.
 
 The surviving list is ``list[ToolCall]`` — the exact shape ``keyword_router.route``
 produces — so the rest of the fan-out in ``chat/routes.py`` is unchanged.

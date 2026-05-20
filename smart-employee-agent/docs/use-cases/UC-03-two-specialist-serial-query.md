@@ -63,10 +63,10 @@ User asks a query that requires both specialists, e.g.: *"Show me my leave balan
 - **Single widget at a time** (Q2 lock). NEVER show both consent cards stacked.
 - **Visible "Now routing to IT Agent" indicator** — gives the audience a beat between consents.
 - **Final reply** must clearly integrate both specialists' outputs into one coherent sentence (LLM composition). Stage 4 must specify the prompt template.
-- **Keyword-fallback** (per S1.4b) must produce the same two-specialist routing for the canonical demo query, so the demo doesn't depend on Gemini being up.
+- **Keyword-fallback** (per S1.4b) must produce the same two-specialist routing for the canonical demo query, so the demo doesn't depend on OpenAI being up.
 
 ### Architecture (Stage 4)
-- Orchestrator's LLM tool-routing must be **deterministic for the demo query** — pin Gemini's temperature to 0 OR use keyword fallback to guarantee the demo works on stage.
+- Orchestrator's LLM tool-routing must be **deterministic for the demo query** — pin OpenAI's temperature to 0 OR use keyword fallback to guarantee the demo works on stage.
 - After HR's reply is in, orchestrator MUST wait until SSE delivery confirms (or just give it a fixed pause) before starting the IT leg, so the user has time to read the HR answer and prepare for the IT consent.
 - Consider a `routing_pause_ms` config (default 500ms) between specialists.
 

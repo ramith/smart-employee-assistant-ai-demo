@@ -16,7 +16,7 @@ An employee who has not yet signed in (or a prospective hire, visitor, or contra
 1. User types: **"How many leave days do I get?"** and clicks Send.
 2. Widget sends `POST /public/chat {"message": "How many leave days do I get?"}`. No auth header.
 3. `PublicInfoHandler` builds the system prompt with the embedded leave policy knowledge base.
-4. Gemini composes a plain-text summary of all leave types and their entitlements.
+4. OpenAI composes a plain-text summary of all leave types and their entitlements.
 5. Widget renders the reply in a bot bubble.
 
 **Example reply (LLM mode):**
@@ -41,8 +41,8 @@ An employee who has not yet signed in (or a prospective hire, visitor, or contra
 - LLM responds per the system prompt guardrail: *"I can only share general leave policy information here. To check your personal leave balance, please sign in to the employee portal."*
 - Widget shows this as a normal bot reply. No data is fetched from `hr_server`.
 
-### A4 — Gemini unavailable (static fallback)
-- `_static_fallback` detects "leave" keyword → returns a pre-written policy summary template.
+### A4 — OpenAI / AMP gateway unavailable (static fallback)
+- `_static_fallback` detects "leave" keyword → returns a pre-written policy summary template. (The client retries transient gateway 5xx with max_retries=5 before falling back.)
 
 ## Notes
 

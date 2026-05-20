@@ -1,6 +1,12 @@
-"""Tests for orchestrator/llm/prompts.parse_router_output, strip_sensitive,
-render_outcomes, router_system, and orchestrator/llm/router.{build_catalogue,
-resolve_tool_calls}. No network, no langchain — uses FakeLLMClient."""
+"""Tests for orchestrator/llm/prompts.{strip_sensitive, render_outcomes,
+router_bind_system, composer_system} and orchestrator/llm/router.{build_catalogue,
+resolve_tool_calls}. No network, no langchain — uses FakeLLMClient.
+
+Note: the router uses OpenAI function-calling via ``ChatOpenAI.bind_tools()`` —
+there is no JSON-array parsing of the router output (the old
+``parse_router_output`` was removed in the bind_tools migration), and the tool
+catalogue is injected as function schemas by ``bind_tools`` rather than listed
+in the prompt body."""
 
 from __future__ import annotations
 
@@ -12,53 +18,6 @@ from orchestrator.llm.client import LLMError, RoutedToolCall, ToolOutcome
 from orchestrator.llm.router import build_catalogue, resolve_tool_calls
 
 from tests.orchestrator.llm.conftest import FakeLLMClient, make_deps
-
-
-# ── parse_router_output ──────────────────────────────────────────────────────
-
-
-def test_parse_valid_array() -> None:
-    out = prompts.parse_router_output(
-        '[{"agent_id":"hr_agent","tool_id":"hr.read_balance","args":{}},'
-        '{"agent_id":"it_agent","tool_id":"it.get_my_assets","args":{}}]'
-    )
-    assert out == [
-        RoutedToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={}),
-        RoutedToolCall(agent_id="it_agent", tool_id="it.get_my_assets", args={}),
-    ]
-
-
-def test_parse_empty_array_is_valid() -> None:
-    assert prompts.parse_router_output("[]") == []
-
-
-def test_parse_markdown_fenced_array() -> None:
-    out = prompts.parse_router_output('```json\n[{"agent_id":"hr_agent","tool_id":"hr.read_policy"}]\n```')
-    assert out == [RoutedToolCall(agent_id="hr_agent", tool_id="hr.read_policy", args={})]
-
-
-def test_parse_list_of_content_blocks() -> None:
-    # langchain sometimes returns content as a list of blocks.
-    out = prompts.parse_router_output([{"type": "text", "text": '[{"agent_id":"hr_agent","tool_id":"hr.read_balance"}]'}])
-    assert out == [RoutedToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={})]
-
-
-@pytest.mark.parametrize("bad", ["not json at all", "{}", '{"agent_id":"x"}', "", None, '"a string"'])
-def test_parse_unparseable_raises_llmerror(bad) -> None:
-    with pytest.raises(LLMError):
-        prompts.parse_router_output(bad)
-
-
-def test_parse_mixed_valid_and_malformed_keeps_valid() -> None:
-    out = prompts.parse_router_output(
-        '[{"agent_id":"hr_agent","tool_id":"hr.read_balance"}, "garbage", {"tool_id":"missing_agent"}, 42]'
-    )
-    assert out == [RoutedToolCall(agent_id="hr_agent", tool_id="hr.read_balance", args={})]
-
-
-def test_parse_all_malformed_nonempty_raises() -> None:
-    with pytest.raises(LLMError):
-        prompts.parse_router_output('["garbage", 42, {"no":"keys"}]')
 
 
 # ── strip_sensitive ──────────────────────────────────────────────────────────
@@ -117,17 +76,18 @@ def test_render_outcomes_empty() -> None:
     assert prompts.render_outcomes([]) == "(no tools ran)"
 
 
-# ── router_system ────────────────────────────────────────────────────────────
+# ── router_bind_system ───────────────────────────────────────────────────────
 
 
-def test_router_system_lists_every_catalogue_tool(agent_registry) -> None:
-    catalogue = build_catalogue(agent_registry)
-    text = prompts.router_system(catalogue, today="2026-05-11")
+def test_router_bind_system_includes_date_and_rules() -> None:
+    # bind_tools injects the tool catalogue as function schemas, so the prompt
+    # body does NOT list tools — it only carries the routing rules + today's date.
+    text = prompts.router_bind_system(today="2026-05-11")
     assert "Today is 2026-05-11" in text
-    for entry in catalogue:
-        assert f'tool_id="{entry.tool_id}"' in text
-    # The agent-internal helper must NOT be in the catalogue.
-    assert 'tool_id="hr.lookup_employee"' not in text
+    assert "routing layer" in text.lower()
+    # The leave-routing guardrail must be present (CRITICAL leave routing rule).
+    assert "hr.apply_leave" in text
+    assert "hr.read_policy" in text
 
 
 # ── build_catalogue ──────────────────────────────────────────────────────────
@@ -198,7 +158,7 @@ async def test_resolve_drops_internal_only_tool(agent_registry) -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_falls_back_to_keyword_on_llm_error(agent_registry) -> None:
-    llm = FakeLLMClient(route_result=LLMError("gemini exploded"))
+    llm = FakeLLMClient(route_result=LLMError("LLM exploded"))
     deps = make_deps(llm_client=llm, mode="llm", agent_registry=agent_registry)
     result = await resolve_tool_calls("what's my leave balance", deps)
     # keyword router routes "leave balance" → hr.read_balance
@@ -270,10 +230,10 @@ def test_describe_llm_exc_quota_429() -> None:
         pass
 
     msg = describe_llm_exc(ResourceExhausted(
-        "429 You exceeded your current quota ... limit: 20, model: gemini-2.5-flash"
+        "429 You exceeded your current quota ... limit: 20, model: gpt-4.1"
     ))
     assert "quota" in msg.lower()
-    assert "GEMINI_MODEL" in msg
+    assert "OPENAI_MODEL" in msg
     assert "Falling back to keyword routing" in msg
 
 
@@ -284,7 +244,7 @@ def test_describe_llm_exc_auth() -> None:
         pass
 
     msg = describe_llm_exc(PermissionDenied("403 API key not valid"))
-    assert "GEMINI_API_KEY" in msg
+    assert "OPENAI_API_KEY" in msg
 
 
 def test_describe_llm_exc_timeout() -> None:

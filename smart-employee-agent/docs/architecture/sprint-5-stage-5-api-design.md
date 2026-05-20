@@ -117,21 +117,23 @@ class RoutedToolCall:
     tool_id: str
     args: dict             # raw args from the LLM; validated/coerced by the router before becoming a chat ToolCall
 ```
-- The concrete impl `GeminiLLMClient(LLMClient)` wraps `langchain_google_genai.ChatGoogleGenerativeAI` (model from `cfg.gemini_model`, `temperature` per call, `max_output_tokens=cfg.llm_max_output_tokens`, per-call `asyncio.wait_for(..., cfg.llm_timeout_s)`).
+- The concrete impl `OpenAILLMClient(LLMClient)` wraps `langchain_openai.ChatOpenAI` (model from `cfg.openai_model`, `temperature` per call, `max_tokens=cfg.llm_max_output_tokens`, `max_retries=5`, per-call `asyncio.wait_for(..., cfg.llm_timeout_s)`). It reaches OpenAI through the WSO2 AMP AI Gateway (`OPENAI_BASE_URL`), sending the key under the header named by `OPENAI_API_HEADER` (default `api-key`); observability uses `amp-instrumentation` + `traceloop-sdk`. The router binds the tool catalogue as OpenAI function schemas (`ChatOpenAI.bind_tools()`) and reads the model's structured `tool_calls` — there is no JSON parsing.
 - `FakeLLMClient(LLMClient)` (in `tests/`) returns canned values; constructed with a list of `RoutedToolCall`s and a canned reply string, or an `LLMError` to raise — covers the fallback tests.
-- `LLMError(Exception)` — single exception type; the router/composer catch it (plus `asyncio.TimeoutError`, JSON parse errors, and any `langchain` exception) and fall back.
+- `LLMError(Exception)` — single exception type; the router/composer catch it (plus `asyncio.TimeoutError` and any `langchain` exception) and fall back. The OpenAI client retries transient gateway 5xx (`max_retries=5`) before a call is treated as failed.
 
 ## 6. NEW — env vars (read in `OrchestratorConfig.from_env`)
 
 | Var | Default | Meaning |
 |---|---|---|
 | `LLM_FALLBACK_MODE` | `keyword` | `llm` → LLM router+composer active (with keyword/`_render_result` fallback). Any other value → keyword-only (today). **Now actually read at runtime.** |
-| `GEMINI_API_KEY` | *(none)* | Required when mode is `llm`; if mode is `llm` and this is empty, `from_env` logs a warning and the orchestrator behaves as keyword-only (graceful — don't crash). |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model id. |
+| `OPENAI_API_KEY` | *(none)* | Required when mode is `llm`; if mode is `llm` and this is empty, `from_env` logs a warning and the orchestrator behaves as keyword-only (graceful — don't crash). |
+| `OPENAI_MODEL` | `gpt-4.1` | OpenAI model id. |
+| `OPENAI_BASE_URL` | *(none)* | WSO2 AMP AI Gateway endpoint OpenAI is reached through. |
+| `OPENAI_API_HEADER` | `api-key` | Header name the API key is sent under (AMP gateway convention). |
 | `LLM_TIMEOUT_S` | `8` | Per-LLM-call timeout (seconds). On timeout → fallback. |
-| `LLM_MAX_OUTPUT_TOKENS` | `512` | Cap on Gemini output tokens (both calls). |
+| `LLM_MAX_OUTPUT_TOKENS` | `512` | Cap on OpenAI output tokens (both calls). |
 
-`OrchestratorConfig` gains: `gemini_model: str = "gemini-2.5-flash"`, `llm_timeout_s: float = 8.0`, `llm_max_output_tokens: int = 512`. (`llm_fallback_mode` and `gemini_api_key` already exist.) `docker-compose.yml` orchestrator service: the new vars come through `env_file` (whole-file load); add explicit `GEMINI_MODEL` / `LLM_TIMEOUT_S` lines with `${...:-default}` for clarity. **`GEMINI_API_KEY` is NOT added to the compose `environment:` block** (it must only ever come from the gitignored `.env`).
+`OrchestratorConfig` gains: `openai_model: str = "gpt-4.1"`, `openai_base_url`, `openai_api_header: str = "api-key"`, `llm_timeout_s: float = 8.0`, `llm_max_output_tokens: int = 512`. (`llm_fallback_mode` and `openai_api_key` already exist.) `docker-compose.yml` orchestrator service: the new vars come through `env_file` (whole-file load); add explicit `OPENAI_MODEL` / `LLM_TIMEOUT_S` lines with `${...:-default}` for clarity. **`OPENAI_API_KEY` is NOT added to the compose `environment:` block** (it must only ever come from the gitignored `.env`).
 
 ## 7. Contract test obligations (Stage 10)
 

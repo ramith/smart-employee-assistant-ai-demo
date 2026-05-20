@@ -351,7 +351,10 @@ IT_AGENT_OAUTH_CLIENT_ID=<from Step 3 — it-agent's OAuth App>
 
 # F-14 default
 LLM_FALLBACK_MODE=keyword
-GEMINI_API_KEY=<optional; keyword fallback works without>
+OPENAI_API_KEY=<optional; keyword fallback works without>
+OPENAI_BASE_URL=<AMP gateway base URL>
+OPENAI_API_HEADER=api-key
+OPENAI_MODEL=gpt-4.1
 
 ORCHESTRATOR_HOST=0.0.0.0
 ORCHESTRATOR_PORT=8090

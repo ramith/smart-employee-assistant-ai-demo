@@ -104,7 +104,7 @@ class ChatRouterDeps:
             it is the fallback for LLM mode and the only router in keyword mode).
         agent_registry: Registry of loaded AgentCards.
         a2a_clients: Mapping of agent_id → A2AClient; wired up by Wave 8 main.py.
-        llm_client: Optional Gemini-backed LLM client. Non-None only when
+        llm_client: Optional OpenAI-backed LLM client. Non-None only when
             ``config.llm_fallback_mode == "llm"`` and a key is configured;
             ``None`` ⇒ keyword-only behaviour (Sprint 1–4).
     """
@@ -907,7 +907,7 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
         5. Otherwise: spawn ``_run_serial_fan_out`` as a background Task; return
            ChatAck immediately so the SPA is unblocked.
 
-        Note: step 3 may add a Gemini round-trip before ChatAck is returned —
+        Note: step 3 may add an OpenAI round-trip before ChatAck is returned —
         the SPA shows a transient "Thinking…" affordance to cover it.
 
         Args:
@@ -960,9 +960,28 @@ def build_chat_router(deps: ChatRouterDeps) -> APIRouter:
 
         if not tool_calls:
             _logger.info(
-                "chat_request | no_route request_id=%s", request_id
+                "chat_request | no_route request_id=%s history_turns=%d",
+                request_id,
+                len(prior_history),
             )
-            no_route_reply = "I don't know how to help with that."
+            fallback_no_route_reply = "I don't know how to help with that."
+            # FIX #1: when there's prior conversation, let the LLM composer
+            # answer based on history instead of dumping the flat string —
+            # short follow-ups like "I can" / "yes" / "go ahead" otherwise
+            # never reach the model (router returned no tools, fan-out is
+            # skipped, composer was previously skipped too because
+            # ``outcomes`` was empty). On any LLM failure the composer's
+            # internal try/except returns ``fallback_no_route_reply``.
+            if prior_history:
+                no_route_reply = await compose_reply(
+                    body.message,
+                    [],
+                    fallback_no_route_reply,
+                    deps,
+                    history=prior_history,
+                )
+            else:
+                no_route_reply = fallback_no_route_reply
             channel = SseChannel(session.sse_queue)
             await channel.publish(
                 ChatMessageEvent(content=no_route_reply, request_id=request_id)

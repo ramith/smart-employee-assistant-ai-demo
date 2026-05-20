@@ -1763,7 +1763,7 @@ async function sendMessage(text) {
   routingCount = 0;
   setComposerEnabled(false);
 
-  // S5: in LLM mode the orchestrator makes a Gemini routing call *before* the
+  // In LLM mode the orchestrator makes an OpenAI routing call *before* the
   // first SSE event, so show a transient "thinking" affordance straight away.
   // It is replaced by the first routing / ciba_url / chat_message event
   // (showRoutingLine / hideRoutingLine already manage #routing-line), or by the

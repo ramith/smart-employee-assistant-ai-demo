@@ -90,11 +90,12 @@ _INTERNAL_AUTH_PATTERN = re.compile(
     r"(?i)(x-internal-auth[\"'=:\s]+)\S+"
 )
 
-# S5 (security audit F-4): Google API key shape — ``AIza`` + 35 url-safe chars
-# (39 total). Catches it anywhere (e.g. if a langchain/google transport error
-# ever embeds ``?key=AIza…`` in a URL it logs). Defence-in-depth on top of
-# GeminiLLMClient never logging repr(exc).
-_GOOGLE_API_KEY_PATTERN = re.compile(r"AIza[0-9A-Za-z_\-]{35}")
+# Security (audit F-4): OpenAI API key shape — ``sk-`` (incl. ``sk-proj-``)
+# followed by 20+ url-safe chars. Catches it anywhere (e.g. if a langchain /
+# OpenAI transport error ever embeds the key in a logged URL or message).
+# Defence-in-depth on top of OpenAILLMClient never logging repr(exc); note the
+# AMP-gateway key is sent in the ``OPENAI_API_HEADER`` request header, not the body.
+_OPENAI_API_KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{20,}")
 
 # Master list — evaluated in the order below.
 #
@@ -116,7 +117,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (_CLIENT_SECRET_PATTERN,  r"\1<REDACTED>"),
     (_INTERNAL_AUTH_PATTERN,  r"\1<REDACTED>"),
     (_PASSWORD_PATTERN,       r"\1<REDACTED>"),
-    (_GOOGLE_API_KEY_PATTERN, "<REDACTED_API_KEY>"),
+    (_OPENAI_API_KEY_PATTERN, "<REDACTED_API_KEY>"),
     (_JWT_PATTERN,            "<JWT>"),
 ]
 

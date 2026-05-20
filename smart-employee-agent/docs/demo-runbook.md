@@ -71,7 +71,7 @@ docker compose logs --tail=50 <service-name>
 - "laptop" / "asset" / "equipment" → `it_agent.list_available_assets`
 
 The demo query contains both triggers, so routing is deterministic regardless
-of Gemini availability. No action required unless you want to demo live LLM
+of OpenAI availability. No action required unless you want to demo live LLM
 routing (set `LLM_FALLBACK_MODE=llm` in `orchestrator/.env` before starting).
 
 ---

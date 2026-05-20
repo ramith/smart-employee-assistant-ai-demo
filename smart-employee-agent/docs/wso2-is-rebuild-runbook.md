@@ -266,7 +266,10 @@ TRUSTED_SPECIALIST_SUBS=<hr-agent UUID>,<it-agent UUID>
 
 # LLM routing (keyword fallback works without a key)
 LLM_FALLBACK_MODE=llm
-GEMINI_API_KEY=<optional>
+OPENAI_API_KEY=<optional>
+OPENAI_BASE_URL=<AMP gateway base URL>
+OPENAI_API_HEADER=api-key
+OPENAI_MODEL=gpt-4.1
 
 ORCHESTRATOR_HOST=0.0.0.0
 ORCHESTRATOR_PORT=8080

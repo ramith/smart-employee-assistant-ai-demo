@@ -1,5 +1,5 @@
 """The orchestrator's LLM router/composer/client/prompts modules must import
-cleanly *without* ``langchain-google-genai`` installed — only ``gemini.py``
+cleanly *without* ``langchain-openai`` installed — only ``amp_client.py``
 imports langchain, and that module is imported lazily by ``main.py`` (only when
 ``LLM_FALLBACK_MODE=llm`` + a key is configured) and by the prod image (which
 ships the dep). This guards the lazy-import discipline so a keyword-only
@@ -18,7 +18,7 @@ def test_llm_layer_importable_without_langchain(monkeypatch) -> None:
     real_import = builtins.__import__
 
     def _blocked_import(name, *args, **kwargs):
-        if name == "langchain_google_genai" or name.startswith("langchain_google_genai.") \
+        if name == "langchain_openai" or name.startswith("langchain_openai.") \
            or name == "langchain_core" or name.startswith("langchain_core.") \
            or name == "langchain" or name.startswith("langchain."):
             raise ModuleNotFoundError(f"No module named {name!r} (simulated)")
@@ -36,11 +36,11 @@ def test_llm_layer_importable_without_langchain(monkeypatch) -> None:
     importlib.import_module("orchestrator.llm.router")
     importlib.import_module("orchestrator.llm.composer")
 
-    # ...and gemini.py must FAIL (proving the langchain import lives only there).
-    sys.modules.pop("orchestrator.llm.gemini", None)
+    # ...and amp_client.py must FAIL (proving the langchain import lives only there).
+    sys.modules.pop("orchestrator.llm.amp_client", None)
     try:
-        importlib.import_module("orchestrator.llm.gemini")
+        importlib.import_module("orchestrator.llm.amp_client")
     except ModuleNotFoundError:
         pass
     else:  # pragma: no cover
-        raise AssertionError("orchestrator.llm.gemini imported despite langchain being unavailable")
+        raise AssertionError("orchestrator.llm.amp_client imported despite langchain being unavailable")

@@ -123,7 +123,8 @@ class TestSuccessfulConstruction:
         assert cfg.llm_fallback_mode == "keyword"
         assert cfg.cookie_secure is False
         assert cfg.session_cookie_name == "orch_sid"
-        assert cfg.gemini_api_key is None
+        assert cfg.openai_api_key is None
+        assert cfg.openai_model == "gpt-4o"
 
     def test_instance_is_frozen(self) -> None:
         cfg = OrchestratorConfig.from_env(_base_env())
@@ -152,35 +153,50 @@ class TestSuccessfulConstruction:
         cfg = OrchestratorConfig.from_env(env)
         assert cfg.llm_fallback_mode == "llm"
 
-    def test_gemini_api_key_present_when_set(self) -> None:
-        env = {**_base_env(), "GEMINI_API_KEY": "key-abc123"}
+    def test_openai_api_key_present_when_set(self) -> None:
+        env = {**_base_env(), "OPENAI_API_KEY": "key-abc123"}
         cfg = OrchestratorConfig.from_env(env)
-        assert cfg.gemini_api_key == "key-abc123"
+        assert cfg.openai_api_key == "key-abc123"
 
-    def test_gemini_model_default_and_override(self) -> None:
-        assert OrchestratorConfig.from_env(_base_env()).gemini_model == "gemini-2.5-flash"
-        env = {**_base_env(), "GEMINI_MODEL": "gemini-2.5-pro"}
-        assert OrchestratorConfig.from_env(env).gemini_model == "gemini-2.5-pro"
+    def test_openai_model_default_and_override(self) -> None:
+        assert OrchestratorConfig.from_env(_base_env()).openai_model == "gpt-4o"
+        env = {**_base_env(), "OPENAI_MODEL": "gpt-4.1"}
+        assert OrchestratorConfig.from_env(env).openai_model == "gpt-4.1"
+
+    def test_openai_base_url_and_header_parsed(self) -> None:
+        cfg = OrchestratorConfig.from_env(_base_env())
+        assert cfg.openai_base_url is None
+        assert cfg.openai_api_header == "api-key"
+        env = {
+            **_base_env(),
+            "OPENAI_BASE_URL": "https://gateway.example.com/v1",
+            "OPENAI_API_HEADER": "Authorization",
+        }
+        cfg2 = OrchestratorConfig.from_env(env)
+        assert cfg2.openai_base_url == "https://gateway.example.com/v1"
+        assert cfg2.openai_api_header == "Authorization"
 
     def test_llm_timeout_and_max_tokens_parsed(self) -> None:
         cfg = OrchestratorConfig.from_env(_base_env())
         assert cfg.llm_timeout_s == 8.0
-        assert cfg.llm_max_output_tokens == 512
-        env = {**_base_env(), "LLM_TIMEOUT_S": "12.5", "LLM_MAX_OUTPUT_TOKENS": "256"}
+        # Router and composer token caps are split (router stays short).
+        assert cfg.llm_max_output_tokens == 256
+        assert cfg.llm_composer_max_output_tokens == 1024
+        env = {**_base_env(), "LLM_TIMEOUT_S": "12.5", "LLM_MAX_OUTPUT_TOKENS": "512"}
         cfg2 = OrchestratorConfig.from_env(env)
         assert cfg2.llm_timeout_s == 12.5
-        assert cfg2.llm_max_output_tokens == 256
+        assert cfg2.llm_max_output_tokens == 512
 
     def test_llm_mode_without_key_does_not_crash(self, caplog) -> None:
-        """LLM_FALLBACK_MODE=llm + no GEMINI_API_KEY → warns, keeps mode, no exception
+        """LLM_FALLBACK_MODE=llm + no OPENAI_API_KEY → warns, keeps mode, no exception
         (main.py then builds llm_client=None → keyword-only behaviour)."""
-        env = {k: v for k, v in _base_env().items() if k != "GEMINI_API_KEY"}
+        env = {k: v for k, v in _base_env().items() if k != "OPENAI_API_KEY"}
         env["LLM_FALLBACK_MODE"] = "llm"
         with caplog.at_level("WARNING"):
             cfg = OrchestratorConfig.from_env(env)
         assert cfg.llm_fallback_mode == "llm"
-        assert cfg.gemini_api_key is None
-        assert any("GEMINI_API_KEY is empty" in r.message for r in caplog.records)
+        assert cfg.openai_api_key is None
+        assert any("OPENAI_API_KEY is not set" in r.message for r in caplog.records)
 
     def test_llm_fallback_mode_blank_defaults_to_keyword(self) -> None:
         env = {**_base_env(), "LLM_FALLBACK_MODE": "   "}

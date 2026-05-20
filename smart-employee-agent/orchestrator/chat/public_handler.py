@@ -3,7 +3,7 @@
 This module has NO authentication dependencies, NO session state, NO A2A
 clients, and makes NO live calls to hr_server or it_server.  It can only
 return answers derived from the three embedded knowledge-base constants below
-or (if an LLM client is wired in) a Gemini-composed reply grounded on those
+or (if an LLM client is wired in) a OpenAI-composed reply grounded on those
 same constants.
 
 Security invariant (sprint-6.md §2 S-INV):

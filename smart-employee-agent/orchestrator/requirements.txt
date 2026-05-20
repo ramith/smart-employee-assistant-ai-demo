@@ -4,15 +4,18 @@ httpx~=0.27.0
 pydantic~=2.11.7
 python-dotenv~=1.0.0
 PyJWT[crypto]>=2.12.0
-# S5: LLM-driven chat routing/composition uses langchain-google-genai's
-# ChatGoogleGenerativeAI + langchain_core.messages (in orchestrator/llm/gemini.py,
-# which is imported lazily only when LLM_FALLBACK_MODE=llm). langchain-core is a
-# transitive dep of langchain-google-genai but is named explicitly here so the
-# import is on a declared dependency. The umbrella `langchain` package is kept
-# for parity with the milestone-plan pin (not used by S5 directly).
-# NOTE (S5 retro follow-up): consider pinning these to exact versions and
-# adding a lockfile. `langchain-mcp-adapters` was dropped — S5 confirmed the
-# v4 topology (orchestrator → A2A → agent → CIBA → MCP) doesn't use it.
+# LLM-driven chat routing/composition uses langchain-openai's ChatOpenAI
+# (reached via the WSO2 AMP AI Gateway) + langchain_core.messages, in
+# orchestrator/llm/amp_client.py, imported lazily only when LLM_FALLBACK_MODE=llm.
+# The router binds the tool catalogue as OpenAI function schemas (bind_tools).
+# langchain-core is a transitive dep of langchain-openai but is named explicitly
+# here so the import is on a declared dependency. The umbrella `langchain`
+# package is kept for parity with the milestone-plan pin (not used directly).
+# Observability: opentelemetry-instrumentation-langchain + amp-instrumentation +
+# traceloop-sdk export spans to the AMP console.
+# NOTE: consider pinning these to exact versions and adding a lockfile.
+# `langchain-mcp-adapters` was dropped — the v4 topology
+# (orchestrator → A2A → agent → CIBA → MCP) doesn't use it.
 langchain>=1.2.11
 langchain-core>=0.3
 langchain-openai>=0.3.0

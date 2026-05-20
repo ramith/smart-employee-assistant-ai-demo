@@ -80,7 +80,7 @@ Stage 3 sprint plan: [`docs/architecture/sprint-4.md`](../architecture/sprint-4.
 
 ## Sprint 5 UCs (LLM-driven chat)
 
-Stage 3 sprint plan: [`docs/architecture/sprint-5.md`](../architecture/sprint-5.md). The orchestrator's chat routing + reply composition become LLM-driven (Gemini `gemini-2.5-flash`); the keyword router is retained as the automatic fallback. The fixed tool catalogue + per-action CIBA + server-fixed scopes remain the security backstop.
+Stage 3 sprint plan: [`docs/architecture/sprint-5.md`](../architecture/sprint-5.md). The orchestrator's chat routing + reply composition become LLM-driven (OpenAI `gpt-4.1`); the keyword router is retained as the automatic fallback. The fixed tool catalogue + per-action CIBA + server-fixed scopes remain the security backstop.
 
 | ID | Name | Priority | Build status | Status |
 |---|---|---|---|---|

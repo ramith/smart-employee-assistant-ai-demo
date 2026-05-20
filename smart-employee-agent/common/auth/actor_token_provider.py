@@ -29,8 +29,9 @@ import base64
 import hashlib
 import logging
 import secrets
+import dataclasses
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .errors import ActorTokenError
 from .models import OAuthToken
@@ -38,7 +39,15 @@ from .wso2_is_client import WSO2ISClient
 
 logger = logging.getLogger(__name__)
 
-REFRESH_BUFFER_SECONDS: int = 30
+REFRESH_BUFFER_SECONDS: int = 2
+
+# Hard cap on how long the in-process cache trusts a freshly-minted actor token,
+# regardless of the token's actual `exp` (IS issues 1-hour tokens). Keeps the
+# effective lag between an IS-Console "Deactivate Agent" toggle and the agent
+# losing access bounded to this many seconds — verified live 2026-05-19 to be
+# the dominant gap (IS rejects fresh mints for deactivated agents but does not
+# invalidate already-issued JWTs). See memory: project_introspection_deferred.
+ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS: int = 10
 
 
 # ── Credentials ────────────────────────────────────────────────────────────────
@@ -282,113 +291,131 @@ class ActorTokenProvider:
         # are never sent to a federated IdP connector.
         authenticator_id: str | None = _pick_local_basic_authenticator(authenticators)
 
-        if not flow_id or not authenticator_id:
-            logger.warning(
-                "actor_token_authorize_missing_fields | agent_id=%s body=%r",
-                creds.agent_id,
-                {k: v for k, v in authorize_body.items() if k != "access_token"},
-            )
-            raise ActorTokenError(
-                "POST /oauth2/authorize returned 200 but flowId or authenticatorId is absent",
-                details={
-                    "step": "authorize",
-                    "flow_id": flow_id,
-                    "authenticator_id": authenticator_id,
-                },
-            )
-
-        logger.debug(
-            "actor_token_authorize_ok | flow_id=%s authenticator_id=%s",
-            flow_id,
-            authenticator_id,
-        )
-
-        # ── Step 2: /oauth2/authn — loop to handle multi-step login flows ─────
-        # IS 7.3.0 defaults to Identifier First (2 steps: identifier → password).
-        # Each INCOMPLETE response carries the next authenticatorId; we loop until
-        # we receive a code or a terminal failure.
-        _MAX_AUTHN_STEPS = 4
-        current_authenticator_id = authenticator_id
         code: str | None = None
 
-        for _step in range(_MAX_AUTHN_STEPS):
-            try:
-                body = await self.is_client.post_authn_raw(
-                    flow_id=flow_id,
-                    authenticator_id=current_authenticator_id,
-                    params={"username": creds.agent_id, "password": creds.agent_secret},
-                )
-            except Exception as exc:
-                raise ActorTokenError(
-                    f"App-Native Auth /authn failed: {exc}",
-                    details={"step": "authn", "upstream": str(exc)},
-                ) from exc
-
-            code = (body.get("authData") or {}).get("code") or body.get("code")
-            if code:
-                break
-
-            flow_status = body.get("flowStatus", "UNKNOWN")
-            next_step: dict = body.get("nextStep") or {}
-            messages: list = next_step.get("messages") or []
-            err_msgs = [
-                f"{m.get('messageId', '?')}: {m.get('message', '')}"
-                for m in messages
-                if isinstance(m, dict) and m.get("type") == "ERROR"
-            ]
-
-            is_credential_failure = flow_status == "FAIL_INCOMPLETE" or any(
-                "ABA-60003" in m or "login.fail" in m for m in err_msgs
+        # ── Step 1.5: Short-circuit when IS already accepted the agent ────────
+        # IS 7.3 may return flowStatus=SUCCESS_COMPLETED with `authData.code` on
+        # /oauth2/authorize itself when a prior IS session for this OAuth client
+        # is still valid (e.g. another recent mint by the same agent). No flowId
+        # / authenticatorId is present in that case — there is no Step 2 to run.
+        # Detected live on 2026-05-19 once the actor-token cache TTL was capped
+        # at 10s and re-mints became frequent enough to hit this branch.
+        short_circuit_status = authorize_body.get("flowStatus")
+        short_circuit_code = (authorize_body.get("authData") or {}).get("code")
+        if short_circuit_status == "SUCCESS_COMPLETED" and short_circuit_code:
+            logger.debug(
+                "actor_token_authorize_short_circuit | agent_id=%s — IS returned code "
+                "directly, skipping /authn",
+                creds.agent_id,
             )
-            if is_credential_failure:
-                hint = (
-                    " — agent authentication FAILED; the agent secret is likely "
-                    "stale (rotated by 'Regenerate' in IS Console). Update the "
-                    "agent's *_AGENT_SECRET in the service .env and recreate the "
-                    "container."
-                )
-                logger.error(
-                    "post_authn no-code | flowStatus=%s errors=%s%s",
-                    flow_status, err_msgs, hint,
+            code = short_circuit_code
+        else:
+            if not flow_id or not authenticator_id:
+                logger.warning(
+                    "actor_token_authorize_missing_fields | agent_id=%s body=%r",
+                    creds.agent_id,
+                    {k: v for k, v in authorize_body.items() if k != "access_token"},
                 )
                 raise ActorTokenError(
-                    f"POST /oauth2/authn returned flowStatus={flow_status}"
-                    + (f" errors={err_msgs}" if err_msgs else "")
-                    + hint,
+                    "POST /oauth2/authorize returned 200 but flowId or authenticatorId is absent",
+                    details={
+                        "step": "authorize",
+                        "flow_id": flow_id,
+                        "authenticator_id": authenticator_id,
+                    },
+                )
+
+            logger.debug(
+                "actor_token_authorize_ok | flow_id=%s authenticator_id=%s",
+                flow_id,
+                authenticator_id,
+            )
+
+            # ── Step 2: /oauth2/authn — loop to handle multi-step login flows ─
+            # IS 7.3.0 defaults to Identifier First (2 steps: identifier → password).
+            # Each INCOMPLETE response carries the next authenticatorId; we loop
+            # until we receive a code or a terminal failure.
+            _MAX_AUTHN_STEPS = 4
+            current_authenticator_id = authenticator_id
+
+            for _step in range(_MAX_AUTHN_STEPS):
+                try:
+                    body = await self.is_client.post_authn_raw(
+                        flow_id=flow_id,
+                        authenticator_id=current_authenticator_id,
+                        params={"username": creds.agent_id, "password": creds.agent_secret},
+                    )
+                except Exception as exc:
+                    raise ActorTokenError(
+                        f"App-Native Auth /authn failed: {exc}",
+                        details={"step": "authn", "upstream": str(exc)},
+                    ) from exc
+
+                code = (body.get("authData") or {}).get("code") or body.get("code")
+                if code:
+                    break
+
+                flow_status = body.get("flowStatus", "UNKNOWN")
+                next_step: dict = body.get("nextStep") or {}
+                messages: list = next_step.get("messages") or []
+                err_msgs = [
+                    f"{m.get('messageId', '?')}: {m.get('message', '')}"
+                    for m in messages
+                    if isinstance(m, dict) and m.get("type") == "ERROR"
+                ]
+
+                is_credential_failure = flow_status == "FAIL_INCOMPLETE" or any(
+                    "ABA-60003" in m or "login.fail" in m for m in err_msgs
+                )
+                if is_credential_failure:
+                    hint = (
+                        " — agent authentication FAILED; the agent secret is likely "
+                        "stale (rotated by 'Regenerate' in IS Console). Update the "
+                        "agent's *_AGENT_SECRET in the service .env and recreate the "
+                        "container."
+                    )
+                    logger.error(
+                        "post_authn no-code | flowStatus=%s errors=%s%s",
+                        flow_status, err_msgs, hint,
+                    )
+                    raise ActorTokenError(
+                        f"POST /oauth2/authn returned flowStatus={flow_status}"
+                        + (f" errors={err_msgs}" if err_msgs else "")
+                        + hint,
+                        details={"step": "authn", "flowStatus": flow_status, "errors": err_msgs},
+                    )
+
+                if flow_status == "INCOMPLETE":
+                    # Non-error incomplete — advance to the next authenticator step.
+                    next_authenticators: list = next_step.get("authenticators") or []
+                    if not next_authenticators:
+                        raise ActorTokenError(
+                            f"POST /oauth2/authn INCOMPLETE but no next authenticator (step {_step + 1})",
+                            details={"step": "authn", "flowStatus": flow_status, "body": str(body)[:500]},
+                        )
+                    next_id = _pick_local_basic_authenticator(next_authenticators)
+                    if not next_id:
+                        raise ActorTokenError(
+                            f"POST /oauth2/authn INCOMPLETE but no LOCAL authenticator found (step {_step + 1})",
+                            details={"step": "authn", "flowStatus": flow_status, "body": str(body)[:500]},
+                        )
+                    current_authenticator_id = next_id
+                    logger.debug(
+                        "actor_token_authn_step | step=%d next_authenticator=%s",
+                        _step + 1, current_authenticator_id,
+                    )
+                    continue
+
+                # Unknown terminal status with no code.
+                raise ActorTokenError(
+                    f"POST /oauth2/authn returned flowStatus={flow_status} with no code",
                     details={"step": "authn", "flowStatus": flow_status, "errors": err_msgs},
                 )
-
-            if flow_status == "INCOMPLETE":
-                # Non-error incomplete — advance to the next authenticator step.
-                next_authenticators: list = next_step.get("authenticators") or []
-                if not next_authenticators:
-                    raise ActorTokenError(
-                        f"POST /oauth2/authn INCOMPLETE but no next authenticator (step {_step + 1})",
-                        details={"step": "authn", "flowStatus": flow_status, "body": str(body)[:500]},
-                    )
-                next_id = _pick_local_basic_authenticator(next_authenticators)
-                if not next_id:
-                    raise ActorTokenError(
-                        f"POST /oauth2/authn INCOMPLETE but no LOCAL authenticator found (step {_step + 1})",
-                        details={"step": "authn", "flowStatus": flow_status, "body": str(body)[:500]},
-                    )
-                current_authenticator_id = next_id
-                logger.debug(
-                    "actor_token_authn_step | step=%d next_authenticator=%s",
-                    _step + 1, current_authenticator_id,
+            else:
+                raise ActorTokenError(
+                    f"POST /oauth2/authn did not complete after {_MAX_AUTHN_STEPS} steps",
+                    details={"step": "authn"},
                 )
-                continue
-
-            # Unknown terminal status with no code.
-            raise ActorTokenError(
-                f"POST /oauth2/authn returned flowStatus={flow_status} with no code",
-                details={"step": "authn", "flowStatus": flow_status, "errors": err_msgs},
-            )
-        else:
-            raise ActorTokenError(
-                f"POST /oauth2/authn did not complete after {_MAX_AUTHN_STEPS} steps",
-                details={"step": "authn"},
-            )
 
         if not code:
             raise ActorTokenError(
@@ -428,4 +455,15 @@ class ActorTokenProvider:
             token.expires_in,
             token.scope,
         )
+
+        # Cap the cache's view of expiry so deactivation lag is bounded.
+        # The underlying JWT still has its IS-issued exp claim (~1 hour) and
+        # remains valid downstream; this only forces our cache to re-mint via
+        # IS every ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS, giving IS the chance to
+        # refuse for deactivated agents.
+        capped_expires_at = datetime.now(tz=timezone.utc) + timedelta(
+            seconds=ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS
+        )
+        if capped_expires_at < token.expires_at:
+            token = dataclasses.replace(token, expires_at=capped_expires_at)
         return token

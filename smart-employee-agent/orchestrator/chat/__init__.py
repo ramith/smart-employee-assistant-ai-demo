@@ -4,5 +4,5 @@ Modules
 -------
 keyword_fallback
     Deterministic keyword-based router used when ``LLM_FALLBACK_MODE=keyword``
-    is set or when the Gemini LLM is unavailable.
+    is set or when the LLM is unavailable.
 """

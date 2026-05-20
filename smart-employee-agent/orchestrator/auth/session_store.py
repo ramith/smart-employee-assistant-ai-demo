@@ -176,7 +176,7 @@ class Session:
     # role is "user" | "assistant"; trimmed to the last _MAX_CHAT_HISTORY
     # entries by record_chat_turn(). Not used by the keyword router. The
     # reply text is plain (rendered via textContent on the SPA), so storing
-    # it is safe; it never leaves the orchestrator except into the Gemini
+    # it is safe; it never leaves the orchestrator except into the OpenAI
     # prompts in llm-mode (same trust boundary as the user's messages).
     chat_history: list[tuple[str, str]] = field(default_factory=list)
 

@@ -36,33 +36,33 @@ class LLMError(Exception):
     Callers (``router.resolve_tool_calls`` / ``composer.compose_reply``) catch
     this (plus, defensively, any other ``Exception``) and fall back to the
     keyword router / the ``_render_result`` concatenation. The demo never
-    hard-fails on a Gemini hiccup.
+    hard-fails on an LLM hiccup.
     """
 
 
 def describe_llm_exc(exc: BaseException) -> str:
     """A short, log-safe description of an LLM-call failure.
 
-    Calls out the common Gemini free-tier case (HTTP 429 / quota exhausted —
-    20 generate_content req/day per model) and auth errors, so the orchestrator
-    log says *why* the keyword fallback kicked in. ``str(exc)`` from
-    langchain/google-genai does not contain the API key; we still cap the
-    length. Stdlib-only — usable from any module.
+    Calls out the common quota / rate-limit (HTTP 429) and auth cases for OpenAI
+    via the AMP AI Gateway, so the orchestrator log says *why* the keyword
+    fallback kicked in. The API key is sent in a request header (``OPENAI_API_HEADER``),
+    not in ``str(exc)``; we still cap the length. Stdlib-only — usable from any module.
     """
     name = type(exc).__name__
     text = str(exc)
     low = text.lower()
     if name == "ResourceExhausted" or "429" in text or "quota" in low or "rate limit" in low or "ratelimit" in low:
         return (
-            f"{name}: Gemini quota / rate limit exceeded — likely the free-tier "
-            f"daily cap (20 generate_content req/day per model). Enable billing on "
-            f"the Google Cloud project, or set GEMINI_MODEL to a model with more "
+            f"{name}: OpenAI / AMP gateway quota or rate limit exceeded. Check the "
+            f"gateway's rate limits, or set OPENAI_MODEL to a deployment with more "
             f"headroom. Falling back to keyword routing. [{text[:160]}]"
         )
     if name in {"PermissionDenied", "Unauthenticated"} or "api key" in low or "api_key" in low or " 401" in text or " 403" in text:
-        return f"{name}: Gemini auth/permission error — check GEMINI_API_KEY. [{text[:160]}]"
+        return f"{name}: OpenAI auth/permission error — check OPENAI_API_KEY. [{text[:160]}]"
+    if name in {"InternalServerError"} or " 500" in text or " 502" in text or " 503" in text or "upstream connect" in low:
+        return f"{name}: OpenAI / AMP gateway 5xx (transient). Retried up to max_retries before falling back to keyword routing. [{text[:160]}]"
     if name in {"TimeoutError", "CancelledError"}:
-        return f"{name}: Gemini call exceeded the LLM_TIMEOUT_S budget (often a slow network or backoff after a 429)."
+        return f"{name}: OpenAI call exceeded the LLM_TIMEOUT_S budget (often a slow gateway or backoff after a 429/5xx)."
     return f"{name}: {text[:200]}"
 
 

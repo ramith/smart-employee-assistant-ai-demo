@@ -11,7 +11,7 @@ The "Act I — Onboarding" demo beat: an HR Admin sets up a new employee's works
 - Signed in as `hr_admin_user` (HR Admin role — holds `hr_read_rest`, `hr_assets_write_rest`, `it_assets_read_rest`, `it_assets_write_rest`, …).
 - The new hire (`employee_user` in the demo, or any IS user created with `username` = the email local-part — see `wso2-is-setup.md` §5.5) exists.
 - `hr-agent` and `it-agent` OAuth apps subscribed to all their API scopes (verify: `scripts/check-is-config.py` Section 4c — must include `hr_assets_write_rest`).
-- Gemini/LLM router available (the multi-resource split is an LLM-router behaviour; in keyword-only mode the resources have to be issued one message at a time — see §"Degraded mode").
+- OpenAI/LLM router available (the multi-resource split is an LLM-router behaviour; in keyword-only mode the resources have to be issued one message at a time — see §"Degraded mode").
 
 ## Main flow — fully-specified (one turn, three consents)
 
@@ -54,6 +54,6 @@ If the admin doesn't name specifics:
 - **Mixed-agent ordering** follows the order the router emitted them; the cubicle (hr_agent) and the devices (it_agent) interleave per that order.
 - **Prompt-injection safety unchanged (UC-17 §4):** an `Employee`-role user typing the same onboarding message gets the writes denied by IS at CIBA (no `hr_assets_write_rest` / `it_assets_write_rest`) — the per-tool scope is server-fixed in each agent's `_TOOL_REGISTRY`, never from the LLM.
 
-## Degraded mode (keyword router — Gemini unavailable)
+## Degraded mode (keyword router — OpenAI / AMP gateway unavailable)
 
 The keyword router does match cubicle/seat phrasings (`seat` → `hr.cubicle_summary`) and `laptop`/`phone`/`monitor`/`screen` → `it.list_available_assets`, so a single "give employee_user a seat, a laptop, and a phone" still fans out to the browse tools — but it can't reliably split `it.issue_asset` from a vague request (it needs a specific catalogue id), so the *issue* step has to be done one message at a time with explicit ids ("issue MBP-14-001 to employee_user", then "issue PHN-IP15-001 to employee_user"). The LLM router handles the one-turn fully-specified flow.

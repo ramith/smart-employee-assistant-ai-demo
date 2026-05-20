@@ -20,18 +20,18 @@ Five slices. Each ends green (strict test suite) and is committed separately on 
 
 Commit: `S5.1: apply_leave chat tool (MCP route + HR-Agent dispatcher entry + card skill)`.
 
-## S5.2 — `LLMClient` + `GeminiLLMClient` + config + `LLMRouter` + card expansion + routing wired
+## S5.2 — `LLMClient` + `OpenAILLMClient` + config + `LLMRouter` + card expansion + routing wired
 
 **Why next:** unblocks LLM routing; the composer still uses `_render_result` after this slice (clean partial state).
 
-- `orchestrator/config.py`: `from_env` reads `LLM_FALLBACK_MODE` at runtime; parses `GEMINI_MODEL`/`LLM_TIMEOUT_S`/`LLM_MAX_OUTPUT_TOKENS`; new `OrchestratorConfig` fields; warn-not-crash if `llm` + no key.
+- `orchestrator/config.py`: `from_env` reads `LLM_FALLBACK_MODE` at runtime; parses `OPENAI_MODEL`/`OPENAI_BASE_URL`/`OPENAI_API_HEADER`/`LLM_TIMEOUT_S`/`LLM_MAX_OUTPUT_TOKENS`; new `OrchestratorConfig` fields; warn-not-crash if `llm` + no key.
 - `orchestrator/agent_registry/cards.py`: `Skill` gains `args: list[str] = []` (or `tuple`); `llm_tool_list()` surfaces it. `tests/fixtures/agent_cards/*.json`: expand both cards so every `_TOOL_REGISTRY` tool is a listed skill, each with `args`.
-- `orchestrator/llm/__init__.py`, `client.py` (Protocol + dataclasses + `LLMError`), `gemini.py` (`GeminiLLMClient`, lazy `langchain_google_genai` import), `prompts.py` (router system prompt + `parse_router_output`; composer prompt + `render_outcomes` — composer prompt lands now even though the composer call is wired in S5.3), `router.py` (`resolve_tool_calls` + `_validate` + `_build_catalogue`).
-- `orchestrator/main.py`: build `GeminiLLMClient` iff `llm` mode + key; pass into `ChatRouterDeps(llm_client=...)`.
+- `orchestrator/llm/__init__.py`, `client.py` (Protocol + dataclasses + `LLMError`), `amp_client.py` (`OpenAILLMClient`, lazy `langchain_openai` import; reaches OpenAI via the WSO2 AMP AI Gateway with `amp-instrumentation` + `traceloop-sdk`), `prompts.py` (router system prompt + `tool_schemas` for function-calling; composer prompt + `render_outcomes` — composer prompt lands now even though the composer call is wired in S5.3), `router.py` (`resolve_tool_calls` + `_validate` + `_build_catalogue`).
+- `orchestrator/main.py`: build `OpenAILLMClient` iff `llm` mode + key; pass into `ChatRouterDeps(llm_client=...)`.
 - `orchestrator/chat/routes.py`: `ChatRouterDeps.llm_client: LLMClient | None`; `post_chat` calls `await resolve_tool_calls(body.message, deps)`; `_run_serial_fan_out` gains `user_message: str` (threaded through, not yet used for composition).
-- `tests/orchestrator/llm/`: `FakeLLMClient`; `parse_router_output` (valid array, empty array, markdown-fenced, malformed-all → `LLMError`, mixed valid/invalid → keeps valid); `resolve_tool_calls` (LLM hit → those ToolCalls; LLM `LLMError` → keyword fallback; LLM `[]` → keyword fallback; unknown agent/tool dropped; hallucinated args filtered); `_build_catalogue` from a fixture registry; config `from_env` (mode/key/new vars); `test_agent_card_matches_dispatcher_registry` (card skills ⇔ `_TOOL_REGISTRY` for hr + it).
+- `tests/orchestrator/llm/`: `FakeLLMClient`; router output handling (the model's structured `tool_calls` → `RoutedToolCall`s; zero `tool_calls` → `[]`; there is no JSON-array parsing to test — `parse_router_output` was removed); `resolve_tool_calls` (LLM hit → those ToolCalls; LLM `LLMError` → keyword fallback; LLM no tool_calls → keyword fallback; unknown agent/tool dropped; hallucinated args filtered); `_build_catalogue` from a fixture registry; config `from_env` (mode/key/new vars); `test_agent_card_matches_dispatcher_registry` (card skills ⇔ `_TOOL_REGISTRY` for hr + it).
 
-Commit: `S5.2: LLM router + GeminiLLMClient + config wiring + agent-card expansion`.
+Commit: `S5.2: LLM router + OpenAILLMClient + config wiring + agent-card expansion`.
 
 ## S5.3 — `LLMComposer` wired
 
@@ -46,7 +46,7 @@ Commit: `S5.3: LLM reply composer wired (with _render_result fallback)`.
 - `client/index.html`: thinking-placeholder bubble template (muted text + dots).
 - `client/app.js`: on `/api/chat` submit, append the placeholder; on the first SSE event for that request (`routing`/`consent_required`/`chat_message`) or on request error, remove it.
 - `client/styles.css`: `.chat-thinking` (uses `--text-muted`; reuse existing dot animation if present, else 3 CSS `·`).
-- `docker-compose.yml`: orchestrator service — `GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}`, `LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-8}` passthrough; **do not** add `GEMINI_API_KEY` to the `environment:` block (it stays in the gitignored `.env` only, loaded via `env_file`).
+- `docker-compose.yml`: orchestrator service — `OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}`, `LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-8}` passthrough; **do not** add `OPENAI_API_KEY` to the `environment:` block (it stays in the gitignored `.env` only, loaded via `env_file`).
 - Update `scripts/demo-up.sh` banner (mention LLM mode is on; keyword fallback active).
 - `./scripts/demo-up.sh --clean` → 6/6 healthy → spot-check a free-text chat in the browser → run Stage 11.
 - Tests: SPA changes are not unit-tested (vanilla JS, no harness) — covered by the Stage 11 manual gate; add a note. Final `tools/run-tests.sh` strict-green.
@@ -61,7 +61,7 @@ The original Stage-3 plan listed an S5.0 "config + client Protocol + adapter, no
 
 ## Cross-cutting checks (every slice)
 
-- `grep -rn "AIza" --` over tracked files → empty (the key lives only in gitignored `orchestrator/.env`).
+- `grep -rn "sk-" --` over tracked files → empty (the OpenAI API key — shape `sk-...` — lives only in gitignored `orchestrator/.env`).
 - `tools/run-tests.sh` strict-green.
 - No change to `/api/chat` contract or SSE event types.
 - `orchestrator/.env` never staged.
@@ -70,7 +70,7 @@ The original Stage-3 plan listed an S5.0 "config + client Protocol + adapter, no
 
 Before S5.1 starts, Stage 8 runs three parallel reviews on the Stage 1–7 docs:
 - **architect-reviewer** — is the "LLM = router/composer only, never authority" boundary actually airtight given the v4 topology? Is the fallback truth table complete? Is the card⇔registry consistency the right contract?
-- **code-reviewer** — does the `chat/routes.py` refactor stay minimal? Any spot where an LLM exception could escape? Is `langchain_google_genai` imported lazily so keyword-only deployments don't need it?
-- **security-auditor** — what exactly is in each prompt? Could anything sensitive (sub, token, secret) reach Gemini? Is the API key handling tight (no log lines, no compose literals, gitignored)? Is the prompt-injection backstop (scope-policy + CIBA) sufficient, and is it test-covered?
+- **code-reviewer** — does the `chat/routes.py` refactor stay minimal? Any spot where an LLM exception could escape? Is `langchain_openai` imported lazily so keyword-only deployments don't need it?
+- **security-auditor** — what exactly is in each prompt? Could anything sensitive (sub, token, secret) reach OpenAI (via the AMP gateway)? Is the API key handling tight (no log lines, no compose literals, gitignored)? Is the prompt-injection backstop (scope-policy + CIBA) sufficient, and is it test-covered?
 
 Findings → a Stage 6.5-style reconciliation pass only if a NO-GO; otherwise fold minor notes into the slices.

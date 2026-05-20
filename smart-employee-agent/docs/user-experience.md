@@ -16,7 +16,7 @@
 |---|---|---|
 | **You** (the employee) | The human user, in a browser. Has a role like `employee` or `hr_admin`. | Browser SPA at `client/` |
 | **WSO2 IS** | The identity provider. Issues tokens, runs the per-agent consent screen, can revoke sessions. **Is the only place consent decisions are made.** | On-prem WSO2 Identity Server 7.2.0 |
-| **Orchestrator** | The chat receptionist. Talks to the user, decides which specialist to ask. Has an LLM brain (Gemini, with a deterministic keyword fallback for demos). | `orchestrator/` |
+| **Orchestrator** | The chat receptionist. Talks to the user, decides which specialist to ask. Has an LLM brain (OpenAI via the AMP gateway, with a deterministic keyword fallback for demos). | `orchestrator/` |
 | **HR Agent** | A specialist that knows HR things (leave, time-off). Initiates its own CIBA flow when invoked. | `hr_agent/` |
 | **IT Asset Agent** | A specialist that knows what hardware each employee has. Same shape as HR Agent. | `it_agent/` |
 | **HR Server / IT Server** | The MCP backends each specialist talks to. | `hr_server/`, `it_server/` |

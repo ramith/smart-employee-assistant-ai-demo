@@ -11,7 +11,7 @@
 orchestrator/llm/
   __init__.py
   client.py      # LLMClient Protocol, ToolCatalogueEntry, RoutedToolCall, ToolOutcome, LLMError
-  gemini.py      # GeminiLLMClient(LLMClient) — wraps langchain_google_genai.ChatGoogleGenerativeAI
+  amp_client.py  # OpenAILLMClient(LLMClient) — wraps langchain_openai.ChatOpenAI (via the WSO2 AMP AI Gateway)
   prompts.py     # router/composer system prompts + the catalogue/outcome renderers
   router.py      # resolve_tool_calls(msg, deps) -> list[ToolCall]  (LLM call -> validate -> keyword fallback)
   composer.py    # compose_reply(msg, outcomes, fallback_text, deps) -> str  (LLM call -> _render_result fallback)
@@ -19,14 +19,14 @@ orchestrator/llm/
 `tests/orchestrator/llm/` mirrors this; `FakeLLMClient` lives in `tests/orchestrator/llm/conftest.py` (or a shared `tests/fakes.py`).
 
 Touch-points in existing code (kept minimal):
-- `orchestrator/config.py` — `from_env` reads `LLM_FALLBACK_MODE` at runtime; adds `gemini_model`, `llm_timeout_s`, `llm_max_output_tokens` fields + env parsing; warns (doesn't crash) if mode=`llm` but no key.
-- `orchestrator/main.py` — builds a `GeminiLLMClient` iff `cfg.llm_fallback_mode == "llm"` and `cfg.gemini_api_key`; passes it (or `None`) into `ChatRouterDeps`.
+- `orchestrator/config.py` — `from_env` reads `LLM_FALLBACK_MODE` at runtime; adds `openai_model`, `llm_timeout_s`, `llm_max_output_tokens` fields + env parsing; warns (doesn't crash) if mode=`llm` but no key.
+- `orchestrator/main.py` — builds an `OpenAILLMClient` iff `cfg.llm_fallback_mode == "llm"` and `cfg.openai_api_key`; passes it (or `None`) into `ChatRouterDeps`.
 - `orchestrator/chat/routes.py` — `ChatRouterDeps` gains `llm_client: LLMClient | None`; `post_chat` calls `resolve_tool_calls(...)` instead of `deps.keyword_router.route(...)` directly; `_run_serial_fan_out` gains a `user_message: str` param and, at the end, calls `compose_reply(...)` instead of `"\n\n".join(...)` directly. **No other changes** to the fan-out loop, the SSE events, the error mapping, the CIBA polling.
 - `orchestrator/agent_registry/cards.py` — `Skill` model gains optional `args: list[str] = []`; `llm_tool_list()` includes it. (Card loader change only; no behaviour change for existing consumers.)
 - `tests/fixtures/agent_cards/hr_agent_valid.json`, `it_agent_valid.json` — expanded so **every dispatcher `_TOOL_REGISTRY` tool is listed as a skill** with its `args`. (Stage 10 adds a consistency test: card-skills ⇔ `_TOOL_REGISTRY` keys.)
 - `hr_server/mcp/tools.py`, `hr_agent/mcp/client.py`, `hr_agent/ciba/orchestrator.py` — the `apply_leave` tool (S5.1).
 - `client/index.html|app.js|styles.css` — the "Thinking…" affordance (S5.4).
-- `docker-compose.yml` — `GEMINI_MODEL` / `LLM_TIMEOUT_S` passthrough (with defaults); **not** `GEMINI_API_KEY`.
+- `docker-compose.yml` — `OPENAI_MODEL` / `LLM_TIMEOUT_S` passthrough (with defaults); **not** `OPENAI_API_KEY`.
 
 ## 2. Data types (`orchestrator/llm/client.py`)
 
@@ -63,26 +63,39 @@ class LLMClient(Protocol):
 ```
 The chat router type (`orchestrator/chat/keyword_fallback.ToolCall`) stays the canonical "thing the fan-out consumes" — `RoutedToolCall` is converted to `ToolCall` by `router.py` after validation.
 
-## 3. `GeminiLLMClient` (`orchestrator/llm/gemini.py`)
+## 3. `OpenAILLMClient` (`orchestrator/llm/amp_client.py`)
+
+OpenAI is reached via the **WSO2 AMP AI Gateway** (`OPENAI_BASE_URL`), not the public OpenAI endpoint. The API key is sent in the header named by `OPENAI_API_HEADER` (default `api-key`). Observability is wired through `amp-instrumentation` + `traceloop-sdk` so every router/composer call is traced at the gateway.
 
 ```python
-class GeminiLLMClient:
-    def __init__(self, *, api_key: str, model: str, timeout_s: float, max_output_tokens: int):
-        self._router_llm   = ChatGoogleGenerativeAI(model=model, google_api_key=api_key,
-                                                    temperature=0.0, max_output_tokens=max_output_tokens)
-        self._composer_llm = ChatGoogleGenerativeAI(model=model, google_api_key=api_key,
-                                                    temperature=0.3, max_output_tokens=max_output_tokens)
+class OpenAILLMClient:
+    def __init__(self, *, api_key: str, model: str, base_url: str, api_header: str,
+                 timeout_s: float, max_output_tokens: int):
+        # The tool catalogue is bound as OpenAI function schemas via .bind_tools(); the model
+        # then returns structured tool_calls — there is no JSON parsing of the text content.
+        self._router_llm   = ChatOpenAI(model=model, api_key=api_key, base_url=base_url,
+                                        default_headers={api_header: api_key},
+                                        temperature=0.0, max_tokens=max_output_tokens,
+                                        max_retries=5)
+        self._composer_llm = ChatOpenAI(model=model, api_key=api_key, base_url=base_url,
+                                        default_headers={api_header: api_key},
+                                        temperature=0.3, max_tokens=max_output_tokens,
+                                        max_retries=5)
         self._timeout_s = timeout_s
 
     async def route(self, user_message, catalogue) -> list[RoutedToolCall]:
         sys = prompts.router_system(catalogue, today=date.today().isoformat())
+        tools = prompts.tool_schemas(catalogue)            # function schemas, one per catalogue entry
+        router = self._router_llm.bind_tools(tools)
         try:
             resp = await asyncio.wait_for(
-                self._router_llm.ainvoke([SystemMessage(sys), HumanMessage(user_message)]),
+                router.ainvoke([SystemMessage(sys), HumanMessage(user_message)]),
                 timeout=self._timeout_s)
         except (asyncio.TimeoutError, Exception) as exc:   # langchain raises a zoo of exceptions
             raise LLMError(f"router call failed: {exc!r}") from exc
-        return prompts.parse_router_output(resp.content)   # may raise LLMError on unparseable
+        # Read the structured tool_calls off the response — NO JSON parsing of resp.content.
+        return [RoutedToolCall(agent_id=_agent_for(tc["name"]), tool_id=tc["name"], args=tc["args"])
+                for tc in (resp.tool_calls or [])]
 
     async def compose(self, user_message, outcomes) -> str:
         sys = prompts.composer_system()
@@ -98,38 +111,30 @@ class GeminiLLMClient:
             raise LLMError("composer returned empty text")
         return text
 ```
-- `ChatGoogleGenerativeAI.ainvoke` is async. We wrap with `asyncio.wait_for` for a hard timeout regardless of the client's internal timeout.
-- `except Exception` is deliberate here (then re-raised as `LLMError`) — `langchain_google_genai` surfaces transport/quota/auth errors as various exception classes; we don't want any of them to escape into the chat handler. (Stage 8 security review: confirm we never log the exception with the API key in it — `repr(exc)` from langchain doesn't include the key, but we double-check.)
-- No retries in S5 (a single failed call → fallback; retrying doubles latency for a flaky network). Could add a single retry in a later sprint.
+- `ChatOpenAI.ainvoke` is async. We wrap with `asyncio.wait_for` for a hard timeout regardless of the client's internal timeout.
+- The router uses OpenAI **function-calling**: `bind_tools()` injects the tool catalogue as function schemas and the model returns structured `tool_calls` (read straight off `resp.tool_calls`). There is **no JSON parsing** of the response content; the old `parse_router_output` function was removed.
+- The OpenAI client **retries transient gateway 5xx** internally (`max_retries=5`) before any call is considered failed; only after the retries are exhausted does it fall back to the keyword router.
+- `except Exception` is deliberate here (then re-raised as `LLMError`) — `langchain_openai` surfaces transport/quota/auth errors as various exception classes; we don't want any of them to escape into the chat handler. (Stage 8 security review: confirm we never log the exception with the API key in it — `repr(exc)` from langchain doesn't include the key, but we double-check.)
 
 ## 4. Prompts (`orchestrator/llm/prompts.py`)
 
 ### 4a. Router system prompt
+The tool catalogue is **not** described in free text and the model is **not** asked to emit a JSON array. Instead the catalogue is injected as OpenAI **function schemas** via `ChatOpenAI.bind_tools()` (see `prompts.tool_schemas(catalogue)`), and the model returns structured `tool_calls`. The system prompt only carries the policy the schemas can't express:
 ```
-You are the routing layer of an internal HR/IT employee assistant. Decide which
-tool(s) to call to fully satisfy the user's message, and extract each tool's
-arguments from the message. Respond with ONLY a JSON array — no prose, no
-markdown code fences. Each element:
-  {"agent_id": "<exact agent_id>", "tool_id": "<exact tool_id>", "args": { ... }}
+You are the routing layer of an internal HR/IT employee assistant. Call the
+tool(s) needed to fully satisfy the user's message, extracting each tool's
+arguments from the message. Use only the tools provided to you (as functions) —
+never invent a tool name. Call zero tools if the message maps to none (chit-chat,
+off-topic, or a question no tool can answer).
 Rules:
-- Use only the agent_id / tool_id strings listed below — never invent one.
-- Include only the argument names a tool accepts (listed below). Omit args you
+- Include only the argument names a tool's function schema declares. Omit args you
   can't determine from the message.
 - Dates must be ISO format YYYY-MM-DD. Today is {today}.
 - leave_type must be exactly one of: Annual Leave, Sick Leave, Personal Leave.
-- If the message maps to more than one tool, return them in the order they should
-  run.
-- If the message doesn't map to any tool (chit-chat, off-topic, or just a question
-  you can't answer with a tool), return [].
-Available tools:
-{for each entry}
-- agent_id="{e.agent_id}" tool_id="{e.tool_id}": {e.description}
-    args: {", ".join(e.args) or "(none)"}
+- If the message maps to more than one tool, call them in the order they should run.
 ```
-### 4b. `parse_router_output(text) -> list[RoutedToolCall]`
-- Strip a leading/trailing markdown fence (` ```json ` / ` ``` `) if present.
-- `json.loads`. If not a `list` → `raise LLMError`. (An empty list is valid → returns `[]`.)
-- For each item: must be a `dict` with string `agent_id`, string `tool_id`; `args` defaults to `{}` if absent or not a dict. Items failing this are skipped (logged at debug). If *all* items fail and the list was non-empty → `raise LLMError` (treat as unparseable → fallback). If the list was `[]` → return `[]` (the LLM legitimately found nothing).
+### 4b. Reading the router output
+There is **no** `parse_router_output` (it was removed). The model's structured `tool_calls` are read directly off the response's `tool_calls` attribute — each entry already carries the `name` (tool_id) and a validated `args` dict produced by OpenAI function-calling. The router maps each `tool_call` to a `RoutedToolCall` (resolving its `agent_id` from the tool_id), then hands the list to `_validate`. Zero `tool_calls` → `[]` (the model legitimately found nothing → keyword fallback). No JSON string parsing, no markdown-fence stripping, no `LLMError` on unparseable text — those failure modes no longer exist.
 
 ### 4c. Composer system prompt
 ```
@@ -229,27 +234,30 @@ asyncio.create_task(_run_serial_fan_out(session, tool_calls, request_id, deps, u
 `from_env`:
 ```python
 llm_fallback_mode = env.get("LLM_FALLBACK_MODE", "keyword").strip() or "keyword"
-gemini_api_key    = env.get("GEMINI_API_KEY", "").strip() or None
-gemini_model      = env.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+openai_api_key    = env.get("OPENAI_API_KEY", "").strip() or None
+openai_model      = env.get("OPENAI_MODEL", "gpt-4.1").strip() or "gpt-4.1"
+openai_base_url   = env.get("OPENAI_BASE_URL", "").strip() or None
+openai_api_header = env.get("OPENAI_API_HEADER", "api-key").strip() or "api-key"
 llm_timeout_s     = float(env.get("LLM_TIMEOUT_S", "8") or "8")
 llm_max_output_tokens = int(env.get("LLM_MAX_OUTPUT_TOKENS", "512") or "512")
-if llm_fallback_mode == "llm" and not gemini_api_key:
-    logger.warning("LLM_FALLBACK_MODE=llm but GEMINI_API_KEY is empty — running keyword-only.")
+if llm_fallback_mode == "llm" and not openai_api_key:
+    logger.warning("LLM_FALLBACK_MODE=llm but OPENAI_API_KEY is empty — running keyword-only.")
     # main.py will then build llm_client=None; resolve_tool_calls/compose_reply both no-op to keyword.
 ```
-New `OrchestratorConfig` fields: `gemini_model: str = "gemini-2.5-flash"`, `llm_timeout_s: float = 8.0`, `llm_max_output_tokens: int = 512`. Existing: `llm_fallback_mode`, `gemini_api_key`.
+New `OrchestratorConfig` fields: `openai_model: str = "gpt-4.1"`, `openai_base_url`, `openai_api_header: str = "api-key"`, `llm_timeout_s: float = 8.0`, `llm_max_output_tokens: int = 512`. Existing: `llm_fallback_mode`, `openai_api_key`.
 
 `main.py`:
 ```python
 llm_client = None
-if cfg.llm_fallback_mode == "llm" and cfg.gemini_api_key:
-    from orchestrator.llm.gemini import GeminiLLMClient
-    llm_client = GeminiLLMClient(api_key=cfg.gemini_api_key, model=cfg.gemini_model,
+if cfg.llm_fallback_mode == "llm" and cfg.openai_api_key:
+    from orchestrator.llm.amp_client import OpenAILLMClient
+    llm_client = OpenAILLMClient(api_key=cfg.openai_api_key, model=cfg.openai_model,
+                                 base_url=cfg.openai_base_url, api_header=cfg.openai_api_header,
                                  timeout_s=cfg.llm_timeout_s, max_output_tokens=cfg.llm_max_output_tokens)
-    logger.info("llm_client_enabled model=%s timeout_s=%.1f", cfg.gemini_model, cfg.llm_timeout_s)
+    logger.info("llm_client_enabled model=%s timeout_s=%.1f", cfg.openai_model, cfg.llm_timeout_s)
 # ... ChatRouterDeps(..., llm_client=llm_client)
 ```
-The `ChatGoogleGenerativeAI` import is **lazy** (inside the `if`) so the orchestrator still imports/starts fine if `langchain-google-genai` isn't installed and mode is `keyword` — useful for the test venv if it lacks the package. (Stage 10: confirm `.venv` has it; if not, `pip install` it.)
+The `ChatOpenAI` import is **lazy** (inside the `if`) so the orchestrator still imports/starts fine if `langchain-openai` isn't installed and mode is `keyword` — useful for the test venv if it lacks the package. (Stage 10: confirm `.venv` has it; if not, `pip install` it.) OpenAI is reached via the WSO2 AMP AI Gateway (`OPENAI_BASE_URL`), with the key sent under `OPENAI_API_HEADER` (default `api-key`); observability uses `amp-instrumentation` + `traceloop-sdk`.
 
 ## 8. `apply_leave` chat tool (S5.1) — see [`sprint-5-stage-5-api-design.md`](sprint-5-stage-5-api-design.md) §2–§4 for the exact shapes. Summary:
 
@@ -268,18 +276,18 @@ Expand `hr_agent_valid.json` skills to cover every `_TOOL_REGISTRY` key: `hr.rea
 | Situation | Routing | Composition | User sees |
 |---|---|---|---|
 | mode=keyword (any reason incl. no key) | keyword router | `_render_result` join | Sprint-4 behaviour exactly |
-| mode=llm, Gemini OK, valid tools | LLM tools | LLM reply | natural NL chat |
-| mode=llm, Gemini OK, LLM returns `[]`/all-invalid | keyword router | LLM reply (composer still runs on whatever the keyword tools produced) | keyword tools, LLM-worded reply |
-| mode=llm, router call fails (timeout/quota/net/parse) | keyword router | LLM reply *if composer still works*, else `_render_result` join | works; reply maybe degraded |
+| mode=llm, OpenAI OK, valid tools | LLM tools | LLM reply | natural NL chat |
+| mode=llm, OpenAI OK, LLM returns no tool_calls/all-invalid | keyword router | LLM reply (composer still runs on whatever the keyword tools produced) | keyword tools, LLM-worded reply |
+| mode=llm, router call fails (timeout/AMP gateway 5xx after retries/net) | keyword router | LLM reply *if composer still works*, else `_render_result` join | works; reply maybe degraded |
 | mode=llm, router OK, composer call fails | LLM tools | `_render_result` join | right tools, Sprint-4-worded reply |
 | mode=llm, both calls fail | keyword router | `_render_result` join | exactly Sprint-4 behaviour |
 | LLM picks a tool the user's role can't scope (e.g. employee → `hr.cubicle_assign`) | tool runs to CIBA | — | IS denies CIBA → "you're not authorised for that" (no escalation) |
 
 ## 11. Latency budget (R1)
 
-- Router call: ≈0.4–1.5 s (`flash`, `temperature=0`, ≤512 out tokens, prompt ≈1–2 KB).
+- Router call: ≈0.4–1.5 s (`gpt-4.1`, `temperature=0`, ≤512 out tokens, prompt ≈1–2 KB; function-calling tool schemas).
 - Composer call: ≈0.4–1.5 s.
-- Total added vs keyword mode: ≈1–3 s per chat turn. Acceptable for the demo. Mitigations already in: `flash` (not `pro`), `max_output_tokens` cap, 8 s hard timeout each → fallback. Not pursued in S5: a single combined router+compose call (the two have different shapes and the composer needs the *tool results* which only exist after the fan-out — can't merge without restructuring; revisit if latency bites).
+- Total added vs keyword mode: ≈1–3 s per chat turn. Acceptable for the demo. Mitigations already in: `max_output_tokens` cap, 8 s hard timeout each → fallback, transient-5xx retries (`max_retries=5`) absorbed inside the timeout. Not pursued in S5: a single combined router+compose call (the two have different shapes and the composer needs the *tool results* which only exist after the fan-out — can't merge without restructuring; revisit if latency bites).
 
 ## 12. What this design deliberately does NOT do
 

@@ -588,7 +588,7 @@ Plus any orchestrator-side test that sets up a synthetic IT response with the ol
 
 `sprint-4.md` §10 risk R7 worries that the LLM "doesn't naturally produce four messages in sequence" and recommends "the existing keyword-fallback path... with explicit four-step intent labels." Stage 6 confirms: the LLM is the primary router AND the keyword fallback covers the same four intents — both produce identical user-visible outcomes. Rationale:
 
-- LLM produces fluent multi-turn conversation natively (Gemini handles "show me vacant cubicles" → "floor 2" → "C-027 to jane.doe" without scripting).
+- LLM produces fluent multi-turn conversation natively (OpenAI handles "show me vacant cubicles" → "floor 2" → "C-027 to jane.doe" without scripting).
 - Keyword fallback is the deterministic safety net for `LLM_FALLBACK_MODE=keyword` (default in the demo runbook). It must hit the same tools.
 - One implementation per intent on the agent side — both LLM and keyword router produce the same `ToolCall(agent_id, tool_id, args)` shape.
 

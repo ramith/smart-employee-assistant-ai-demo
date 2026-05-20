@@ -17,8 +17,8 @@ An employee (or visitor) who has not signed in wants to know which days are comp
 1. User types in the Info Bot input: **"What are the public holidays this year?"** and clicks Send.
 2. `client/app.js` sends `POST http://localhost:8080/public/chat` with body `{"message": "What are the public holidays this year?"}`. No `Authorization` header.
 3. Orchestrator validates the request (Pydantic, length ≤ 500 chars).
-4. `PublicInfoHandler.answer(message)` builds the system prompt with the embedded 2026 UAE holiday knowledge, calls `GeminiLLMClient.compose_public(system_prompt, message)`.
-5. Gemini responds with a plain-text list of the 14 public holidays with dates.
+4. `PublicInfoHandler.answer(message)` builds the system prompt with the embedded 2026 UAE holiday knowledge, calls `OpenAILLMClient.compose_public(system_prompt, message)`.
+5. OpenAI responds with a plain-text list of the 14 public holidays with dates.
 6. Widget renders the reply via `textContent` in a bot bubble.
 7. User reads the holiday list — no sign-in required.
 
@@ -41,8 +41,8 @@ An employee (or visitor) who has not signed in wants to know which days are comp
 - User asks: **"Any holidays in December?"**
 - LLM replies with the National Day entries (Dec 1–3).
 
-### A3 — Gemini unavailable (static fallback)
-- `GeminiLLMClient.compose_public` raises an exception (timeout, key absent).
+### A3 — OpenAI / AMP gateway unavailable (static fallback)
+- `OpenAILLMClient.compose_public` raises an exception (timeout, key absent). The client retries transient gateway 5xx (max_retries=5) before falling back.
 - `_static_fallback` detects "holiday" keyword → returns pre-written template listing all 14 holidays.
 - User sees the same information; widget shows no error indicator.
 

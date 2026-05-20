@@ -18,7 +18,7 @@ smart-employee-agent/
 │   │   ├── jwt_validator.py       # (existing stub → Sprint 1 impl) JWKS + claim validation
 │   │   ├── peer_trust.py          # (existing) depth-1 act chain validation
 │   │   ├── wso2_is_client.py      # App-Native Auth 3-step + Pattern C /token
-│   │   ├── actor_token_provider.py# Cached agent I4 token, 30s TTL buffer
+│   │   ├── actor_token_provider.py# Cached agent I4 token, cache capped 10s + 2s refresh buffer
 │   │   └── ciba_client.py         # initiate, poll, acquire_obo; full error hierarchy
 │   ├── a2a/
 │   │   ├── __init__.py
@@ -43,7 +43,7 @@ smart-employee-agent/
 │   ├── chat/
 │   │   ├── __init__.py
 │   │   ├── routes.py              # POST /api/chat, POST /api/ciba/cancel
-│   │   ├── llm.py                 # Gemini tool-routing agent (LangChain)
+│   │   ├── llm.py                 # OpenAI tool-routing agent (LangChain, bind_tools)
 │   │   └── keyword_fallback.py    # Deterministic "leave"→hr_agent, "laptop"→it_agent
 │   ├── events/
 │   │   ├── __init__.py
@@ -268,8 +268,8 @@ class WSO2ISClient:
 
 ## `common/auth/actor_token_provider.py`
 
-**Purpose:** Caches the specialist agent's I4 token with 30-second buffer; re-mints via `WSO2ISClient.app_native_authn()`.
-**Reuse:** pattern + 30s buffer ported from `_archive/agent.before-v3/agent_auth.py:AgentAuth.ensure_valid_token()` (lines 58-93).
+**Purpose:** Caches the specialist agent's I4 token; the in-process actor-token cache is capped at 10s (`ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS`) with a 2s refresh buffer (`REFRESH_BUFFER_SECONDS`) — the JWT's own `exp` is still IS-issued (~1h) but the cache re-mints every 10s via `WSO2ISClient.app_native_authn()`.
+**Reuse:** caching pattern ported from `_archive/agent.before-v3/agent_auth.py:AgentAuth.ensure_valid_token()` (lines 58-93).
 
 ```python
 from __future__ import annotations
@@ -277,7 +277,8 @@ import asyncio
 from .models import OAuthToken
 from .wso2_is_client import WSO2ISClient
 
-REFRESH_BUFFER_SECONDS: int = 30
+REFRESH_BUFFER_SECONDS: int = 2          # re-mint this many seconds before expiry
+ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS: int = 10  # hard cap on cached lifetime (bounds deactivation lag)
 
 class ActorTokenProvider:
     """Cached I4 token provider; one instance per specialist process."""
@@ -584,8 +585,8 @@ class OrchestratorConfig:
     session_cookie_name: str = "orch_sid"
     session_ttl_seconds: int = 28800
     agent_card_urls: list[str] = ()          # ORCHESTRATOR_AGENT_CARD_URLS comma-sep
-    gemini_api_key: str = ""
-    model_name: str = "gemini-2.5-flash"
+    openai_api_key: str = ""
+    model_name: str = "gpt-4.1"
     llm_fallback_mode: bool = False          # LLM_FALLBACK_MODE=keyword
     allowed_origins: list[str] = ()
     routing_pause_ms: int = 500
@@ -759,7 +760,7 @@ def build_chat_router(
 
 ## `orchestrator/chat/llm.py`
 
-**Purpose:** Gemini-backed LangChain agent selecting specialists and tools from a user message.
+**Purpose:** OpenAI-backed LangChain agent selecting specialists and tools from a user message.
 
 ```python
 from __future__ import annotations
@@ -772,16 +773,18 @@ class RoutingPlan:
     steps: list[tuple[str, str, dict]]
 
 class LLMRouter:
-    """LangChain Gemini agent → RoutingPlan. Temperature=0 for demo determinism."""
+    """LangChain OpenAI agent → RoutingPlan. Temperature=0 for demo determinism."""
 
-    def __init__(self, *, model_name: str, gemini_api_key: str, registry: AgentRegistry) -> None:
-        """Build ChatGoogleGenerativeAI; cache skill tool defs from registry."""
+    def __init__(self, *, model_name: str, openai_api_key: str, registry: AgentRegistry) -> None:
+        """Build ChatOpenAI; bind the registry's skill tool defs via bind_tools()."""
         ...
 
     async def route(self, user_message: str) -> RoutingPlan:
-        """Invoke LLM with agent-card skill projections; return RoutingPlan.
+        """Invoke LLM with the agent-card skill tools bound as OpenAI function schemas;
+        read the structured tool_calls (no JSON parsing) and return a RoutingPlan.
 
-        Returns empty plan on parse failure (caller falls back to KeywordRouter).
+        Returns empty plan if the model emits no tool_calls or the call fails
+        (caller falls back to KeywordRouter).
         """
         ...
 ```

@@ -74,6 +74,8 @@ from common.auth.errors import ActorTokenError
 from common.auth.models import OAuthToken
 from common.auth.wso2_is_client import WSO2ISClient, WSO2ISClientConfig
 from common.auth.actor_token_provider import (
+    ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS,
+    REFRESH_BUFFER_SECONDS,
     AgentCredentials,
     ActorTokenProvider,
     _pkce_pair,
@@ -146,7 +148,7 @@ def _register_full_flow(
 def _make_provider(
     httpx_mock: pytest_httpx.HTTPXMock,
     *,
-    buffer_seconds: int = 30,
+    buffer_seconds: int = REFRESH_BUFFER_SECONDS,
     scope: str = "openid internal_login",
 ) -> ActorTokenProvider:
     """Build an ActorTokenProvider backed by the httpx mock."""
@@ -224,6 +226,37 @@ class TestCacheHit:
         t2 = await provider.ensure_valid_token()
 
         assert t1.access_token == t2.access_token
+
+
+# ── 2b. Cache TTL is capped well below the IS-issued lifetime ─────────────────
+
+
+class TestCacheTtlCap:
+    """The cached token's expiry is capped at ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS.
+
+    IS issues ~1-hour tokens, but the cache must re-mint far sooner so an agent
+    deactivated in the IS Console loses access within seconds (the underlying
+    JWT keeps its real exp and stays valid downstream; only our cache is capped).
+    """
+
+    @pytest.mark.asyncio
+    async def test_cached_expiry_capped_below_is_lifetime(
+        self, httpx_mock: pytest_httpx.HTTPXMock
+    ) -> None:
+        _register_full_flow(httpx_mock, expires_in=3600)
+        provider = _make_provider(httpx_mock)
+
+        before = datetime.now(tz=timezone.utc)
+        token = await provider.ensure_valid_token()
+        after = datetime.now(tz=timezone.utc)
+
+        # expires_in (the raw IS claim) is untouched; only expires_at is capped.
+        assert token.expires_in == 3600
+        cap_lo = before + timedelta(seconds=ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS)
+        cap_hi = after + timedelta(seconds=ACTOR_TOKEN_CACHE_MAX_TTL_SECONDS)
+        assert cap_lo <= token.expires_at <= cap_hi
+        # Sanity: capped far below the 1-hour IS lifetime.
+        assert token.expires_at < before + timedelta(seconds=60)
 
 
 # ── 3. Token within buffer of expiry → re-mints ───────────────────────────────
@@ -440,6 +473,40 @@ class TestAuthorizeNoFlowId:
 
         with pytest.raises(ActorTokenError):
             await provider.ensure_valid_token()
+
+
+# ── 8b. /authorize short-circuit: SUCCESS_COMPLETED returns the code directly ─
+
+
+class TestAuthorizeShortCircuit:
+    """IS 7.3 may return flowStatus=SUCCESS_COMPLETED + authData.code on
+    /oauth2/authorize when a prior IS session for the OAuth client is still
+    valid. The mint must skip /authn entirely and go straight to /token."""
+
+    @pytest.mark.asyncio
+    async def test_short_circuit_skips_authn(
+        self, httpx_mock: pytest_httpx.HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(
+            method="POST",
+            url=AUTHORIZE_URL,
+            json={
+                "flowStatus": "SUCCESS_COMPLETED",
+                "authData": {"code": "sc-code-001", "session_state": "sess-xyz"},
+            },
+        )
+        # No /authn mock registered — if the code calls it, the test fails.
+        httpx_mock.add_response(
+            method="POST", url=TOKEN_URL, json=_token_body(access_token="sc-token")
+        )
+        provider = _make_provider(httpx_mock)
+
+        token = await provider.ensure_valid_token()
+
+        assert token.access_token == "sc-token"
+        # Exactly two round-trips: /authorize then /token (no /authn).
+        paths = [r.url.path for r in httpx_mock.get_requests()]
+        assert paths == ["/oauth2/authorize", "/oauth2/token"]
 
 
 # ── 9. /authn returns no code → ActorTokenError ───────────────────────────────

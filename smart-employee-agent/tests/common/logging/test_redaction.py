@@ -387,17 +387,17 @@ class TestInternalAuthRedaction:
         assert "<REDACTED>" in out
 
 
-class TestGoogleApiKeyRedaction:
-    """S5 (security audit F-4): a Gemini/Google API key (AIza + 35 url-safe chars)
-    must be stripped from any log line — e.g. if a langchain/google transport
-    error embeds ?key=AIza… in a URL."""
+class TestOpenAiApiKeyRedaction:
+    """Security (audit F-4): an OpenAI API key (``sk-`` + 20+ url-safe chars)
+    must be stripped from any log line — e.g. if a langchain/OpenAI transport
+    error embeds the key in a logged URL or message."""
 
-    _SAMPLE_KEY = "AIza" + "x" * 35  # 39-char sentinel of the Google-API-key shape; NOT a real key
+    _SAMPLE_KEY = "sk-" + "x" * 40  # sentinel of the OpenAI-API-key shape; NOT a real key
 
     def test_api_key_stripped_from_url_in_log_line(self) -> None:
         from common.logging.redaction import redact
 
-        line = f"router call failed: HTTPError GET https://generativelanguage.googleapis.com/v1/x?key={self._SAMPLE_KEY} -> 403"
+        line = f"router call failed: HTTPError POST https://api.openai.com/v1/chat/completions key={self._SAMPLE_KEY} -> 401"
         out = redact(line)
         assert self._SAMPLE_KEY not in out
         assert "<REDACTED_API_KEY>" in out
@@ -405,16 +405,15 @@ class TestGoogleApiKeyRedaction:
     def test_api_key_stripped_when_bare(self) -> None:
         from common.logging.redaction import redact
 
-        out = redact(f"google_api_key={self._SAMPLE_KEY}")
+        out = redact(f"openai_api_key={self._SAMPLE_KEY}")
         assert self._SAMPLE_KEY not in out
         assert "<REDACTED_API_KEY>" in out
 
-    def test_non_key_aiza_prefix_not_over_redacted(self) -> None:
-        """The bare word 'AIza' (too short to be a key) is left alone."""
+    def test_non_key_sk_prefix_not_over_redacted(self) -> None:
+        """A bare 'sk-' prefix (too short to be a key) is left alone."""
         from common.logging.redaction import redact
 
-        out = redact("the exit criterion greps for AIza prefixes in tracked files")
-        assert "AIza" in out
+        out = redact("the sk- prefix shows up in OpenAI key docs")
         assert "<REDACTED_API_KEY>" not in out
 
     def test_filter_strips_api_key_from_record(self) -> None:
