@@ -53,9 +53,8 @@ sudo apt-get install -y git
 ## 3. Clone the Repository
 
 ```bash
-git clone https://github.com/ramith/iam-ai-samples.git
-cd iam-ai-samples/smart-employee-agent
-git checkout public-chat-assistant
+git clone https://github.com/ramith/smart-employee-assistant-ai-demo.git
+cd smart-employee-assistant-ai-demo
 ```
 
 ---
@@ -67,11 +66,11 @@ in the sections below.
 
 ```bash
 # From your local machine — run once per service
-scp -i dda-poc-key.pem orchestrator/.env  ubuntu@<VM_PUBLIC_IP>:~/iam-ai-samples/smart-employee-agent/orchestrator/.env
-scp -i dda-poc-key.pem hr_server/.env     ubuntu@<VM_PUBLIC_IP>:~/iam-ai-samples/smart-employee-agent/hr_server/.env
-scp -i dda-poc-key.pem it_server/.env     ubuntu@<VM_PUBLIC_IP>:~/iam-ai-samples/smart-employee-agent/it_server/.env
-scp -i dda-poc-key.pem hr_agent/.env      ubuntu@<VM_PUBLIC_IP>:~/iam-ai-samples/smart-employee-agent/hr_agent/.env
-scp -i dda-poc-key.pem it_agent/.env      ubuntu@<VM_PUBLIC_IP>:~/iam-ai-samples/smart-employee-agent/it_agent/.env
+scp -i dda-poc-key.pem orchestrator/.env  ubuntu@<VM_PUBLIC_IP>:~/smart-employee-assistant-ai-demo/orchestrator/.env
+scp -i dda-poc-key.pem hr_server/.env     ubuntu@<VM_PUBLIC_IP>:~/smart-employee-assistant-ai-demo/hr_server/.env
+scp -i dda-poc-key.pem it_server/.env     ubuntu@<VM_PUBLIC_IP>:~/smart-employee-assistant-ai-demo/it_server/.env
+scp -i dda-poc-key.pem hr_agent/.env      ubuntu@<VM_PUBLIC_IP>:~/smart-employee-assistant-ai-demo/hr_agent/.env
+scp -i dda-poc-key.pem it_agent/.env      ubuntu@<VM_PUBLIC_IP>:~/smart-employee-assistant-ai-demo/it_agent/.env
 ```
 
 ### 4a. `orchestrator/.env` — items to change
@@ -177,7 +176,7 @@ above already handles this via `POST_LOGOUT_URI`, but verify with:
 ## 7. Start the Stack
 
 ```bash
-cd ~/iam-ai-samples/smart-employee-agent
+cd ~/smart-employee-assistant-ai-demo
 
 # First run — build images
 docker compose build

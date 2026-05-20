@@ -17,7 +17,7 @@ This is a **living document** — Sprint 0 establishes the baseline; Sprint 1 an
 - **TLS:** WSO2 IS ships with a self-signed cert at `13.60.190.47:9443`. All curl probes use `-k` via `$CURL_OPTS` (controlled by `IDP_INSECURE_TLS=1` in `_env.sh`). Browsers will require an exception on first visit.
 - **Agent Identity feature:** WSO2 IS 7.1+ ships agentic-AI primitives (Agents, MCP Server resource type, Pattern C). 7.2.0 is current; if you don't see "Agents" in the left nav, verify the version.
 - Local dev environment with `curl` and `jq`.
-- Repository checked out at `/Users/ramith/demo/dda-poc/iam-ai-samples/smart-employee-agent/`.
+- Repository checked out at `/Users/ramith/demo/dda-poc/smart-employee-assistant-ai-demo/`.
 
 ### What's different from the old Asgardeo guide
 

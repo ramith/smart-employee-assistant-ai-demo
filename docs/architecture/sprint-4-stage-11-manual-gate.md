@@ -46,7 +46,7 @@ Sprint 4 keys business data by `username` (with `email` as a secondary identifie
 ### 1.4 Run the pre-flight script
 
 ```bash
-cd /Users/ramith/demo/dda-poc/iam-ai-samples/smart-employee-agent
+cd /Users/ramith/demo/dda-poc/smart-employee-assistant-ai-demo
 ./scripts/check-is-config.py
 ```
 
@@ -85,7 +85,7 @@ Sign in to each via the SPA (`/`) once, sign out, confirm no account-locked bann
 Bring the fleet up:
 
 ```bash
-cd /Users/ramith/demo/dda-poc/iam-ai-samples/smart-employee-agent
+cd /Users/ramith/demo/dda-poc/smart-employee-assistant-ai-demo
 docker compose up -d --force-recreate
 ```
 
