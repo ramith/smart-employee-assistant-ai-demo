@@ -345,9 +345,6 @@ def build_auth_router(deps: AuthRouterDeps) -> APIRouter:
         # We use the MCP Client App for both — matches c1_pattern_c.py spike.
         authorize_url, _ = build_authorize_url(
             is_authorize_endpoint=f"{deps.config.is_base_url}/oauth2/authorize",
-            # 3B.3: kwarg renamed from spa_client_id (v3 dual-client legacy)
-            # to client_id; mcp_client_id is the only OAuth client used at
-            # runtime (project_orchestrator_app_vestigial.md).
             client_id=deps.config.mcp_client_id,
             redirect_uri=deps.config.mcp_redirect_uri,
             # Sprint 4: request the full business-scope set so IS can return

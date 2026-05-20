@@ -199,7 +199,7 @@ def _make_jwt_claims(sub: str = "user-uuid-001") -> JWTClaims:
     return JWTClaims(
         sub=sub,
         iss="https://is.example.com/oauth2/token",
-        aud="orchestrator-app-client-id",
+        aud="orchestrator-mcp-client-id",
         exp=int((_utc_now() + timedelta(seconds=3600)).timestamp()),
         iat=int(_utc_now().timestamp()),
         jti="jti-test-001",
@@ -325,10 +325,8 @@ def test_login_redirects_to_is_authorize() -> None:
 
     assert parsed.scheme + "://" + parsed.netloc == "https://is.example.com"
     assert parsed.path == "/oauth2/authorize"
-    # Pattern C login uses mcp_client_id (the confidential MCP-template app).
-    # The legacy spa_client_id kwarg was renamed to client_id and the
-    # vestigial orchestrator-app config field/env var was dropped in 3B.3
-    # (memory: project_orchestrator_app_vestigial.md).
+    # Pattern C login uses mcp_client_id (the confidential MCP-template app)
+    # for both /authorize and /token — IS rejects cross-client code redemption.
     assert params["client_id"] == "orchestrator-mcp-client-id"
     assert params["response_type"] == "code"
     assert params["redirect_uri"] == "http://localhost:8090/agent-callback"

@@ -104,11 +104,9 @@ def build_authorize_url(
     so that the challenge in the URL and the verifier submitted in the token exchange
     are provably related.
 
-    Sprint 3 3B.3: this kwarg was previously named ``spa_client_id`` in
-    a v3 RFC 8693 dual-client world (orchestrator-app + orchestrator-mcp-client).
-    The v4 CIBA pivot collapsed onto the confidential MCP client, so the
-    misleading name was renamed to ``client_id``. See memory
-    ``project_orchestrator_app_vestigial.md``.
+    The login flow uses a single confidential MCP client for both ``/authorize``
+    and ``/token``: IS rejects cross-client code redemption, so the same
+    ``client_id`` MUST be supplied on both calls.
 
     Args:
         is_authorize_endpoint: Full URL of the IS ``/oauth2/authorize`` endpoint.

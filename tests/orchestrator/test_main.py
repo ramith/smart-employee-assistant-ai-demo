@@ -231,7 +231,6 @@ def _base_env() -> dict[str, str]:
     return {
         "WSO2_IS_BASE_URL": "https://is.example.com:9443",
         "IDP_INSECURE_TLS": "false",
-        "ORCHESTRATOR_APP_CLIENT_ID": "spa-client-id",
         "ORCHESTRATOR_MCP_CLIENT_ID": "mcp-client-id",
         "ORCHESTRATOR_MCP_CLIENT_SECRET": "mcp-client-secret",
         "ORCHESTRATOR_AGENT_ID": "orch-agent-uuid",

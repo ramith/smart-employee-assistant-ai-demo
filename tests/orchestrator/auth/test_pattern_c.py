@@ -190,8 +190,8 @@ _MCP_CLIENT_ID = "orchestrator-mcp-client-id"
 _MCP_CLIENT_SECRET = "super-secret"
 _IS_BASE = "https://is.example.com"
 _AUTHORIZE_ENDPOINT = f"{_IS_BASE}/oauth2/authorize"
-_SPA_CLIENT_ID = "orchestrator-app-id"
-_REDIRECT_URI = "http://localhost:3001/callback"
+_LOGIN_CLIENT_ID = "orchestrator-mcp-client-id"
+_REDIRECT_URI = "http://localhost:8090/agent-callback"
 _SCOPE = "openid orchestrate"
 
 
@@ -230,7 +230,7 @@ def _make_jwt_claims(act_sub: str = _ORCHESTRATOR_AGENT_ID) -> JWTClaims:
     return JWTClaims(
         sub="user-uuid-1234",
         iss=f"{_IS_BASE}/oauth2/token",
-        aud=_SPA_CLIENT_ID,
+        aud=_LOGIN_CLIENT_ID,
         exp=9999999999,
         iat=1700000000,
         jti="jti-unique-abc123",
@@ -244,7 +244,7 @@ def _make_validator() -> ValidatorConfig:
     return ValidatorConfig(
         expected_iss=f"{_IS_BASE}/oauth2/token",
         jwks_url=f"{_IS_BASE}/oauth2/jwks",
-        expected_aud=_SPA_CLIENT_ID,
+        expected_aud=_LOGIN_CLIENT_ID,
     )
 
 
@@ -329,7 +329,7 @@ def test_build_authorize_url_contains_all_required_params() -> None:
 
     url, code_challenge = build_authorize_url(
         is_authorize_endpoint=_AUTHORIZE_ENDPOINT,
-        client_id=_SPA_CLIENT_ID,
+        client_id=_LOGIN_CLIENT_ID,
         redirect_uri=_REDIRECT_URI,
         scope=_SCOPE,
         requested_actor=_ORCHESTRATOR_AGENT_ID,
@@ -346,7 +346,7 @@ def test_build_authorize_url_contains_all_required_params() -> None:
     parsed = urllib.parse.urlparse(url)
     params = dict(urllib.parse.parse_qsl(parsed.query))
 
-    assert params["client_id"] == _SPA_CLIENT_ID
+    assert params["client_id"] == _LOGIN_CLIENT_ID
     assert params["response_type"] == "code"
     assert params["redirect_uri"] == _REDIRECT_URI
     assert params["scope"] == _SCOPE
@@ -367,8 +367,8 @@ def test_build_authorize_url_encodes_special_chars() -> None:
     verifier, _ = make_pkce()
     url, _ = build_authorize_url(
         is_authorize_endpoint=_AUTHORIZE_ENDPOINT,
-        client_id=_SPA_CLIENT_ID,
-        redirect_uri="http://localhost:3001/call back",  # space in path (edge case)
+        client_id=_LOGIN_CLIENT_ID,
+        redirect_uri="http://localhost:8090/call back",  # space in path (edge case)
         scope="openid orchestrate profile",
         requested_actor=_ORCHESTRATOR_AGENT_ID,
         state="state-value",

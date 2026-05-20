@@ -99,11 +99,8 @@ class OrchestratorConfig:
         is_jwks_url: JWKS endpoint URL.
         mcp_client_id: Confidential MCP-client client_id (used for both
             ``/authorize`` redirect AND ``/token`` code exchange — IS
-            rejects cross-client code redemption). Sprint 3 3B.3 dropped
-            the legacy ``spa_client_id`` field and the
-            ``ORCHESTRATOR_APP_CLIENT_ID`` env var; both were vestigial v3
-            dual-client cruft. See memory
-            ``project_orchestrator_app_vestigial.md``.
+            rejects cross-client code redemption, so the same client_id
+            must be on both calls).
         mcp_client_secret: Corresponding secret.
         mcp_redirect_uri: Registered redirect URI for the MCP client.
         orchestrator_agent: 4-value agent identity for actor_token in Pattern C.
