@@ -38,8 +38,10 @@ services:
       # REST validator's audience list = [expected_aud(=hr_agent client)]
       # + these extras. The MCP-tool validator stays strict (hr_agent only).
       - HR_SERVER_REST_VALID_AUDIENCES=${ORCHESTRATOR_MCP_CLIENT_ID:-8SDRXOI_4zOrNBgV4KUUfDPs3Tsa}
-      # Sprint 0: introspection feature-flagged OFF (Sprint 2 turns ON)
-      - HR_INTROSPECT_ENABLED=${HR_INTROSPECT_ENABLED:-false}
+      # Token introspection feature-flagged OFF (denylist-only backstop).
+      # NOTE: config.py reads HR_SERVER_INTROSPECT_ENABLED (default "true"),
+      # so the var MUST carry the HR_SERVER_ prefix for this OFF flag to apply.
+      - HR_SERVER_INTROSPECT_ENABLED=${HR_SERVER_INTROSPECT_ENABLED:-false}
       # Sprint 3 3A.2: shared secret for /internal/events fan-out (BLOCK-B simple).
       # Operator MUST set this in shell or .env (not committed) before `make demo-up`.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
@@ -186,6 +188,9 @@ services:
       # accept token-A (aud=orchestrator-mcp-client). MCP-tool validator
       # stays strict (it_agent client only).
       - IT_SERVER_REST_VALID_AUDIENCES=${ORCHESTRATOR_MCP_CLIENT_ID:-8SDRXOI_4zOrNBgV4KUUfDPs3Tsa}
+      # Token introspection feature-flagged OFF (denylist-only backstop).
+      # config.py reads IT_SERVER_INTROSPECT_ENABLED (default "true").
+      - IT_SERVER_INTROSPECT_ENABLED=${IT_SERVER_INTROSPECT_ENABLED:-false}
       # Sprint 3 3A.2.
       - INTERNAL_REVOKE_SHARED_SECRET=${INTERNAL_REVOKE_SHARED_SECRET:-}
       - UVICORN_WORKERS=1

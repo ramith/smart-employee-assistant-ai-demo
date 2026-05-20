@@ -110,7 +110,7 @@ class AuthBlock(BaseModel):
 
     Attributes:
         scheme: Always ``"oauth2"`` for this POC.
-        issuer: Asgardeo issuer URL (advisory).
+        issuer: OIDC issuer URL (WSO2 IS; advisory).
         audience: Specialist's canonical URI (advisory).
     """
 
