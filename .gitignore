@@ -75,3 +75,25 @@ bundle-analyzer-report.html
 **/.env
 
 .DS_Store
+
+# ---- merged from smart-employee-agent/.gitignore (project rules) ----
+/.env
+/.spike-bcl-autossh.log
+/.spike-bcl-autossh.pid
+/.vm-tunnel.pid
+/tools/_bcl_log/*.log
+# WSO2 IS log artifacts dumped into is_server_logs/ (runtime cruft — never commit)
+*.lck
+is_server_logs/*.log
+idp_capability_test/.substrate.env
+idp_capability_test/.venv/
+scripts/probes/.test-users.env
+
+# 3B.1.h: extracted IS signing material for the synth-bcl manual-verify
+# path. This is the same private key that signs every JWT IS issues; if
+# any of these files leak, treat as full IdP key compromise (see
+# scripts/synth-bcl.py docstring + scripts/scrub-bcl-key.sh).
+*.pem
+*.p12
+wso2_private*
+_local/
