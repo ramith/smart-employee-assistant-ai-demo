@@ -14,9 +14,9 @@
 
 | Name | What it is | Where it runs |
 |---|---|---|
-| **You** (the employee) | The human user, in a browser. Has a role like `employee` or `hr_admin`. | Browser SPA at `client/` |
+| **You** (the employee) | The human user, in a browser. Has a role like `employee` or `HR Admin`. | Browser SPA served by the orchestrator at `http://localhost:8090` |
 | **WSO2 IS** | The identity provider. Issues tokens, runs the per-agent consent screen, can revoke sessions. **Is the only place consent decisions are made.** | On-prem WSO2 Identity Server 7.2.0 |
-| **Orchestrator** | The chat receptionist. Talks to the user, decides which specialist to ask. Has an LLM brain (OpenAI via the AMP gateway, with a deterministic keyword fallback for demos). | `orchestrator/` |
+| **Orchestrator** | The chat receptionist. Talks to the user, decides which specialist to ask. Has an LLM brain (OpenAI, served through the WSO2 Agent Manager / embedded WSO2 AI Gateway, with a deterministic keyword fallback for demos). | `orchestrator/` (also serves the SPA) |
 | **HR Agent** | A specialist that knows HR things (leave, time-off). Initiates its own CIBA flow when invoked. | `hr_agent/` |
 | **IT Asset Agent** | A specialist that knows what hardware each employee has. Same shape as HR Agent. | `it_agent/` |
 | **HR Server / IT Server** | The MCP backends each specialist talks to. | `hr_server/`, `it_server/` |
@@ -28,7 +28,7 @@ When this doc says "the system," it means the whole thing collectively.
 ## 2. Scenario A — First sign-in (the orchestrator-consent moment)
 
 ### What you do
-1. Open the app at `http://localhost:3001`. Click **Sign in**.
+1. Open the app at `http://localhost:8090`. Click **Sign in**.
 2. You land on WSO2 IS's login page. Enter your username + password.
 
 ### What you see next

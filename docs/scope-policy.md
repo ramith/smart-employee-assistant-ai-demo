@@ -29,9 +29,10 @@ There is **one tier**: the same scope name is requested at CIBA initiation by th
 | `hr_approve_rest` | hr_server-api | `HR Admin` | hr_server `approve_leave` + `reject_leave` (write) + `get_all_leave_requests` (`hr.read_all_leaves` chat skill) |
 | `hr_assets_write_rest` | hr_server-api | `HR Admin` | hr_server `assign_cubicle` (write — cubicle/seat assignments). NOTE: this scope must exist on the `hr_server-api` API Resource in IS and be authorised on the `hr-agent` OAuth app; verify with `scripts/check-is-config.py`. |
 | `it_assets_read_rest` | it_server-api | `Employee`, `HR Admin` | it_server asset list / lookup |
+| `it_assets_self_rest` | it_server-api | `Employee`, `HR Admin` | it_server reads of the calling user's own assigned assets |
 | `it_assets_write_rest` | it_server-api | `HR Admin` | it_server `issue_asset` (write — assigns assets) |
 
-**No umbrella `agent_access` scope.** The legacy v3 agent gate is not part of the per-agent CIBA architecture. (Legacy `agent/main.py` still references it but is not in the demo call path; will be deleted when the legacy service is retired.)
+**No umbrella `agent_access` scope.** The legacy v3 agent gate is not part of the per-agent CIBA architecture. The pre-v4 standalone `agent`/`client` services that referenced it have been removed from the repo; the live fleet is the five services in `docker-compose.yml`.
 
 ## 3. Rules
 

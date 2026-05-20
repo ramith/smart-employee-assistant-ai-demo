@@ -1,7 +1,7 @@
 # WSO2 Identity Server — Sprint 1 Setup Guide
 
 **Audience:** lead engineer configuring WSO2 IS 7.2.0 to host the Sprint 1 demo of the smart-employee-agent POC.
-**Outcome:** a configured IdP + 5 populated `.env` files + a runnable `make demo-up`.
+**Outcome:** a configured IdP + 5 populated `.env` files + a runnable `./scripts/demo-up.sh`.
 **Time budget:** ~45 minutes the first time through.
 
 > **History.** This doc replaces a 794-line v3-era guide that mixed Asgardeo references with WSO2 IS instructions. The old doc is archived at `wso2-is-setup-v3-asgardeo-archived.md`. The architecture pivoted from RFC 8693 chained delegation to per-agent CIBA on 2026-05-07; see [`spikes/wso2-is-capability-memo.md`](spikes/wso2-is-capability-memo.md) for the empirical reasons. This doc is **WSO2-IS-7.2-only and CIBA-only**.
@@ -20,19 +20,18 @@
 
 ## 1. Sprint 1 entity inventory
 
-The 7 entities you'll create or already have:
+The entities you'll create or already have:
 
 | # | Entity | Type | Sprint 1 role | Reusable from spike? |
 |---|---|---|---|---|
-| 1 | `orchestrator-app` | **Single-Page Application** (public, PKCE) | SPA front-door for Pattern C login | NEW |
-| 2 | `orchestrator-mcp-client` | **Standard-Based Application** (confidential, OIDC) | Backend code-exchange authenticator | NEW (or rename `probe-client-a`) |
-| 3 | `orchestrator-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Named in `requested_actor=` at SPA login; mints actor_token | NEW (or rename `probe-agent-a`) |
-| 4 | `hr-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Initiates CIBA on `/oauth2/ciba` when invoked over A2A | NEW (or rename `probe-agent-b`) |
-| 5 | `it-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Same role as hr-agent | NEW |
-| 6 | `HR API` | **API Resource** with 4-tier scopes `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest` | Subscribed by hr-agent's auto-created Agent App | NEW |
-| 7 | `IT API` | **API Resource** with scopes `it_assets_read_rest`, `it_assets_write_rest` | Subscribed by it-agent's auto-created Agent App | NEW |
-| 8 | `HR Admin` | **Role** (Organization audience) | Grants `hr_read_rest`, `hr_approve_rest`, `it_assets_write_rest`; assigned to user `hr.admin` | NEW |
-| 9 | `hr.admin` user | Local user | Tests HR-Admin-only flows (approve leave, issue assets) | NEW |
+| 1 | `orchestrator-mcp-client` | **Standard-Based Application** (confidential, OIDC) | Pattern C login front-door: the **same** confidential client is used on both `/oauth2/authorize` and the `/oauth2/token` code-exchange (IS rejects cross-client code redemption) | NEW (or rename `probe-client-a`) |
+| 2 | `orchestrator-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Named in `requested_actor=` at login; mints actor_token | NEW (or rename `probe-agent-a`) |
+| 3 | `hr-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Initiates CIBA on `/oauth2/ciba` when invoked over A2A | NEW (or rename `probe-agent-b`) |
+| 4 | `it-agent` | **Agent** (Interactive, "Allow users to log in" ON) | Same role as hr-agent | NEW |
+| 5 | `HR API` | **API Resource** with 5 scopes `hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`, `hr_assets_write_rest` | Subscribed by hr-agent's auto-created Agent App | NEW |
+| 6 | `IT API` | **API Resource** with 3 scopes `it_assets_read_rest`, `it_assets_self_rest`, `it_assets_write_rest` | Subscribed by it-agent's auto-created Agent App | NEW |
+| 7 | `HR Admin` | **Role** (Organization audience) | Grants all of `employee`'s scopes **plus** `hr_read_rest`, `hr_approve_rest`, `hr_assets_write_rest`, `it_assets_write_rest`; assigned to user `hradmin@example.com` | NEW |
+| 8 | `hradmin@example.com` user | Local user | Tests HR-Admin-only flows (approve leave, issue assets, cubicle assign) | NEW |
 
 > **About MCP Servers (per F-17 in `architecture/sprint-1-fixes.md`):** WSO2 IS 7.2 has a dedicated "MCP Server" registration entity, but per the c10 probe its `aud` binding does **not** apply on the CIBA grant path — `aud` always collapses to the calling agent's OAuth Client ID. We therefore do **not** register hr-server / it-server as MCP Server entities for Sprint 1. They are pure HTTP resource servers; their token validators check `aud == <agent's OAuth Client ID>`. If you want to register MCP Servers anyway for RFC 9728 protected-resource-metadata discovery, that's fine but not required.
 
@@ -48,52 +47,27 @@ The Agent ID/Secret pair is for Agent Native Auth. The OAuth Client ID/Secret pa
 
 ---
 
-## 2. Step 1 — Create `orchestrator-app` (Single-Page Application)
+## 2. Step 1 — Create `orchestrator-mcp-client` (Standard-Based, confidential)
 
-Console → **Applications** → **+ New Application** → **Single-Page Application**
-
-| Field | Value |
-|---|---|
-| Application name | `orchestrator-app` |
-| Authorized redirect URLs | `http://localhost:8090/auth/callback` |
-| Allowed origins | `http://localhost:3001` |
-| Public client | ✓ (PKCE) |
-
-After creating, click in:
-
-**Protocol tab:**
-- ☑ **Code (Authorization Code)**
-- ☑ **PKCE Mandatory**
-- ☑ **Refresh Token**
-- Access token type: **JWT**, lifetime 3600s
-
-**Roles tab:** Role audience = **Organization**.
-
-**Capture for `orchestrator/.env`:**
-- Client ID → `ORCHESTRATOR_APP_CLIENT_ID`
-- (No client_secret — public PKCE client)
-
----
-
-## 3. Step 2 — Create `orchestrator-mcp-client` (Standard-Based, confidential)
+This single confidential client is the front-door for Pattern C login. The **same** `client_id` drives both legs of the flow — `/oauth2/authorize` (where the browser is sent) **and** the `/oauth2/token` code-exchange (where the orchestrator backend redeems the code with an attached `actor_token`). WSO2 IS rejects redeeming an authorization code under a different client than the one it was issued to, so there is **no** separate public SPA OAuth app: the orchestrator serves the browser UI itself on port 8090 and is the only login client.
 
 Console → **Applications** → **+ New Application** → **Standard-Based Application** → **OIDC**
 
 | Field | Value |
 |---|---|
 | Application name | `orchestrator-mcp-client` |
-| Authorized redirect URLs | `http://localhost:8090/auth/callback` |
+| Authorized redirect URLs | `http://localhost:8090/agent-callback` |
 | Public client | OFF |
 
 **Protocol tab:**
-- ☑ **Code (Authorization Code)** — used for the actor_token-attached code-exchange
+- ☑ **Code (Authorization Code)** — used for both the browser `/authorize` redirect and the actor_token-attached code-exchange
 - ☑ **Client Credentials**
 - Client Authentication method: **Client Secret Basic**
 
 **User Attributes tab — Subject (S5.12) — REQUIRED:**
 - ☑ **Email** under "User Attribute Selection".
 - Under **Subject**: ☑ **Assign alternate subject identifier**, **Subject attribute = Email**, **Subject type = Public**.
-- Why: token-A (this app's user token, behind the SPA's `/api/me/*` proxy) must carry the **same `sub`** as the per-agent CIBA/OBO tokens (token-C, issued by `hr-agent`/`it-agent`, which are also email-subject — see Step 3). If this app emits the default `userid` UUID while the agent apps emit the email, per-user state desyncs (e.g. a leave applied via chat doesn't show in "My Leaves"). The original S5.11 diagnosis assumed this app was already email-subject — verify it actually is.
+- Why: token-A (this app's user token, behind the orchestrator's `/api/me/*` proxy) must carry the **same `sub`** as the per-agent CIBA/OBO tokens (token-C, issued by `hr-agent`/`it-agent`, which are also email-subject — see Step 2). If this app emits the default `userid` UUID while the agent apps emit the email, per-user state desyncs (e.g. a leave applied via chat doesn't show in "My Leaves"). The original S5.11 diagnosis assumed this app was already email-subject — verify it actually is.
 
 **Capture for `orchestrator/.env`:**
 - Client ID → `ORCHESTRATOR_MCP_CLIENT_ID`
@@ -168,7 +142,7 @@ This is a one-time fix. The value for the staging environment was already cleare
 
 ---
 
-## 4. Step 3 — Create the 3 Agent identities
+## 3. Step 2 — Create the 3 Agent identities
 
 Console → **Agents** → **+ New Agent** for each of:
 
@@ -210,8 +184,8 @@ Then go to Console → **Applications** → find the auto-created app named afte
 
 **User Attributes tab — Subject (S5.12) — DO THIS for `hr-agent` and `it-agent` (NOT `orchestrator-agent`):**
 - Under **Subject**: ☑ **Assign alternate subject identifier**, **Subject attribute = Email**, **Subject type = Public**, leave "Include user domain" / "Include organization name" unchecked. Also ☑ **Email** under "User Attribute Selection".
-- Why: the per-agent CIBA/OBO token (token-C) issued by these apps must carry the **same `sub`** as the orchestrator session token (token-A from `orchestrator-mcp-client` — which **also** needs Subject = Email, see Step 2), or per-user state keyed by `sub` desyncs across code paths. **All three of `orchestrator-mcp-client` + `hr-agent` + `it-agent` must agree** — set the same Subject config on all three. See [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md). The agent's *own* actor token is unaffected — an agent identity has no `email` attribute, so IS falls back to the `userid` UUID for it (which is what `act.sub` / `trusted_act_subs` need).
-- **`orchestrator-agent`**: leave the default subject. It only ever mints its own actor token (the user code-exchange happens at `orchestrator-mcp-client`), so flipping it buys nothing.
+- Why: the per-agent CIBA/OBO token (token-C) issued by these apps must carry the **same `sub`** as the orchestrator session token (token-A from `orchestrator-mcp-client` — which **also** needs Subject = Email, see Step 1), or per-user state keyed by `sub` desyncs across code paths. **All three of `orchestrator-mcp-client` + `hr-agent` + `it-agent` must agree** — set the same Subject config on all three. See [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md). The agent's *own* actor token is unaffected — an agent identity has no `email` attribute, so IS falls back to the `userid` UUID for it (which is what `act.sub` / `trusted_act_subs` need).
+- **`orchestrator-agent`**: leave the default subject. It only ever mints its own actor token (the user code-exchange happens at `orchestrator-mcp-client`, Step 1), so flipping it buys nothing.
 
 Click **Update** to save.
 
@@ -227,7 +201,7 @@ ALSO: copy `HR_AGENT_OAUTH_CLIENT_ID` into `hr_server/.env` as `HR_SERVER_EXPECT
 
 ---
 
-## 5. Step 4 — Create the 2 API Resources (legacy 4-tier HR + 2-tier IT)
+## 4. Step 3 — Create the 2 API Resources (5-scope HR + 3-scope IT)
 
 Console → **API Resources** → **+ New API Resource** (regular, NOT MCP Server — see F-17 note above).
 
@@ -249,35 +223,38 @@ The scope structure mirrors the existing `hr_server/service/hr_service.py` 4-tie
 ### 5.2 IT API
 - **Identifier:** `urn:it:api`
 - **Display name:** IT API
-- **Scopes (2):**
+- **Scopes (3):**
 
 | Scope | Display name | Description | Tier / who has it |
 |---|---|---|---|
 | `it_assets_read_rest` | View IT asset info | Look up employee asset assignments | every employee |
+| `it_assets_self_rest` | View own IT assets | Own device/asset assignments | every employee |
 | `it_assets_write_rest` | Issue IT assets to employees | Assign laptops, mice, screens (HR onboarding flow) | **HR Admin only** |
 
-## 5.5 Step 4.5 — Roles + HR Admin user
+## 4.5 Step 3.5 — Roles + HR Admin user
 
 Console → **Roles** → **+ New Role**
 
-| Role | Audience | Granted scopes |
-|---|---|---|
-| `HR Admin` | **Organization** | **All HR API scopes** (`hr_basic_rest`, `hr_self_rest`, `hr_read_rest`, `hr_approve_rest`) **+ `it_assets_write_rest`**. Rationale: HR admins also take their own leave; they should be a superset of Employee for HR-domain operations. |
-| `Employee` | **Organization** | `hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`. Granted to `employee@example.com`. |
+**Audience = Organization** for both. Roles are **not** inherited at IS — attach every scope explicitly (the `HR Admin` row lists `employee`'s scopes too). This is the matrix `scripts/check-is-config.py` Section 8b enforces.
 
-The denial path tests (N30, N31, UC-08) still work cleanly: the Employee-role user does NOT have `hr_approve_rest` or `it_assets_write_rest` in its role, so any CIBA request for those scopes fails — that's the security demo.
+| Role (exact name) | Audience | Granted scopes |
+|---|---|---|
+| `employee` *(lowercase)* | **Organization** | `hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`, `it_assets_self_rest`. Granted to `employee@example.com`. |
+| `HR Admin` | **Organization** | All of `employee`'s scopes (`hr_basic_rest`, `hr_self_rest`, `it_assets_read_rest`, `it_assets_self_rest`) **plus** `hr_read_rest`, `hr_approve_rest`, `hr_assets_write_rest`, `it_assets_write_rest`. Rationale: HR admins also take their own leave; they are a superset of `employee` for HR-domain operations. |
+
+The denial path tests (N30, N31, UC-08) still work cleanly: the `employee`-role user does NOT have `hr_approve_rest` or `*_write_rest` in its role, so any CIBA request for those scopes fails — that's the security demo.
 
 Console → **Users** → **+ Add User** — **username = email** for every user (see the box below):
 
 | Username | Email Address | Password | Role |
 |---|---|---|---|
-| `employee@example.com` | `employee@example.com` | `NewsMax@1234` | **Employee** (explicit role assignment) |
-| `hradmin@example.com` | `hradmin@example.com` | `NewsMax@1234` | **HR Admin** (Employee tier inherited if not explicit) |
+| `employee@example.com` | `employee@example.com` | `NewsMax@1234` | **`employee`** (explicit role assignment) |
+| `hradmin@example.com` | `hradmin@example.com` | `NewsMax@1234` | **HR Admin** (no inheritance — the HR Admin role itself carries `employee`'s scopes explicitly, per §4.5) |
 | `probe.user@example.com` | `probe.user@example.com` | `NewsMax@1234` | (legacy from M0 spike — keep for capability tests; not used in the demo) |
 
 *(The exact local-parts don't matter — pick whatever you want for demo day. What matters is `username == email`. The names above are just the current demo set.)*
 
-> **The convention (S5.18.1): `username == email`.** Create every user with the IS **username set to their email address**, and the same value as the Email attribute. Rationale: the email is the OIDC `sub` (§4 — alternate subject = Email), so it's both the per-user data key (token-A == token-C) *and* the CIBA `login_hint`; making the *username* equal it too means `username == email == sub == login_hint` — one identifier, and the `login_hint` resolves directly as a plain username (no Multi-Attribute Login needed). For a user created *without* an email attribute, `sub` falls back to the `userid` UUID, which IS also resolves as a `login_hint` — still works, just not the recommended shape.
+> **The convention (S5.18.1): `username == email`.** Create every user with the IS **username set to their email address**, and the same value as the Email attribute. Rationale: the email is the OIDC `sub` (§3 — alternate subject = Email), so it's both the per-user data key (token-A == token-C) *and* the CIBA `login_hint`; making the *username* equal it too means `username == email == sub == login_hint` — one identifier, and the `login_hint` resolves directly as a plain username (no Multi-Attribute Login needed). For a user created *without* an email attribute, `sub` falls back to the `userid` UUID, which IS also resolves as a `login_hint` — still works, just not the recommended shape.
 >
 > *(History: S5.12→S5.17 used `username == email-local-part` and stripped `@domain` off the `login_hint`; S5.18 stopped stripping and tried IS Multi-Attribute Login; in practice the simplest, most robust shape for the demo turned out to be `username == email` — adopted S5.18.1. Multi-Attribute Login can be left on or off; with email-form usernames it's a no-op.)*
 >
@@ -287,7 +264,7 @@ Credentials captured in `scripts/probes/.test-users.env` (gitignored).
 
 ---
 
-## 6. Step 5 — Subscribe agent OAuth Apps to API Resources
+## 5. Step 4 — Subscribe agent OAuth Apps to API Resources
 
 For each agent's **auto-created OAuth Application**:
 
@@ -304,21 +281,20 @@ Console → Applications → that app → **API Authorization** tab → **+ Auth
 
 ---
 
-## 7. Step 6 — Test users
+## 6. Step 5 — Test users
 
-Console → **Users** → **+ Add User**
+The demo users were created in Step 3.5 (`employee@example.com` and `hradmin@example.com`, both `NewsMax@1234`, following the `username == email` convention). No further users are required:
 
-For the demo, one user is sufficient (you can add more for multi-role testing later):
+| Username = Email | Password | Role | Use |
+|---|---|---|---|
+| `employee@example.com` | `NewsMax@1234` | `employee` | Self-service flows (leave balance, own assets) — the canonical UC-03 query |
+| `hradmin@example.com` | `NewsMax@1234` | `HR Admin` | HR-Admin-only flows (approve leave, issue assets, cubicle assign) |
 
-| Username | Password | Role |
-|---|---|---|
-| `probe.user` (already exists from M0 spike — reuse) | `NewsMax@1234` | (none required for Sprint 1 happy path) |
-
-For HR-Admin-only flows (approve leave, issue assets), use `hr.admin` from Step 4.5. Roles wiring is set up in 4.5; Sprint 1 demo's canonical UC-03 query (leave balance + asset list) only needs `probe.user` (Employee tier).
+(There is no `probe.user`/`hr.admin` demo dependency anymore — identity is resolved from the token's profile claims on first sign-in; nothing is hardcoded in business logic.)
 
 ---
 
-## 8. Step 7 — Populate the 5 service `.env` files
+## 7. Step 6 — Populate the 5 service `.env` files
 
 The repo has `.env` templates at each service path. Fill in the captured values:
 
@@ -327,38 +303,39 @@ The repo has `.env` templates at each service path. Fill in the captured values:
 WSO2_IS_BASE_URL=https://13.60.190.47:9443
 IDP_INSECURE_TLS=1
 
-# orchestrator-app (Step 1)
-ORCHESTRATOR_APP_CLIENT_ID=<from Step 1>
+# orchestrator-mcp-client (Step 1) — the single confidential login client
+# (same client_id on /oauth2/authorize AND the /oauth2/token code-exchange)
+ORCHESTRATOR_MCP_CLIENT_ID=<from Step 1>
+ORCHESTRATOR_MCP_CLIENT_SECRET=<from Step 1>
+ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI=http://localhost:8090/agent-callback
 
-# orchestrator-mcp-client (Step 2)
-ORCHESTRATOR_MCP_CLIENT_ID=<from Step 2>
-ORCHESTRATOR_MCP_CLIENT_SECRET=<from Step 2>
-ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI=http://localhost:8090/auth/callback
-
-# orchestrator-agent (Step 3 — 4 values)
+# orchestrator-agent (Step 2 — 4 values)
 ORCHESTRATOR_AGENT_ID=<UUID>
 ORCHESTRATOR_AGENT_SECRET=<one-shot from creation>
 ORCHESTRATOR_AGENT_OAUTH_CLIENT_ID=<auto-created app's client_id>
 ORCHESTRATOR_AGENT_OAUTH_CLIENT_SECRET=<auto-created app's client_secret>
 
-# Specialist endpoints (in-cluster names from docker-compose)
-HR_AGENT_URL=http://hr-agent:8001
-IT_AGENT_URL=http://it-agent:8002
+# Specialist endpoints (in-cluster names from docker-compose — underscores!)
+HR_AGENT_URL=http://hr_agent:8001
+IT_AGENT_URL=http://it_agent:8002
 
 # F-15 collision-detection inputs (cross-checked at startup)
-HR_AGENT_OAUTH_CLIENT_ID=<from Step 3 — hr-agent's OAuth App>
-IT_AGENT_OAUTH_CLIENT_ID=<from Step 3 — it-agent's OAuth App>
+HR_AGENT_OAUTH_CLIENT_ID=<from Step 2 — hr-agent's OAuth App>
+IT_AGENT_OAUTH_CLIENT_ID=<from Step 2 — it-agent's OAuth App>
 
-# F-14 default
+# LLM routing — F-14 default is keyword; set to "llm" to route/compose via
+# OpenAI (served through the WSO2 Agent Manager / embedded WSO2 AI Gateway,
+# OpenAI-compatible). The keyword router stays wired as the automatic fallback.
 LLM_FALLBACK_MODE=keyword
 OPENAI_API_KEY=<optional; keyword fallback works without>
-OPENAI_BASE_URL=<AMP gateway base URL>
+OPENAI_BASE_URL=<WSO2 Agent Manager OpenAI-compatible base URL>
 OPENAI_API_HEADER=api-key
 OPENAI_MODEL=gpt-4.1
 
 ORCHESTRATOR_HOST=0.0.0.0
-ORCHESTRATOR_PORT=8090
-ALLOWED_ORIGINS=http://localhost:3001
+# Container listens on 8080 internally; docker-compose publishes it as host 8090.
+ORCHESTRATOR_PORT=8080
+ALLOWED_ORIGINS=http://localhost:8090,http://127.0.0.1:8090
 COOKIE_SECURE=false
 ```
 
@@ -367,27 +344,27 @@ COOKIE_SECURE=false
 WSO2_IS_BASE_URL=https://13.60.190.47:9443
 IDP_INSECURE_TLS=1
 
-# 4 values for hr-agent (Step 3)
+# 4 values for hr-agent (Step 2)
 HR_AGENT_ID=<UUID>
 HR_AGENT_SECRET=<one-shot>
 HR_AGENT_OAUTH_CLIENT_ID=<auto-created OAuth App>
 HR_AGENT_OAUTH_CLIENT_SECRET=<auto-created OAuth App>
 
-# Trusted upstream agent (orchestrator-agent's UUID from Step 3)
+# Trusted upstream agent (orchestrator-agent's UUID from Step 2)
 HR_TRUSTED_PEER_AGENTS=<orchestrator-agent's Agent ID UUID>
 
-# CIBA scopes (Step 4 — what HR API authorizes)
+# CIBA scopes (Step 3 — what HR API authorizes)
 HR_CIBA_SCOPE=openid hr_self_rest
 
-# MCP backend
-HR_MCP_SERVER_URL=http://hr-server:8000
+# MCP backend (docker-compose service name — underscore!)
+HR_MCP_SERVER_URL=http://hr_server:8000
 
 HR_AGENT_HOST=0.0.0.0
 HR_AGENT_PORT=8001
 ```
 
 ### `it_agent/.env`
-Identical shape with `IT_*` prefixes; `IT_CIBA_SCOPE=openid it_assets_read_rest`; `IT_MCP_SERVER_URL=http://it-server:8004`.
+Identical shape with `IT_*` prefixes; `IT_CIBA_SCOPE=openid it_assets_read_rest`; `IT_MCP_SERVER_URL=http://it_server:8004`.
 
 ### `hr_server/.env`
 ```bash
@@ -395,8 +372,8 @@ WSO2_IS_BASE_URL=https://13.60.190.47:9443
 IDP_INSECURE_TLS=1
 
 # Per F-17: aud == hr-agent's OAuth Client ID (NOT mcp://...)
-HR_SERVER_EXPECTED_AUD=<hr-agent's OAuth Client ID from Step 3>
-HR_SERVER_TRUSTED_PEER_AGENTS=<hr-agent's Agent ID UUID from Step 3>
+HR_SERVER_EXPECTED_AUD=<hr-agent's OAuth Client ID from Step 2>
+HR_SERVER_TRUSTED_PEER_AGENTS=<hr-agent's Agent ID UUID from Step 2>
 
 HR_SERVER_HOST=0.0.0.0
 HR_SERVER_PORT=8000
@@ -407,38 +384,38 @@ Identical shape with `IT_*` prefixes pointing at it-agent's values.
 
 ---
 
-## 9. Step 8 — Run the demo
+## 8. Step 7 — Run the demo
 
 ```bash
-make demo-up           # docker compose up -d --build + healthz smoke
-make demo-smoke        # repeat the healthz checks anytime
-open http://localhost:3001
+./scripts/demo-up.sh           # docker compose up -d --build + healthz smoke
+python3 scripts/demo-smoke.py  # repeat the healthz checks anytime
+open http://localhost:8090     # the SPA is served by the orchestrator on 8090
 ```
 
-Sign in as `probe.user` / `NewsMax@1234`. The orchestrator will redirect you to IS, you'll see a consent screen for `orchestrator-agent`, click Approve, get back to the chat panel.
+Sign in as `employee@example.com` / `NewsMax@1234`. The orchestrator will redirect you to IS, you'll see a consent screen for `orchestrator-agent`, click Approve, get back to the chat panel.
 
 Then type:
 > Show me my leave balance and what laptops are available.
 
 This triggers the canonical UC-03 storyboard (see [`use-cases/UC-03-two-specialist-serial-query.md`](use-cases/UC-03-two-specialist-serial-query.md)): orchestrator routes to HR-Agent first, you Approve a CIBA consent widget, get the leave balance; then it routes to IT-Agent, second Approve, get assets.
 
-`make demo-down` to tear down.
+`./scripts/demo-down.sh` to tear down.
 
 ---
 
 ## 10. Troubleshooting
 
 ### `"unauthorized_client"` from `/oauth2/ciba`
-CIBA grant not enabled on the agent's OAuth App's Protocol tab. Re-check Step 4.
+CIBA grant not enabled on the agent's OAuth App's Protocol tab. Re-check Step 2.
 
 ### Consent widget appears but never resolves
-Notification Channel not set to External. Re-check Step 4.
+Notification Channel not set to External. Re-check Step 2.
 
 ### `"external notification channel is not supported for federated users"` from `/oauth2/ciba`
-IS couldn't resolve the `login_hint` (= the inbound token's `sub`, an email) to a local user. The convention is **`username == email`** (§5.5) — check that the user's IS *username* is their full email address (not the bare local-part, not a UUID). If you're relying on Multi-Attribute Login instead of the email-form username, confirm it's enabled with `http://wso2.org/claims/emailaddress` in the allowed list (Console → Login & Registration → Alternative Login Identifiers). Also possible: an agent OAuth app lost its email-subject config (Step 4's User Attributes → Subject), so `sub` isn't actually the email. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md) §6.
+IS couldn't resolve the `login_hint` (= the inbound token's `sub`, an email) to a local user. The convention is **`username == email`** (§4.5) — check that the user's IS *username* is their full email address (not the bare local-part, not a UUID). If you're relying on Multi-Attribute Login instead of the email-form username, confirm it's enabled with `http://wso2.org/claims/emailaddress` in the allowed list (Console → Login & Registration → Alternative Login Identifiers). Also possible: an agent OAuth app lost its email-subject config (Step 2's User Attributes → Subject), so `sub` isn't actually the email. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md) §6.
 
 ### Leave applied via chat doesn't appear in "My Leaves" / a sidebar widget is empty after a chat action
-The per-user `sub` keying desynced — `hr-agent`/`it-agent` lost their **Subject = Email** config (Step 4, User Attributes → Subject), so token-C carries a UUID while token-A carries the email. Re-apply it. Also confirm the user has an `emailaddress` attribute. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md).
+The per-user `sub` keying desynced — `hr-agent`/`it-agent` lost their **Subject = Email** config (Step 2, User Attributes → Subject), so token-C carries a UUID while token-A carries the email. Re-apply it. Also confirm the user has an `emailaddress` attribute. Background: [`architecture/identity-subject-mismatch.md`](architecture/identity-subject-mismatch.md).
 
 ### `"Impersonator is not found in subject token"` from any /token call
 You're trying RFC 8693 token-exchange — that's NOT used in v4. The orchestrator should be calling `/oauth2/token` with `grant_type=authorization_code` (Pattern C) or polling with `grant_type=urn:openid:params:grant-type:ciba`. Check the request shape in logs.

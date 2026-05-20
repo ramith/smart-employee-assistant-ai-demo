@@ -26,20 +26,20 @@ The POC demonstrates **identity-first AI agent governance**: every agent action 
 > docs below. Where a sprint sign-off/stage doc disagrees with this section, this section
 > wins.** Updated 2026-05-19.
 
-**1. LLM provider: Gemini → OpenAI via the WSO2 AMP AI Gateway.**
+**1. LLM provider: Gemini → OpenAI via the WSO2 AI Gateway.**
 The orchestrator and the public info widget no longer use Google Gemini. They use
-OpenAI through the AMP AI Gateway (OpenAI-compatible). Concretely:
+OpenAI through the WSO2 AI Gateway (OpenAI-compatible). Concretely:
 - Module `orchestrator/llm/amp_client.py` (`OpenAILLMClient`) replaced the old
   `orchestrator/llm/gemini.py` (`GeminiLLMClient`). It wraps
   `langchain_openai.ChatOpenAI`.
-- Env: `OPENAI_API_KEY`, `OPENAI_BASE_URL` (the AMP gateway), `OPENAI_API_HEADER`
+- Env: `OPENAI_API_KEY`, `OPENAI_BASE_URL` (the WSO2 AI Gateway), `OPENAI_API_HEADER`
   (default `api-key`), `OPENAI_MODEL` (currently `gpt-4.1`; code default `gpt-4o`).
   The old `GEMINI_API_KEY` / `GEMINI_MODEL` are gone.
 - **Router uses OpenAI function-calling via `ChatOpenAI.bind_tools()`** — the tool
   catalogue is injected as function schemas and the model returns structured
   `tool_calls`. There is **no JSON-array parsing** of the router output; the old
   `parse_router_output` was removed.
-- Observability: `amp-instrumentation` + `traceloop-sdk` export spans to the AMP
+- Observability: `amp-instrumentation` + `traceloop-sdk` export spans to the WSO2 Agent Manager
   console (`AMP_OTEL_ENDPOINT`), plus `opentelemetry-instrumentation-langchain`.
 - Resilience: `max_retries=5` on the OpenAI client (gateway 5xx/upstream resets are
   transient); on any LLM failure the chat degrades to the keyword router. The composer
@@ -75,16 +75,18 @@ action right now" reply on the resulting `ERR-CIBA-009` failure.
 ### §1.1 Topology (locked)
 
 ```
-┌────────┐     login       ┌──────────────┐
-│  SPA   │ ─Pattern C────▶ │  WSO2 IS     │
-│ (3001) │ ◀──token-A──── │  (9443, VM)  │
-└────┬───┘                  └──────┬───────┘
-     │ Bearer token-A             │ /oauth2/ciba
-     ▼                            │ POST per specialist
-┌──────────────┐                  │
-│ Orchestrator │                  │
-│ (8090) LLM   │                  │
-└──┬─────────┬─┘                  │
+┌──────────────────┐  login       ┌──────────────┐
+│  SPA (served by  │ ─Pattern C──▶ │  WSO2 IS     │
+│  orchestrator on │ ◀──token-A─── │  (9443, VM)  │
+│  8090)           │               └──────┬───────┘
+└────────┬─────────┘                      │ /oauth2/ciba
+         │ Bearer token-A                 │ POST per specialist
+         ▼                                │
+┌──────────────┐                          │
+│ Orchestrator │                          │
+│ (8090) LLM   │                          │
+│  + SPA host  │                          │
+└──┬─────────┬─┘                          │
    │         │                    │
    │ A2A     │ A2A                │
    │ token-A │ token-A            │
@@ -116,8 +118,7 @@ action right now" reply on the resulting `ERR-CIBA-009` failure.
 
 | Entity | Type | Role |
 |---|---|---|
-| `orchestrator-app` | Standard-Based App (OIDC, public/PKCE) | The SPA front-door. Pattern C login. No client_secret. |
-| `orchestrator-mcp-client` | Standard-Based App (OIDC, confidential) | Backend client for the orchestrator's `/oauth2/token` code-exchange. **Reason this is a separate app from `orchestrator-app`:** SPA is public (PKCE, no secret); Pattern C `/token` exchange with `actor_token` requires a confidential authenticator. The two-app pattern is *purely* "public front-door + confidential backend code-exchange," NOT the v3 Token-Exchange rationale (TX is gone in v4). |
+| `orchestrator-mcp-client` | Standard-Based App (OIDC, confidential) | The single login client for Pattern C. The **same** `client_id` is used on both `/oauth2/authorize` (browser redirect) and the `/oauth2/token` code-exchange — IS rejects redeeming a code under a different client than the one it was issued to. Pattern C `/token` exchange with `actor_token` requires a confidential authenticator, so this app holds a client_secret. The orchestrator serves the browser UI itself on port 8090; there is no separate public SPA OAuth app. |
 | `orchestrator-agent` | Agent identity | Named in `requested_actor=` at login. Identity captured in token-A's `act.sub`. |
 | `hr_agent` | Agent identity | Initiates CIBA when invoked over A2A. Auth Apps' OAuth Client ID/Secret used for `/oauth2/ciba`. |
 | `it_agent` | Agent identity | Same shape as hr_agent. |
@@ -137,17 +138,17 @@ Per-agent CIBA replaces this with per-specialist user consent + depth-1 OBO. Thi
 ## §2. Token flow (the five hops)
 
 ### Hop 1 — User login (SPA → orchestrator)
-- Browser hits `https://localhost:3001` → SPA redirects to `https://13.60.190.47:9443/oauth2/authorize?client_id=<orchestrator-app>&requested_actor=<orchestrator-agent>&...&scope=openid orchestrate`
+- Browser hits the orchestrator-served UI → redirect to `https://13.60.190.47:9443/oauth2/authorize?client_id=<orchestrator-mcp-client>&requested_actor=<orchestrator-agent>&...&scope=openid orchestrate`
 - User authenticates as their normal corporate identity (probe.user in dev)
 - IS shows consent screen referencing `orchestrator-agent` as the actor
 - User approves; redirected back to SPA with `code`
-- SPA POSTs code to orchestrator backend (`/auth/exchange`); orchestrator backend calls `/oauth2/token` authenticated as `orchestrator-mcp-client`, with `actor_token=` (orchestrator-agent's I4 token)
-- Result: **token-A** (`sub=user, aut=APPLICATION_USER, act.sub=orchestrator-agent, aud=<orchestrator-app>, scope=openid orchestrate`)
+- Browser hands the code back to the orchestrator backend; it calls `/oauth2/token` authenticated as `orchestrator-mcp-client` (the same client named on `/authorize`), with `actor_token=` (orchestrator-agent's I4 token)
+- Result: **token-A** (`sub=user, aut=APPLICATION_USER, act.sub=orchestrator-agent, aud=<orchestrator-mcp-client>, scope=openid orchestrate`)
 - Orchestrator stores token-A in session keyed by browser cookie
 
 ### Hop 2 — Orchestrator → specialist (A2A)
 - User chats: "find me my leave balance"
-- Orchestrator's LLM (OpenAI via the AMP gateway) selects `hr_agent` from agent-card discovery
+- Orchestrator's LLM (OpenAI via the WSO2 AI Gateway) selects `hr_agent` from agent-card discovery
 - Orchestrator sends A2A `message/send` request to `http://hr_agent:8001/a2a` with `Authorization: Bearer <token-A>` and `X-Request-ID: <correlation-id>`
 - HR-agent validates token-A: signature via JWKS, `iss`, `act.sub` is in HR's trusted-peer allowlist (`{orchestrator-agent}`)
 - HR-agent extracts `sub` from token-A → user's UUID for use as `login_hint` in CIBA

@@ -116,7 +116,7 @@ Console → **Applications → + New Application → Standard-Based Application 
 | Public client | OFF |
 | Client authentication | Client Secret Basic |
 | Authorized redirect URLs | `http://localhost:8090/agent-callback` **and** `http://localhost:8090/auth/callback` (the codebase has both spellings in flight; register both) |
-| Allowed origins | `http://localhost:3001`, `http://localhost:8090` |
+| Allowed origins | `http://localhost:8090`, `http://127.0.0.1:8090` |
 
 - **Protocol tab:** ☑ Authorization Code, ☑ PKCE Mandatory, ☑ Refresh Token, ☑ Client Credentials. Access token = JWT, lifetime 3600s. **Token Exchange OFF** (RFC 8693 is not used in v4).
 - **Sign-out / logout:** **Back-channel logout URL** = `http://localhost:8123/backchannel-logout` · **Post-logout redirect URLs** = `http://localhost:8090/`
@@ -124,8 +124,6 @@ Console → **Applications → + New Application → Standard-Based Application 
 - *(Optional — only needed for `check-is-config.py` Section 9 to fully pass: also enable the **Password** grant on this app. Not needed for the demo itself.)*
 - **Capture:** Client ID → `ORCHESTRATOR_MCP_CLIENT_ID`; Client Secret → `ORCHESTRATOR_MCP_CLIENT_SECRET`.
 - **API Authorization tab:** leave for now — you'll subscribe this app to HR + IT APIs at the end of Step 4 (after the resources exist).
-
-> The legacy SPA app `orchestrator-app` from the old setup doc is **vestigial** — `ORCHESTRATOR_APP_CLIENT_ID` is not required by current code. Skip it.
 
 ---
 
@@ -264,16 +262,18 @@ IT_AGENT_OAUTH_CLIENT_ID=<it-agent's OAuth App client_id>
 # Peer-trust allowlist (specialist agent UUIDs allowed to call back into the orchestrator)
 TRUSTED_SPECIALIST_SUBS=<hr-agent UUID>,<it-agent UUID>
 
-# LLM routing (keyword fallback works without a key)
+# LLM routing — set to "llm" to route/compose via OpenAI (served through the
+# WSO2 Agent Manager / embedded WSO2 AI Gateway, OpenAI-compatible). The keyword
+# router stays wired as the automatic fallback (works without a key).
 LLM_FALLBACK_MODE=llm
 OPENAI_API_KEY=<optional>
-OPENAI_BASE_URL=<AMP gateway base URL>
+OPENAI_BASE_URL=<WSO2 Agent Manager OpenAI-compatible base URL>
 OPENAI_API_HEADER=api-key
 OPENAI_MODEL=gpt-4.1
 
 ORCHESTRATOR_HOST=0.0.0.0
 ORCHESTRATOR_PORT=8080
-ALLOWED_ORIGINS=http://localhost:3001,http://127.0.0.1:3001
+ALLOWED_ORIGINS=http://localhost:8090,http://127.0.0.1:8090
 COOKIE_SECURE=false
 ```
 
@@ -329,10 +329,10 @@ Keep `INTERNAL_REVOKE_SHARED_SECRET=<random hex, same across all services>` and 
 Expect **all sections PASS** — in particular **Section 4d (Agent App-Native authentication)**, which runs the exact `/oauth2/authorize → /oauth2/authn → /oauth2/token` 3-step flow `ActorTokenProvider` uses at runtime. If 4d is green, sign-in will work. (Section 9 may WARN if you didn't enable the Password grant on `orchestrator-mcp-client` — that's fine.)
 
 ```bash
-make demo-up           # docker compose up -d --build + healthz smoke
-make demo-smoke        # repeat the healthz checks anytime
-open http://localhost:3001
-make demo-down         # tear down
+./scripts/demo-up.sh           # docker compose up -d --build + healthz smoke
+python3 scripts/demo-smoke.py  # repeat the healthz checks anytime
+open http://localhost:8090     # the SPA is served by the orchestrator on 8090
+./scripts/demo-down.sh         # tear down
 ```
 
 Smoke walk: sign in as `employee@example.com` / `NewsMax@1234` → approve the `orchestrator-agent` consent → in the chat type *"Show me my leave balance and what laptops are available"* → approve two CIBA consent widgets (HR then IT) → you get the leave balance and the asset list.

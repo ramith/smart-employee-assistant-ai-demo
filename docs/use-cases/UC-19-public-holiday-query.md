@@ -41,7 +41,7 @@ An employee (or visitor) who has not signed in wants to know which days are comp
 - User asks: **"Any holidays in December?"**
 - LLM replies with the National Day entries (Dec 1–3).
 
-### A3 — OpenAI / AMP gateway unavailable (static fallback)
+### A3 — OpenAI / WSO2 AI Gateway unavailable (static fallback)
 - `OpenAILLMClient.compose_public` raises an exception (timeout, key absent). The client retries transient gateway 5xx (max_retries=5) before falling back.
 - `_static_fallback` detects "holiday" keyword → returns pre-written template listing all 14 holidays.
 - User sees the same information; widget shows no error indicator.

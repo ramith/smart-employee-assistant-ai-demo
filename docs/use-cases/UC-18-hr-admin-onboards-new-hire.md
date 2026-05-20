@@ -54,6 +54,6 @@ If the admin doesn't name specifics:
 - **Mixed-agent ordering** follows the order the router emitted them; the cubicle (hr_agent) and the devices (it_agent) interleave per that order.
 - **Prompt-injection safety unchanged (UC-17 §4):** an `Employee`-role user typing the same onboarding message gets the writes denied by IS at CIBA (no `hr_assets_write_rest` / `it_assets_write_rest`) — the per-tool scope is server-fixed in each agent's `_TOOL_REGISTRY`, never from the LLM.
 
-## Degraded mode (keyword router — OpenAI / AMP gateway unavailable)
+## Degraded mode (keyword router — OpenAI / WSO2 AI Gateway unavailable)
 
 The keyword router does match cubicle/seat phrasings (`seat` → `hr.cubicle_summary`) and `laptop`/`phone`/`monitor`/`screen` → `it.list_available_assets`, so a single "give employee_user a seat, a laptop, and a phone" still fans out to the browse tools — but it can't reliably split `it.issue_asset` from a vague request (it needs a specific catalogue id), so the *issue* step has to be done one message at a time with explicit ids ("issue MBP-14-001 to employee_user", then "issue PHN-IP15-001 to employee_user"). The LLM router handles the one-turn fully-specified flow.

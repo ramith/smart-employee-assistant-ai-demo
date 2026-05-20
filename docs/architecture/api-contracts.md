@@ -34,7 +34,7 @@ models give the wire shapes. Token-A never appears in any response body.
 Route                         Method  Auth           Returns   Notes
 ─────────────────────────────────────────────────────────────────────────
 GET  /auth/login?redirect=    —       none           302       Sets __Host-orch_pkce cookie (state, Max-Age=300, HttpOnly, Secure, SameSite=Lax); redirects to IS /oauth2/authorize
-GET  /auth/callback           —       none           302       Validates state; on error=access_denied → 302 /login?error=...; on success → 302 /auth/exchange-landing with code+state
+GET  /agent-callback          —       none           200 HTML   Registered redirect_uri on orchestrator-mcp-client. Returns a self-contained HTML relay page that POSTs {code, state} to /auth/exchange and navigates to / on success
 POST /auth/exchange           JSON    none           200+cookie Creates session; sets orch_sid (HttpOnly, Secure, SameSite=Lax)
 POST /auth/logout             —       orch_sid       200       Sprint 1: clears session+cookie. Sprint 3: also calls IS /oauth2/revoke + specialist cache-bust.
 POST /api/chat                JSON    orch_sid       200 ack   Full response via SSE. Rejects 429 if request in-flight (ERR-AGENT-006).
@@ -541,9 +541,9 @@ produce the error classes documented in F1–F7 of the capability memo.
 GET https://<IS_HOST>/oauth2/authorize
 
 Required parameters (application/x-www-form-urlencoded via query string):
-  client_id             = <orchestrator-app OAuth Client ID>
+  client_id             = <orchestrator-mcp-client OAuth Client ID>
   response_type         = code
-  redirect_uri          = https://localhost:3001/callback   (registered on the app)
+  redirect_uri          = http://localhost:8090/agent-callback   (registered on the orchestrator-mcp-client app)
   scope                 = openid orchestrate
   state                 = <cryptographically random, 128-bit, base64url>
   code_challenge        = <S256(code_verifier)>
@@ -554,11 +554,14 @@ Non-standard parameter (empirical):
   requested_actor: IS 7.2 specific. Causes the consent screen to name the agent.
                    Produces act.sub in the issued token-A.
 
+Note: the SPA is served by the orchestrator at :8090, so the callback lands back
+on the orchestrator (GET /agent-callback) — there is no separate SPA host.
+
 Happy-path redirect:
-  https://localhost:3001/callback?code=<code>&state=<state>
+  http://localhost:8090/agent-callback?code=<code>&state=<state>
 
 Denial redirect:
-  https://localhost:3001/callback?error=access_denied&state=<state>
+  http://localhost:8090/agent-callback?error=access_denied&state=<state>
 ```
 
 ### 5.2 `/oauth2/authn` — App-Native Auth (agents minting actor_token)
@@ -624,7 +627,7 @@ Content-Type: application/x-www-form-urlencoded
   client_id          = <orchestrator-mcp-client OAuth Client ID>
   code               = <code from callback>
   code_verifier      = <original PKCE verifier>
-  redirect_uri       = https://localhost:3001/callback
+  redirect_uri       = http://localhost:8090/agent-callback
   actor_token        = <orchestrator-agent's I4 token>      (empirical — C1)
   actor_token_type   = urn:ietf:params:oauth:token-type:access_token
 
@@ -645,7 +648,7 @@ Response (token-A):
     "aut": "APPLICATION_USER",
     "iss": "https://13.60.190.47:9443/oauth2/token",
     "act": { "sub": "<orchestrator-agent UUID>" },
-    "aud": "<orchestrator-app OAuth Client ID>",
+    "aud": "<orchestrator-mcp-client OAuth Client ID>",
     "scope": "openid orchestrate",
     "exp": <now + 3600>
   }
@@ -790,7 +793,7 @@ class OBOToken:
     raw: OAuthToken
     sub: str          # user UUID
     act_sub: str      # agent UUID (act.sub claim)
-    aud: str          # audience (orchestrator-app client ID or agent OAuth client ID)
+    aud: str          # audience (orchestrator-mcp-client client ID or agent OAuth client ID)
     iss: str          # token issuer URL
     jti: str          # JWT ID — used for the session map and revocation ledger
     scope: str        # space-separated scope string

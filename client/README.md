@@ -1,70 +1,63 @@
-# Smart Employee Agent — Sprint 1 SPA
+# Browser SPA
 
-Single-page chat app. No build step, no npm. Vanilla HTML + CSS + JS.
+Single-page chat UI. No build step, no npm — vanilla HTML + CSS + JS
+(`index.html`, `app.js`, `styles.css`).
 
-## Prerequisites
+## How it's served
 
-- Orchestrator running at `http://localhost:8090` (handles auth, SSE, CIBA).
-- The SPA is served by the orchestrator's static-file route, **or** by the
-  included `serve.py` dev server for local iteration.
+The SPA is **served by the orchestrator**, not by a standalone web server.
+The orchestrator Docker image copies `index.html`, `app.js`, and `styles.css`
+into `/app/client_static/` and mounts them at `/` (see
+`orchestrator/Dockerfile` and `orchestrator/main.py`). Serving the SPA
+same-origin with the BFF avoids cross-origin cookie problems for the
+`orch_sid` session cookie.
 
-## Running the SPA (two options)
-
-### Option A — via the orchestrator (recommended)
-
-The orchestrator at `localhost:8090` serves the `client/` directory as static
-files. No separate process needed. Just start the orchestrator:
-
-```bash
-cd /path/to/smart-employee-agent
-python -m orchestrator.main   # or however your orchestrator starts
-```
-
-Then open: `http://localhost:8090`
-
-### Option B — standalone dev server (for SPA-only iteration)
+So there is **no separate client container and no port 3001** — bring up the
+stack and open the orchestrator:
 
 ```bash
-cd client/
-python serve.py          # starts on port 3001 by default
+./scripts/demo-up.sh
+# then open:
+open http://localhost:8090
 ```
 
-Open: `http://localhost:3001`
+All `/auth/*`, `/api/*`, and `/events/*` calls go to the same origin
+(`localhost:8090`), which is the orchestrator.
 
-The `serve.py` server proxies `/auth/*`, `/api/*`, and `/events/*` to the
-orchestrator. If your orchestrator is on a different port, set:
+## Editing the SPA
+
+Because the files are baked into the orchestrator image at build time, rebuild
+the orchestrator after changing them:
 
 ```bash
-ORCHESTRATOR_URL=http://localhost:8090 python serve.py
+docker compose build orchestrator
+docker compose up -d orchestrator
 ```
 
-### Option C — Python built-in (no proxy, file:// only for quick visual checks)
+(For tight iteration you can instead run the orchestrator from source so it
+serves the live `client/` files; see the orchestrator README / `main.py`.)
 
-```bash
-cd client/
-python -m http.server 3001
-```
+> **`serve.py` is legacy.** The `client/serve.py` standalone dev server is a
+> pre-v4 leftover still wired to the old Asgardeo SPA flow and the removed
+> `agent:5001` backend. It is **not** part of the current architecture and is
+> not used by the demo. Use the orchestrator-served path above.
 
-This will not work for the auth or SSE flows (those require the orchestrator
-backend). Use only for layout/style inspection.
+## Auth flow (Pattern C)
 
-## Auth flow
-
-1. User clicks **Sign in** -> SPA redirects to `/auth/login?next=/`.
-2. Orchestrator performs PKCE + actor_token exchange with WSO2 IS.
-3. IS redirects to `/auth/callback` -> orchestrator POSTs `/auth/exchange` ->
-   sets `orch_sid` HttpOnly cookie + returns `{session_id, user_display_name}`.
-4. SPA stores `session_id` in `localStorage`, opens SSE stream at
-   `/events/{session_id}`.
+1. User clicks **Sign in** → SPA redirects to `/auth/login?next=/`.
+2. Orchestrator runs PKCE + actor-token exchange with WSO2 IS.
+3. IS redirects back to `/agent-callback` → orchestrator POSTs `/auth/exchange`,
+   sets the `orch_sid` HttpOnly cookie, and returns
+   `{session_id, user_display_name}`.
+4. SPA opens the SSE stream at `/events/{session_id}`.
 
 ## Dev tips
 
-- The first time you hit the IS (WSO2 IS at `https://13.60.190.47:9443`), your
-  browser will show a self-signed certificate warning. Click "Advanced" then
-  "Proceed" once; subsequent visits within the same browser session are clean.
-- The orchestrator runs over plain HTTP (`http://localhost:8090`). No cert
-  warning for orchestrator traffic.
-- To inspect SSE events in the browser: DevTools -> Network -> EventStream tab
-  on the `/events/{session_id}` request.
+- First hit to WSO2 IS (`https://13.60.190.47:9443`) shows a self-signed cert
+  warning. Click **Advanced → Proceed** once per browser session. The
+  orchestrator itself runs over plain HTTP (`http://localhost:8090`), so no
+  cert warning there.
+- Inspect SSE events: DevTools → Network → EventStream tab on the
+  `/events/{session_id}` request.
 - `localStorage` holds `orch_session_id` and `orch_user_name` for page-reload
-  resumption. Clear them (or call Sign out) to start fresh.
+  resumption. Clear them (or Sign out) to start fresh.

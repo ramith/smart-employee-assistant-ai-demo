@@ -13,14 +13,14 @@ Cross-references:
 | Symbol | Meaning |
 |---|---|
 | `User` | The human at the keyboard |
-| `SPA` | The browser SPA (`localhost:3001`) |
-| `Orch` | Orchestrator backend (`localhost:8090`) |
+| `SPA` | The browser SPA — static HTML/JS **served by the orchestrator** at `localhost:8090` (no separate SPA host or OAuth client) |
+| `Orch` | Orchestrator backend (`localhost:8090`; container listens on `8080`) |
 | `HR` | hr_agent A2A backend (`localhost:8001`) |
 | `IT` | it_agent A2A backend (`localhost:8002`) |
 | `IS` | WSO2 IS 7.2 (`https://<vm>:9443`) |
 | `HR-MCP` | hr_server MCP backend (`localhost:8000`) |
 | `IT-MCP` | it_server MCP backend (`localhost:8004`) |
-| **token-A** | `sub=user, act.sub=orchestrator-agent, aud=orchestrator-app` — Pattern C |
+| **token-A** | `sub=user, act.sub=orchestrator-agent, aud=orchestrator-mcp-client` — Pattern C |
 | **token-B** | `sub=user, act.sub=hr_agent, aud=hr_agent-OAuth-Client-ID` — HR's OBO |
 | **token-C** | `sub=user, act.sub=it_agent, aud=it_agent-OAuth-Client-ID` — IT's OBO |
 | **actor_token** | An agent's I4 token (`sub=<agent>, aut=AGENT`) minted via App-Native Auth |
@@ -30,27 +30,27 @@ Cross-references:
 
 ## Diagram 1 — UC-01: User login (Pattern C)
 
-This shows the SPA-initiated authorization-code+PKCE flow that produces **token-A**, the orchestrator's session token. The crucial detail is that the SPA front-door (`orchestrator-app`, public/PKCE) and the backend code-exchange client (`orchestrator-mcp-client`, confidential) are two distinct apps — Pattern C requires `actor_token` on `/oauth2/token`, which only a confidential authenticator can carry. The orchestrator mints the agent's actor_token via App-Native Auth (see Diagram 8) before the code-exchange. What this elides: PKCE verifier/challenge generation details, JWKS bootstrap, and cookie internals; we show the cookie set as a single arrow.
+This shows the authorization-code+PKCE flow that produces **token-A**, the orchestrator's session token. The crucial detail is that a **single confidential client** (`orchestrator-mcp-client`) drives both legs: it is named on `/oauth2/authorize` (browser redirect) **and** authenticates the `/oauth2/token` code-exchange — IS rejects redeeming a code under a different client than the one it was issued to. Pattern C requires `actor_token` on `/oauth2/token`, which only a confidential authenticator can carry. The browser UI is served by the orchestrator itself (port 8090); there is no separate public SPA OAuth app. The orchestrator mints the agent's actor_token via App-Native Auth (see Diagram 8) before the code-exchange. What this elides: PKCE verifier/challenge generation details, JWKS bootstrap, and cookie internals; we show the cookie set as a single arrow.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor User
-    participant SPA as "SPA (3001)"
+    participant SPA as "Browser SPA (served by Orch :8090)"
     participant Orch as "Orchestrator (8090)"
     participant IS as "WSO2 IS (9443)"
 
     User->>SPA: click "Sign in"
     SPA->>SPA: generate PKCE (verifier, challenge), state
     SPA->>User: 302 to IS /oauth2/authorize
-    Note right of SPA: GET /oauth2/authorize?<br/>client_id=orchestrator-app&<br/>response_type=code&<br/>redirect_uri=spa/callback&<br/>scope=openid orchestrate&<br/>state=...&code_challenge=...&<br/>requested_actor=orchestrator-agent
+    Note right of SPA: GET /oauth2/authorize?<br/>client_id=orchestrator-mcp-client&<br/>response_type=code&<br/>redirect_uri=.../agent-callback&<br/>scope=openid orchestrate&<br/>state=...&code_challenge=...&<br/>requested_actor=orchestrator-agent
 
     User->>IS: GET /oauth2/authorize
     IS-->>User: login page
     User->>IS: POST credentials
     IS-->>User: consent ("orchestrator-agent wants to act on your behalf")
     User->>IS: Approve
-    IS-->>SPA: 302 spa/callback?code=...&state=...
+    IS-->>SPA: 302 http://localhost:8090/agent-callback?code=...&state=...
 
     SPA->>Orch: POST /auth/exchange {code, state, code_verifier}
     Note over Orch: validate state matches a pending login
@@ -60,7 +60,7 @@ sequenceDiagram
     Orch->>IS: POST /oauth2/token (Basic auth: orchestrator-mcp-client)
     Note right of Orch: grant_type=authorization_code&<br/>code=...&code_verifier=...&<br/>redirect_uri=...&<br/>actor_token=<orchestrator-agent I4>
     IS-->>Orch: 200 {access_token=token-A, ...}
-    Note over Orch: validate token-A:<br/>sub=user-uuid, aut=APPLICATION_USER,<br/>act.sub=orchestrator-agent,<br/>aud=orchestrator-app, scope=openid orchestrate
+    Note over Orch: validate token-A:<br/>sub=user-uuid, aut=APPLICATION_USER,<br/>act.sub=orchestrator-agent,<br/>aud=orchestrator-mcp-client, scope=openid orchestrate
 
     Orch->>Orch: SessionStore.create(session_id, user_sub, token_a, exp)
     Orch-->>SPA: 200 Set-Cookie orch_sid=<opaque>; Secure; HttpOnly; SameSite=Lax
@@ -79,7 +79,7 @@ This is the canonical happy path: one specialist, one CIBA round-trip, one MCP c
 sequenceDiagram
     autonumber
     actor User
-    participant SPA as "SPA (3001)"
+    participant SPA as "Browser SPA (served by Orch :8090)"
     participant Orch as "Orchestrator (8090)"
     participant HR as "HR Agent (8001)"
     participant IS as "WSO2 IS (9443)"
@@ -91,7 +91,7 @@ sequenceDiagram
     Orch-->>SPA: SSE {type:"routing", agent:"hr_agent"}
 
     Orch->>HR: POST /a2a/message/send<br/>Authorization: Bearer token-A<br/>X-Request-ID: rid-1<br/>{tool:"get_leave_balance", args:{}}
-    Note over HR: validate token-A:<br/>JWKS sig, iss=IS, aud=orchestrator-app,<br/>act.sub IN HR_TRUSTED_PEER_AGENTS<br/>extract user_sub = token_a.sub
+    Note over HR: validate token-A:<br/>JWKS sig, iss=IS, aud=orchestrator-mcp-client,<br/>act.sub IN HR_TRUSTED_PEER_AGENTS<br/>extract user_sub = token_a.sub
 
     Note over HR,IS: actor_token already minted<br/>(see Diagram 8) — cached, re-mint if stale
 
@@ -143,7 +143,7 @@ The headline demo. Per Q2 the orchestrator runs HR fully (UC-02 in full) before 
 sequenceDiagram
     autonumber
     actor User
-    participant SPA as "SPA (3001)"
+    participant SPA as "Browser SPA (served by Orch :8090)"
     participant Orch as "Orchestrator (8090)"
     participant HR as "HR Agent (8001)"
     participant IT as "IT Agent (8002)"
@@ -213,7 +213,7 @@ This is the failure path — the diagram's whole point. We show Variant A (deny 
 sequenceDiagram
     autonumber
     actor User
-    participant SPA as "SPA (3001)"
+    participant SPA as "Browser SPA (served by Orch :8090)"
     participant Orch as "Orchestrator (8090)"
     participant HR as "HR Agent (8001)"
     participant IT as "IT Agent (8002)"
@@ -289,7 +289,7 @@ This is the failure path that has security weight: orchestrator MUST detect SSE 
 sequenceDiagram
     autonumber
     actor User
-    participant SPA as "SPA (3001)"
+    participant SPA as "Browser SPA (served by Orch :8090)"
     participant Orch as "Orchestrator (8090)"
     participant HR as "HR Agent (8001)"
     participant IS as "WSO2 IS (9443)"
@@ -343,7 +343,7 @@ This is the path that is structurally a happy flow but semantically distinct: th
 sequenceDiagram
     autonumber
     actor User
-    participant SPA as "SPA (3001)"
+    participant SPA as "Browser SPA (served by Orch :8090)"
     participant Orch as "Orchestrator (8090)"
     participant HR as "HR Agent (8001)"
     participant IS as "WSO2 IS (9443)"
@@ -406,7 +406,7 @@ Brief alternate-path diagram for the "user clicks Deny on the SPA widget itself,
 sequenceDiagram
     autonumber
     actor User
-    participant SPA as "SPA (3001)"
+    participant SPA as "Browser SPA (served by Orch :8090)"
     participant Orch as "Orchestrator (8090)"
     participant HR as "HR Agent (8001)"
     participant IS as "WSO2 IS (9443)"

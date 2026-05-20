@@ -7,26 +7,26 @@
 
 ## Actors
 - **Primary:** User (employee, in browser)
-- **Secondary:** SPA, Orchestrator backend, WSO2 IS, `orchestrator-app` (SPA OAuth client), `orchestrator-mcp-client` (confidential code-exchange client), `orchestrator-agent` (agent identity)
+- **Secondary:** Orchestrator-served browser UI, Orchestrator backend, WSO2 IS, `orchestrator-mcp-client` (the single confidential login client — same client on `/authorize` and `/token`), `orchestrator-agent` (agent identity)
 
 ## Preconditions
 - WSO2 IS 7.2 reachable at the configured base URL
-- `orchestrator-app`, `orchestrator-mcp-client`, `orchestrator-agent` registered per [`wso2-is-setup.md`](../wso2-is-setup.md)
+- `orchestrator-mcp-client`, `orchestrator-agent` registered per [`wso2-is-setup.md`](../wso2-is-setup.md)
 - User has an account in the IS (`probe.user` in dev)
-- SPA running at `localhost:3001`, orchestrator backend at `localhost:8090`
+- Orchestrator (backend + served browser UI) running at `localhost:8090`
 
 ## Trigger
 User opens the SPA and clicks **Sign in**.
 
 ## Main flow
-1. SPA redirects browser to `<IS>/oauth2/authorize?client_id=<orchestrator-app>&response_type=code&redirect_uri=<spa>/callback&scope=openid orchestrate&state=<random>&code_challenge=<S256>&code_challenge_method=S256&requested_actor=<orchestrator-agent-id>`.
+1. Orchestrator-served UI redirects browser to `<IS>/oauth2/authorize?client_id=<orchestrator-mcp-client>&response_type=code&redirect_uri=<orch>/agent-callback&scope=openid orchestrate&state=<random>&code_challenge=<S256>&code_challenge_method=S256&requested_actor=<orchestrator-agent-id>`.
 2. IS shows its login page; user enters username + password.
 3. IS shows a consent screen: *"Orchestrator Agent wants to act on your behalf. Approve / Deny."*
 4. User clicks **Approve**.
 5. IS redirects browser to `<spa>/callback?code=<code>&state=<state>`.
 6. SPA calls `POST <orch>/auth/exchange` with `{code, state, code_verifier}`.
 7. Orchestrator backend validates `state`, then calls `<IS>/oauth2/token` authenticated as `orchestrator-mcp-client` (Basic auth) with body: `grant_type=authorization_code, code, code_verifier, redirect_uri, actor_token=<orchestrator-agent's I4 token>`.
-8. IS returns **token-A**: `{sub=user-uuid, aut=APPLICATION_USER, act:{sub:orchestrator-agent-id}, aud=<orchestrator-app>, scope=openid orchestrate, exp=<now+3600>}`.
+8. IS returns **token-A**: `{sub=user-uuid, aut=APPLICATION_USER, act:{sub:orchestrator-agent-id}, aud=<orchestrator-mcp-client>, scope=openid orchestrate, exp=<now+3600>}`.
 9. Orchestrator backend creates a session record `{session_id (cookie), user_sub, token_a, expires_at}` and sets a `Secure HttpOnly SameSite=Lax` session cookie on the SPA.
 10. SPA receives 200 OK, redirects to chat view, displays user's name in header.
 

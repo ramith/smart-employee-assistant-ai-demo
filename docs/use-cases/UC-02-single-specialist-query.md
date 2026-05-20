@@ -22,7 +22,7 @@ User types a single-purpose message, e.g., *"What's my leave balance?"* (HR only
 2. Orchestrator's LLM (OpenAI, with deterministic keyword fallback for demos) inspects the message and decides which specialist to call. The router uses OpenAI function-calling via `ChatOpenAI.bind_tools()`; the model returns a structured `tool_call` (e.g. `agent_id="hr_agent"`, `tool="get_leave_balance"`, `args={}`) — no JSON parsing.
 3. Orchestrator emits an SSE event to the SPA: `{type: "routing", agent: "hr_agent"}`. Chat shows: *"Routing to HR Agent…"*
 4. Orchestrator `POST <hr_agent>:8001/a2a/message/send` with `Authorization: Bearer <token-A>`, `X-Request-ID: <same>`, body=`{tool, args}`.
-5. HR Agent validates token-A: signature via JWKS, `iss` matches IS, `aud` matches `orchestrator-app`, `act.sub` is in `HR_TRUSTED_PEER_AGENTS` allowlist. Extracts `user_sub = token_a.sub`.
+5. HR Agent validates token-A: signature via JWKS, `iss` matches IS, `aud` matches `orchestrator-mcp-client`, `act.sub` is in `HR_TRUSTED_PEER_AGENTS` allowlist. Extracts `user_sub = token_a.sub`.
 6. HR Agent ensures it has its own actor_token via App-Native Auth (cached, re-mint if needed).
 7. HR Agent `POST <IS>/oauth2/ciba` authenticated as its Agent App (Basic), body: `scope=openid hr_self_rest, login_hint=<user_sub>, binding_message=<F11.template>, actor_token=<own actor token>, notification_channel=external`.
 8. IS responds with `{auth_req_id, auth_url, interval=2, expires_in=300}`.

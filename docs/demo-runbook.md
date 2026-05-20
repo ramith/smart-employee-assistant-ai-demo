@@ -9,15 +9,15 @@ Target duration: 60–90 s on stage.
 
 - [ ] WSO2 IS reachable: `curl -k https://13.60.190.47:9443/healthcheck` returns 200.
 - [ ] All five `.env` files have real credential values (no blank `=` lines for IDs/secrets):
-  - `orchestrator/.env` — `ORCHESTRATOR_APP_CLIENT_ID`, `ORCHESTRATOR_AGENT_ID`, etc.
+  - `orchestrator/.env` — `ORCHESTRATOR_MCP_CLIENT_ID`, `ORCHESTRATOR_MCP_CLIENT_SECRET`, `ORCHESTRATOR_AGENT_ID`, etc.
   - `hr_agent/.env` — `HR_AGENT_ID`, `HR_AGENT_OAUTH_CLIENT_ID`, etc.
   - `it_agent/.env` — `IT_AGENT_ID`, `IT_AGENT_OAUTH_CLIENT_ID`, etc.
-  - `hr_server/.env` — `CLIENT_ID`, `SPA_CLIENT_ID`, etc.
-  - `it_server/.env` — trusted-peer values populated.
-- [ ] Ports free on the demo machine: 8000, 8001, 8002, 8004, 8090, 3001.
+  - `hr_server/.env` — `HR_SERVER_EXPECTED_AUD`, `HR_SERVER_TRUSTED_PEER_AGENTS`, etc.
+  - `it_server/.env` — `IT_SERVER_EXPECTED_AUD`, trusted-peer values populated.
+- [ ] Ports free on the demo machine: 8000, 8001, 8002, 8004, 8090 (8123 only for the BCL/logout spike).
 - [ ] Docker daemon running; `docker compose version` shows Compose v2.
 - [ ] `python3 --version` is 3.11 or later; `httpx` installed (`pip install httpx`).
-- [ ] Browser signed out of any previous session at `http://localhost:3001`.
+- [ ] Browser signed out of any previous session at `http://localhost:8090`.
 
 ---
 
@@ -27,8 +27,9 @@ Target duration: 60–90 s on stage.
 ./scripts/demo-up.sh
 ```
 
-This command builds all images, starts the stack, waits 5 s, and runs the
-healthz smoke check. If any service shows `FAIL`, check:
+This command builds all images, starts the five-service stack (orchestrator on
+8090 plus hr_agent, it_agent, hr_server, it_server), waits a few seconds, and
+runs the healthz smoke check. If any service shows `FAIL`, check:
 
 ```bash
 docker compose logs --tail=50 <service-name>
@@ -38,8 +39,8 @@ docker compose logs --tail=50 <service-name>
 
 ## Demo flow (UC-03)
 
-1. Open `http://localhost:3001` in the browser.
-2. Click **Sign in**. Log in as `probe.user` / `NewsMax@1234`.
+1. Open `http://localhost:8090` in the browser (the SPA is served by the orchestrator).
+2. Click **Sign in**. Log in as `employee@example.com` / `NewsMax@1234`.
 3. In the chat input, type exactly:
 
    > Show me my leave balance and what laptops are available.
@@ -57,7 +58,7 @@ docker compose logs --tail=50 <service-name>
 6. A **final combined reply** appears: both leave balance and laptop list in one sentence.
 
 7. Optional (for audience): switch to WSO2 IS audit log to show the two CIBA
-   events attributed to `probe.user`.
+   events attributed to `employee@example.com`.
 
 8. Click **Sign out** to close the session.
 

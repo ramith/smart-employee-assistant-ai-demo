@@ -47,7 +47,7 @@ A user types a question into the Info Bot widget that would require authenticati
 - The `<user_message>` delimiter in the system prompt reduces the injection surface. The topic guardrail causes OpenAI to reject the instruction and respond with the standard decline. No employee data exists in the handler's context to leak regardless.
 - Reply (typical): *"I can only help with public holidays, leave policy, and hardware allocation. I'm not able to access employee records."*
 
-### A5 — OpenAI / AMP gateway unavailable (static fallback)
+### A5 — OpenAI / WSO2 AI Gateway unavailable (static fallback)
 - `_static_fallback` detects no match for holiday/leave/hardware keywords → returns: *"I can only answer questions about public holidays, leave policy, and hardware allocation. For personal queries, please sign in."* (The client retries transient gateway 5xx with max_retries=5 before falling back.)
 
 ## Notes

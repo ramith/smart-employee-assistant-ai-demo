@@ -1,8 +1,11 @@
-# VM Deployment Guide — Smart Employee Agent Demo
+# VM Deployment Guide
 
 Deploys the five-container demo stack (orchestrator, hr_agent, it_agent, hr_server,
-it_server) onto a fresh AWS EC2 instance. WSO2 IS continues to run on its own VM
-at `13.60.190.47:9443`.
+it_server) onto a fresh AWS EC2 instance. The identity provider is on-prem **WSO2
+Identity Server**, which continues to run on its own VM at `13.60.190.47:9443`.
+The LLM is **OpenAI** (`gpt-4.1`) reached through the **WSO2 Agent Manager
+(embedded WSO2 AI Gateway)** — configured via the `OPENAI_*` vars in
+`orchestrator/.env`.
 
 ---
 
@@ -77,21 +80,29 @@ scp -i dda-poc-key.pem it_agent/.env      ubuntu@<VM_PUBLIC_IP>:~/smart-employee
 
 | Variable | Current (laptop) | New value |
 |---|---|---|
-| `ALLOWED_ORIGINS` | `http://localhost:3001,...` | `http://<VM_PUBLIC_IP>:8090,http://<VM_PUBLIC_DNS>:8090` |
+| `ALLOWED_ORIGINS` | `http://localhost:8090,...` | `http://<VM_PUBLIC_IP>:8090,http://<VM_PUBLIC_DNS>:8090` |
 | `ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI` | `http://localhost:8090/agent-callback` | `http://<VM_PUBLIC_IP>:8090/agent-callback` |
 | `POST_LOGOUT_REDIRECT_URI` | `http://localhost:8090/` | `http://<VM_PUBLIC_IP>:8090/` |
-| `AMP_OTEL_ENDPOINT` | `http://host.docker.internal:22893/otel` | `http://<AMP_SERVER_IP>:22893/otel` |
 
 ```bash
 # Edit on the VM
 VM_PUBLIC_IP=<replace>
-AMP_SERVER_IP=<replace>       # IP/host running the AMP OTel collector
 
 sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://${VM_PUBLIC_IP}:8090|" orchestrator/.env
 sed -i "s|ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI=.*|ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI=http://${VM_PUBLIC_IP}:8090/agent-callback|" orchestrator/.env
 sed -i "s|POST_LOGOUT_REDIRECT_URI=.*|POST_LOGOUT_REDIRECT_URI=http://${VM_PUBLIC_IP}:8090/|" orchestrator/.env
-sed -i "s|AMP_OTEL_ENDPOINT=.*|AMP_OTEL_ENDPOINT=http://${AMP_SERVER_IP}:22893/otel|" orchestrator/.env
 ```
+
+> **OpenAI / WSO2 AI Gateway:** the `OPENAI_*` vars in `orchestrator/.env`
+> (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`, …) point at the WSO2
+> Agent Manager gateway and are the same on laptop and VM — no rewrite needed.
+
+> **Observability (optional):** `orchestrator/.env`, `hr_agent/.env`, and
+> `it_agent/.env` may carry `AMP_OTEL_ENDPOINT` + `AMP_AGENT_API_KEY` for
+> OpenTelemetry export to WSO2 Agent Manager. These are read by the
+> `amp-instrument` launch wrapper, not by the service config. If you export
+> traces to a collector reachable only from the VM, update `AMP_OTEL_ENDPOINT`
+> in those files; otherwise leave them as-is.
 
 ### 4b. `hr_server/.env` and `it_server/.env` — ALLOWED_ORIGINS
 
@@ -100,11 +111,15 @@ sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://${VM_PUBLIC_IP}:8090|" hr_se
 sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://${VM_PUBLIC_IP}:8090|" it_server/.env
 ```
 
-### 4c. `hr_agent/.env` and `it_agent/.env` — AMP OTel endpoint
+### 4c. `hr_agent/.env` and `it_agent/.env` — observability endpoint (optional)
+
+Only needed if you export OpenTelemetry traces to a collector whose address
+differs on the VM. Otherwise skip this step.
 
 ```bash
-sed -i "s|AMP_OTEL_ENDPOINT=.*|AMP_OTEL_ENDPOINT=http://${AMP_SERVER_IP}:22893/otel|" hr_agent/.env
-sed -i "s|AMP_OTEL_ENDPOINT=.*|AMP_OTEL_ENDPOINT=http://${AMP_SERVER_IP}:22893/otel|" it_agent/.env
+OTEL_ENDPOINT=<replace>   # e.g. https://opentelemetry.obs.dp.cloud.wso2.com/v1/traces
+sed -i "s|AMP_OTEL_ENDPOINT=.*|AMP_OTEL_ENDPOINT=${OTEL_ENDPOINT}|" hr_agent/.env
+sed -i "s|AMP_OTEL_ENDPOINT=.*|AMP_OTEL_ENDPOINT=${OTEL_ENDPOINT}|" it_agent/.env
 ```
 
 ---
@@ -241,8 +256,9 @@ docker compose down
 Unlike the laptop setup, **no reverse SSH tunnel is required** for BCL — IS posts
 directly to `http://<VM_PRIVATE_IP>:8123/backchannel-logout` over the VPC.
 
-The `amp-tunnel.sh` script is still useful if you need to reach AMP or other
-services on a separate VM from your laptop during development:
+The `amp-tunnel.sh` script is still useful if you need to reach the WSO2 Agent
+Manager gateway or other services on a separate VM from your laptop during
+development:
 
 ```bash
 VM_KEY=~/.ssh/dda-poc-key.pem VM_HOST=<VM_PUBLIC_IP> ./scripts/amp-tunnel.sh
@@ -254,10 +270,10 @@ VM_KEY=~/.ssh/dda-poc-key.pem VM_HOST=<VM_PUBLIC_IP> ./scripts/amp-tunnel.sh
 
 | Item | Laptop | VM |
 |---|---|---|
-| `ALLOWED_ORIGINS` | `localhost:3001` | `<VM_PUBLIC_IP>:8090` |
+| `ALLOWED_ORIGINS` | `localhost:8090` | `<VM_PUBLIC_IP>:8090` |
 | `ORCHESTRATOR_MCP_CLIENT_REDIRECT_URI` | `localhost:8090/agent-callback` | `<VM_PUBLIC_IP>:8090/agent-callback` |
 | `POST_LOGOUT_REDIRECT_URI` | `localhost:8090/` | `<VM_PUBLIC_IP>:8090/` |
-| `AMP_OTEL_ENDPOINT` | `host.docker.internal:22893` | `<AMP_SERVER_IP>:22893` |
+| `AMP_OTEL_ENDPOINT` (optional) | collector URL | collector URL (update if VM-only) |
 | docker-compose port 8123 | `127.0.0.1:8123:8080` | `8123:8080` |
 | BCL URL in IS | `localhost:8123/backchannel-logout` | `<VM_PRIVATE_IP>:8123/backchannel-logout` |
 | SSH tunnel for BCL | Required | Not needed |

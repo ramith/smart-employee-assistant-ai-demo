@@ -2,7 +2,7 @@
 
 **Format:** JSON document served at `GET /.well-known/agent-card.json` on each specialist's HTTP origin.
 **Codified in:** `common/a2a/agent_card.py` (Pydantic model).
-**Used by:** `orchestrator/` for discovery; LLM sees a *redacted* projection (no `url`, no `auth`).
+**Loaded by:** the orchestrator at startup from `AGENT_CARDS_DIR` (default `tests/fixtures/agent_cards/*.json`); each `*.json` is validated against the model. LLM sees a *redacted* projection (no `url`, no `oauth_client_id`, no `auth`).
 
 ## 1. Full schema
 
@@ -11,14 +11,18 @@
   "schema_version": "v3-custom",                       // string; orchestrator validates and falls back if unknown
   "name": "HR Agent",                                  // human-readable display name
   "description": "Handles HR queries: leave, time-off, employee info.",
-  "url": "https://hr.smart-employee.local/a2a",        // canonical specialist URI; matches token aud
+  "id": "hr_agent",                                    // opaque slug; stable agent_id key used by orchestrator
+  "url": "https://hr.smart-employee.local",            // canonical origin; no path, no trailing slash (regex ^https?://[^/]+$)
+  "oauth_client_id": "hr-agent-oauth-client-id-...",   // the HR Agent App OAuth Client ID (N28 collision detection)
   "api_version": "1.0.0",                              // semver of specialist's A2A surface; major bump = breaking
   "skills": [
     {
       "id": "hr.approve_leave",                        // namespaced (<agent>.<verb>); collisions impossible
       "name": "Approve leave request",                 // human-readable
       "description": "Approve or reject a leave request by id.",  // shown to LLM via discover_agents
-      "required_scopes": ["hr_approve_a2a"]            // _a2a (agent-tier) — validated at hr_agent. Documentation only; enforcement at JWT validation. Hop 4 transforms to hr_approve_mcp at hr_server.
+      "scope": "hr_approve_rest",                      // single-tier scope — same name requested at CIBA, embedded in OBO token, and validated at hr_server. Documentation only; enforcement at the JWT validator.
+      "required_scopes": ["hr_approve_rest"],          // legacy list form; kept for backward compat with card fixtures
+      "args": ["leave_id"]                             // arg names the LLM router extracts; matches the agent dispatcher 1:1
     }
   ],
   "capabilities": {
@@ -27,8 +31,8 @@
   },
   "auth": {
     "scheme": "oauth2",                                // ADVISORY ONLY — never used at runtime
-    "issuer": "<asgardeo_issuer>",                     // ADVISORY ONLY — orchestrator hardcodes
-    "audience": "https://hr.smart-employee.local/a2a"  // ADVISORY ONLY — orchestrator uses the allowlisted URL
+    "issuer": "https://<wso2-is-host>:9443/oauth2/token", // ADVISORY ONLY — orchestrator hardcodes the issuer from its own env
+    "audience": "https://hr.smart-employee.local"      // ADVISORY ONLY — orchestrator uses the allowlisted fetch URL
   }
 }
 ```
@@ -38,20 +42,24 @@
 | Field | Required | Type | Notes |
 |---|---|---|---|
 | `schema_version` | yes | string | `"v3-custom"` for this POC. Unknown values → orchestrator logs and ignores the card. |
+| `id` | yes | string | Opaque slug (e.g. `"hr_agent"`); the orchestrator's stable agent_id key. |
 | `name` | yes | string | Shown to humans (e.g., logs); also exposed to LLM via `discover_agents`. |
 | `description` | yes | string | Shown to LLM. Keep concise — this influences routing. |
-| `url` | yes | string (URI) | Canonical specialist URI. **Must match exactly** the API resource audience in Asgardeo. **Stripped from LLM trace** by surgical redactor. |
+| `url` | yes | string (URI) | Canonical specialist origin. Must match `^https?://[^/]+$` (no path, no trailing slash). **Stripped from LLM trace** by surgical redactor. |
+| `oauth_client_id` | yes | string | The specialist's OAuth Application client_id; used for N28 client-id collision detection at boot. **Stripped from LLM trace.** |
 | `api_version` | yes | string (semver) | Major-version drift triggers warning + skill list re-fetch in orchestrator. |
-| `skills[]` | yes | array | At least one skill required. |
+| `skills[]` | yes | array | At least one skill required. (An empty list is also accepted by the model.) |
 | `skills[].id` | yes | string | Namespaced `<agent>.<verb>`. Cross-agent collisions impossible by construction. |
 | `skills[].name` | yes | string | Human-readable. |
 | `skills[].description` | yes | string | Shown to LLM. |
-| `skills[].required_scopes` | yes | array of string | **Documentation only.** Enforcement is at the validator. |
-| `capabilities.streaming` | yes | bool | `false` for Sprint 1 (no `message/stream`). |
-| `capabilities.pushNotifications` | yes | bool | `false`. Out of POC scope. |
+| `skills[].scope` | no | string | The single-tier scope the skill requests via CIBA (e.g. `hr_approve_rest`). Same name flows through OBO token and MCP validation. **Documentation only**; enforcement is at the validator. |
+| `skills[].required_scopes` | no | array of string | Legacy list form; prefer `scope`. Kept for backward compat with card fixtures. **Documentation only.** |
+| `skills[].args` | no | array of string | Arg names the LLM router extracts; must match the agent dispatcher's `_TOOL_REGISTRY` kwargs 1:1. Empty for parameter-less tools. |
+| `capabilities.streaming` | no | bool | `false` for the POC (no `message/stream`). Defaults to `false`. |
+| `capabilities.pushNotifications` | no | bool | `false`. Out of POC scope. Defaults to `false`. |
 | `auth.scheme` | yes | string | `"oauth2"`. Advisory. |
-| `auth.issuer` | yes | string | **Advisory only.** Validator hardcodes the Asgardeo issuer. If a card's `auth.issuer` ≠ configured, log + refuse to load (N8b). |
-| `auth.audience` | yes | string | **Advisory only.** Orchestrator uses the **allowlisted fetch URL** as the token-exchange `resource` — never `auth.audience`. |
+| `auth.issuer` | yes | string | **Advisory only.** The validator hardcodes the WSO2 IS issuer from its own env. If a card's `auth.issuer` ≠ configured, log + refuse to load (N8b). |
+| `auth.audience` | yes | string | **Advisory only.** Orchestrator uses the **allowlisted fetch URL** — never `auth.audience`. |
 
 ## 3. Trust model (security-critical)
 
@@ -67,18 +75,22 @@ When the orchestrator's `discover_agents` tool returns cards to the LLM, the pro
 
 ```jsonc
 {
-  "agent_id": "hr_agent",                              // server-assigned opaque enum
-  "name": "HR Agent",
-  "description": "...",
+  "id": "hr_agent",                                    // the card's opaque slug
+  "label": "HR Agent",                                 // the card's display name (from `name`)
   "skills": [
-    { "id": "hr.approve_leave", "name": "...", "description": "..." }
-    // NO required_scopes (LLM doesn't need to know)
+    {
+      "tool_id": "hr.approve_leave",
+      "label": "Approve leave request",
+      "description": "...",
+      "scope": "hr_approve_rest",                      // included so the router can pre-validate, but never used as a trust input
+      "args": ["leave_id"]
+    }
   ]
-  // NO url, NO auth, NO schema_version, NO api_version, NO capabilities
+  // NO url, NO oauth_client_id, NO auth, NO schema_version, NO api_version, NO capabilities
 }
 ```
 
-The orchestrator's surgical LangSmith redactor strips `url` and `auth` keys from any agent-card-shaped object before traces are uploaded.
+This mirrors `common/a2a/agent_card.py:llm_projection()`. The orchestrator's surgical LangSmith redactor strips `url` and `auth` keys from any agent-card-shaped object before traces are uploaded.
 
 ## 5. Versioning policy
 

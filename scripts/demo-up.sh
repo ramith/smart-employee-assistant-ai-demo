@@ -70,8 +70,8 @@ echo "                 \"I'd like annual leave from 2026-06-10 to 2026-06-14, re
 echo "      hr_admin : \"Show me vacant cubicles\"  then  \"floor 2\"  then  \"assign C-027 to jane.doe\""
 echo
 echo "    Routing: LLM_FALLBACK_MODE in orchestrator/.env (currently set to 'llm' if an"
-echo "    OPENAI_API_KEY is configured there — OpenAI via the AMP AI Gateway). The keyword"
-echo "    router stays wired as the automatic fallback — if OpenAI / the AMP gateway is"
+echo "    OPENAI_API_KEY is configured there — OpenAI via the WSO2 AI Gateway). The keyword"
+echo "    router stays wired as the automatic fallback — if OpenAI / the WSO2 AI Gateway is"
 echo "    unreachable / rate-limited / the key is invalid, the chat degrades to the"
 echo "    Sprint-4 keyword behaviour, never a hard error."
 echo

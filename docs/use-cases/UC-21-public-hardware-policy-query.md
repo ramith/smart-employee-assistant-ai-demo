@@ -42,7 +42,7 @@ An employee (particularly a new hire or someone who has not yet signed in) wants
 - LLM responds per the system prompt guardrail: *"I can only share the general hardware allocation policy here. To view your personal asset assignments, please sign in to the employee portal."*
 - No `it_server` call is made.
 
-### A4 — OpenAI / AMP gateway unavailable (static fallback)
+### A4 — OpenAI / WSO2 AI Gateway unavailable (static fallback)
 - `_static_fallback` detects "laptop" / "hardware" / "equipment" / "device" keyword → returns the pre-written hardware policy template string. (The client retries transient gateway 5xx with max_retries=5 before falling back.)
 
 ## Notes

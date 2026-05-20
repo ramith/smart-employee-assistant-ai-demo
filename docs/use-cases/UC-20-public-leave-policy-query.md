@@ -41,7 +41,7 @@ An employee who has not yet signed in (or a prospective hire, visitor, or contra
 - LLM responds per the system prompt guardrail: *"I can only share general leave policy information here. To check your personal leave balance, please sign in to the employee portal."*
 - Widget shows this as a normal bot reply. No data is fetched from `hr_server`.
 
-### A4 — OpenAI / AMP gateway unavailable (static fallback)
+### A4 — OpenAI / WSO2 AI Gateway unavailable (static fallback)
 - `_static_fallback` detects "leave" keyword → returns a pre-written policy summary template. (The client retries transient gateway 5xx with max_retries=5 before falling back.)
 
 ## Notes

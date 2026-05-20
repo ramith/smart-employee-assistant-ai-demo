@@ -7,8 +7,15 @@
 
 ## Directory tree
 
+The five services are `orchestrator`, `hr_agent`, `it_agent`, `hr_server`, `it_server`
+(see `docker-compose.yml`). The browser SPA is **not** a separate service: the static
+assets in `client/` are baked into the orchestrator image and served by it via a
+`StaticFiles` mount at `/static` (orchestrator on `localhost:8090`). There is no
+`localhost:3001` SPA host and no `localhost:5001` `agent` service — both pre-v4
+scaffolds were removed.
+
 ```
-smart-employee-agent/
+<repo-root>/
 ├── common/
 │   ├── __init__.py
 │   ├── auth/
@@ -43,8 +50,16 @@ smart-employee-agent/
 │   ├── chat/
 │   │   ├── __init__.py
 │   │   ├── routes.py              # POST /api/chat, POST /api/ciba/cancel
-│   │   ├── llm.py                 # OpenAI tool-routing agent (LangChain, bind_tools)
-│   │   └── keyword_fallback.py    # Deterministic "leave"→hr_agent, "laptop"→it_agent
+│   │   ├── keyword_fallback.py    # Deterministic "leave"→hr_agent, "laptop"→it_agent
+│   │   ├── public_handler.py      # Pre-login public info widget (no identity)
+│   │   └── public_routes.py       # POST /public/chat (unauthenticated)
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   ├── router.py              # LLMRouter — bind_tools() function-calling → tool_calls
+│   │   ├── composer.py            # Reply composer (tool outcomes → NL reply)
+│   │   ├── client.py              # LLM client protocol + FakeLLMClient (tests)
+│   │   ├── amp_client.py          # OpenAILLMClient — ChatOpenAI via the WSO2 AI Gateway
+│   │   └── prompts.py             # Router + composer prompt templates
 │   ├── events/
 │   │   ├── __init__.py
 │   │   └── sse.py                 # SSE stream GET /events/{session_id}; push helpers
@@ -105,19 +120,13 @@ smart-employee-agent/
 │       ├── __init__.py
 │       └── tools.py               # list_available_assets (Sprint 1 canned stub)
 │
-└── client/                        # SPA (JavaScript — see §Client section)
-    ├── index.html
-    ├── src/
-    │   ├── views/
-    │   │   ├── LoginView.js        # Sign-in button, OAuth redirect, /callback handler
-    │   │   └── ChatView.js         # Chat feed, message input, routing indicator
-    │   ├── components/
-    │   │   └── ConsentWidget.js    # CIBA consent card: approve/deny, countdown, states
-    │   ├── services/
-    │   │   ├── apiClient.js        # fetch wrapper, cookie credentials, X-Request-ID inject
-    │   │   └── sseManager.js       # EventSource lifecycle, reconnect, event dispatch
-    │   └── main.js                 # App bootstrap, router
-    └── serve.py                    # (existing) dev static server
+└── client/                        # SPA static assets — baked into the orchestrator
+    │                               # image (/app/client_static) and served by it at
+    │                               # /static. NOT a separate running service.
+    ├── index.html                  # single-page shell
+    ├── app.js                      # login/PKCE, chat, SSE consumer, consent widget (one file)
+    ├── styles.css
+    └── serve.py                    # standalone dev static server (not used in the compose fleet)
 ```
 
 
@@ -403,7 +412,7 @@ def validate_chain(claims: dict, allowed_peers: set[str],
     ...
 ```
 
-Sprint 1 caller note: `allowed_peers` must contain Asgardeo Agent identity UUIDs — `act.sub` in Pattern C tokens is the UUID, not the display name.
+Caller note: `allowed_peers` must contain the WSO2 IS Agent identity UUIDs — `act.sub` in Pattern C / OBO tokens is the agent UUID, not the display name.
 
 
 ## `common/a2a/models.py`
@@ -573,21 +582,26 @@ class OrchestratorConfig:
     # IS endpoints
     is_base_url: str; is_authorize_url: str; is_token_url: str
     is_jwks_url: str; is_issuer: str; insecure_tls: bool  # IDP_INSECURE_TLS=1
-    # OAuth clients
-    orchestrator_app_client_id: str          # public SPA (PKCE)
-    orchestrator_mcp_client_id: str          # confidential code-exchange backend
-    orchestrator_mcp_client_secret: str
+    # OAuth client (single confidential login client — same client_id on
+    # /oauth2/authorize and the /oauth2/token code-exchange).
+    # Field is `mcp_client_id` (from ORCHESTRATOR_MCP_CLIENT_ID); a single
+    # confidential client — there is no separate SPA OAuth client.
+    mcp_client_id: str                       # confidential login + code-exchange client
+    mcp_client_secret: str
+    mcp_redirect_uri: str                    # registered redirect_uri (http://localhost:8090/agent-callback)
     orchestrator_agent_id: str               # UUID for actor_token
     orchestrator_agent_secret: str
     orchestrator_agent_oauth_client_id: str  # Agent App client_id (App-Native Auth)
     orchestrator_agent_oauth_client_secret: str
-    redirect_uri: str
+    post_logout_redirect_uri: str = "http://localhost:8090/"
     session_cookie_name: str = "orch_sid"
     session_ttl_seconds: int = 28800
     agent_card_urls: list[str] = ()          # ORCHESTRATOR_AGENT_CARD_URLS comma-sep
-    openai_api_key: str = ""
-    model_name: str = "gpt-4.1"
-    llm_fallback_mode: bool = False          # LLM_FALLBACK_MODE=keyword
+    # LLM: OpenAI-compatible, routed through WSO2 Agent Manager (embedded AI Gateway).
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o"             # OPENAI_MODEL; gpt-4.1 also used in the demo
+    llm_fallback_mode: str = "llm"           # LLM_FALLBACK_MODE = "llm" | "keyword"
     allowed_origins: list[str] = ()
     routing_pause_ms: int = 500
 
@@ -758,35 +772,25 @@ def build_chat_router(
 ```
 
 
-## `orchestrator/chat/llm.py`
+## `orchestrator/llm/` (package)
 
-**Purpose:** OpenAI-backed LangChain agent selecting specialists and tools from a user message.
+**Purpose:** OpenAI-backed routing + reply composition, reached through the WSO2 AI Gateway (embedded in WSO2 Agent Manager) over the OpenAI-compatible API. Split into modules:
+
+| Module | Role |
+|---|---|
+| `client.py` | `LLMClient` protocol + `FakeLLMClient` (canned responses for the strict unit suite). |
+| `amp_client.py` | `OpenAILLMClient` — wraps `langchain_openai.ChatOpenAI`; talks to OpenAI via the WSO2 AI Gateway (`OPENAI_BASE_URL`, `OPENAI_API_HEADER`, `OPENAI_MODEL`). |
+| `router.py` | `LLMRouter` — binds the registry's tool catalogue as OpenAI **function schemas** via `bind_tools()`, reads the structured `tool_calls` (no JSON-array parsing), and returns the ordered routing steps. Falls back to `chat/keyword_fallback.py` on empty/failed calls. |
+| `composer.py` | Turns each tool's outcome into one natural-language reply (deterministic `_render_result` fallback if the LLM is unavailable). |
+| `prompts.py` | Router + composer prompt templates. |
 
 ```python
-from __future__ import annotations
-from dataclasses import dataclass
-from ..agent_registry.discovery import AgentRegistry
-
-@dataclass
-class RoutingPlan:
-    """Ordered (agent_id, tool, args) steps; serial execution."""
-    steps: list[tuple[str, str, dict]]
-
 class LLMRouter:
-    """LangChain OpenAI agent → RoutingPlan. Temperature=0 for demo determinism."""
-
-    def __init__(self, *, model_name: str, openai_api_key: str, registry: AgentRegistry) -> None:
-        """Build ChatOpenAI; bind the registry's skill tool defs via bind_tools()."""
-        ...
-
-    async def route(self, user_message: str) -> RoutingPlan:
-        """Invoke LLM with the agent-card skill tools bound as OpenAI function schemas;
-        read the structured tool_calls (no JSON parsing) and return a RoutingPlan.
-
-        Returns empty plan if the model emits no tool_calls or the call fails
-        (caller falls back to KeywordRouter).
-        """
-        ...
+    """bind_tools() function-calling router → ordered (agent_id, tool, args) steps.
+    Temperature=0 for demo determinism; returns an empty plan (→ keyword fallback)
+    when the model emits no tool_calls or the gateway call fails."""
+    def __init__(self, *, client: "LLMClient", registry: "AgentRegistry") -> None: ...
+    async def route(self, user_message: str) -> list[tuple[str, str, dict]]: ...
 ```
 
 
@@ -924,7 +928,7 @@ class HRAgentConfig:
     agent_username: str; agent_password: str; agent_redirect_uri: str
     # Peer trust
     trusted_peer_agents: frozenset[str]  # HR_TRUSTED_PEER_AGENTS UUIDs
-    expected_inbound_aud: str            # orchestrator-app client_id (token-A aud)
+    expected_inbound_aud: str            # orchestrator-mcp-client client_id (token-A aud)
     # Backend
     hr_server_url: str              # http://hr_server:8000/mcp
     ciba_scope: str = "openid hr.read"
@@ -1116,16 +1120,18 @@ async def list_available_assets() -> dict:
 ```
 
 
-## Client SPA modules (JavaScript — no Python signatures)
+## Client SPA assets (JavaScript — no Python signatures)
+
+Served by the orchestrator's `StaticFiles` mount; the implementation lives in a single
+`app.js` rather than the per-view module split sketched in Sprint 1. There is no build
+step and no separate SPA host.
 
 | File | Purpose |
 |---|---|
-| `src/views/LoginView.js` | Sign-in button; PKCE pair generation; IS authorize redirect; POST /auth/exchange on callback |
-| `src/views/ChatView.js` | Chat feed; input (blocked in-flight); routing indicator; ConsentWidget integration; SSE event consumer |
-| `src/components/ConsentWidget.js` | agent label, binding_message, scope, countdown, Approve/Deny; states: Awaiting→Verifying→Working→Done/Denied; is_refresh: amber banner, Re-approve, prior consent time. Approve opens auth_url tab (close-on-success pattern from `_archive/agent.before-v3/obo_flow.py:callback_html`) |
-| `src/services/apiClient.js` | fetch wrapper; `credentials:"include"`; X-Request-ID inject; POST /api/chat, /api/ciba/cancel, /auth/exchange |
-| `src/services/sseManager.js` | EventSource lifecycle; auto-reconnect; dispatches routing/ciba_url/answer/error events; close → UC-05 detection |
-| `src/main.js` | App bootstrap; router init; sseManager attached on login success |
+| `client/index.html` | Single-page shell; loads `styles.css` + `app.js`. |
+| `client/app.js` | Everything client-side: sign-in button + PKCE pair + IS authorize redirect + `/agent-callback` relay → POST `/auth/exchange`; chat feed (input blocked in-flight); routing indicator; consent widget (agent label, binding_message, scope, countdown, Approve/Deny; states Awaiting→Verifying→Working→Done/Denied; `is_refresh` amber banner + Re-approve); EventSource lifecycle + auto-reconnect dispatching routing/ciba_url/chat_message/error events; close → UC-05 detection. `fetch` uses `credentials:"include"` and injects `X-Request-ID`. |
+| `client/styles.css` | SPA styling. |
+| `client/serve.py` | Standalone dev static server; not part of the compose fleet (orchestrator serves the SPA in the demo). |
 
 
 ## Module dependency graph
@@ -1154,7 +1160,7 @@ graph TD
     subgraph W6["Wave 6 — svc orchestration"]
         HCIBA[hr_agent/ciba/orch]; ICIBA[it_agent/ciba/orch]
         HSMCP[hr_server/mcp/tools]; ISMCP[it_server/mcp/tools]
-        LLM[chat/llm]; CARDS[agent_registry/cards]; DISC[agent_registry/discovery]
+        LLM[llm/router]; CARDS[agent_registry/cards]; DISC[agent_registry/discovery]
     end
     subgraph W7["Wave 7 — route handlers"]
         AR[auth/routes]; CR[chat/routes]; SSER[sse router]
